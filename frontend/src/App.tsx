@@ -1,7 +1,7 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLiveUpdates } from "./api/live";
-import { useMeta } from "./api/queries";
+import { useMeta, useTools } from "./api/queries";
 import { Badge, EmptyState, LinkButton } from "./ui/kit";
 import { AssetsPage } from "./pages/AssetsPage";
 import { NewAssetPage } from "./pages/NewAssetPage";
@@ -37,6 +37,24 @@ function AdapterModes() {
   );
 }
 
+/** One badge per tool in real mode: green when it answers, red when it does not. */
+function ToolHealth() {
+  const tools = useTools();
+  const real = (tools.data ?? []).filter((t) => t.mode === "real");
+  return (
+    <>
+      {real.map((t) => (
+        <span key={t.tool} title={t.detail}>
+          <Badge tone={t.ok ? "success" : "danger"} dot>
+            {t.name}
+            {t.ok ? "" : " unreachable"}
+          </Badge>
+        </span>
+      ))}
+    </>
+  );
+}
+
 export function App() {
   const live = useLiveUpdates(useQueryClient());
   return (
@@ -55,6 +73,7 @@ export function App() {
         </nav>
         <div className="topbar__status">
           <AdapterModes />
+          <ToolHealth />
           <span title="Live updates from the server">
             {live === "live" ? (
               <Badge tone="success" dot>

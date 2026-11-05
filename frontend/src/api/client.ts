@@ -45,6 +45,15 @@ export interface ProfileSettings {
   budgets: Budgets;
 }
 
+export interface ToolStatus {
+  tool: string;
+  name: string;
+  mode: "mock" | "real";
+  /** null for mock tools, which have nothing to check. */
+  ok: boolean | null;
+  detail: string;
+}
+
 export interface Meta {
   version: string;
   adapters: Record<string, "mock" | "real">;
@@ -157,7 +166,7 @@ export interface SpritePreview {
 
 export interface AssetOutputs {
   prompt?: {
-    expansion: { archetype: string; prompt: string; negative_prompt: string };
+    expansion: { archetype: string; prompt: string; negative_prompt: string; flags?: string[] };
     prompt: string;
     negative_prompt: string;
     base_model: BaseModel;
@@ -305,6 +314,7 @@ export function assetFileUrl(assetId: string, relPath: string): string {
 
 export const api = {
   meta: () => request<Meta>("GET", "/meta"),
+  tools: () => request<ToolStatus[]>("GET", "/tools"),
   archetypes: () => request<Archetype[]>("GET", "/archetypes"),
 
   projects: () => request<Project[]>("GET", "/projects"),

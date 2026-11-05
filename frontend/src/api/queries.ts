@@ -11,6 +11,7 @@ export const queryClient = new QueryClient({
 
 export const keys = {
   meta: ["meta"] as const,
+  tools: ["tools"] as const,
   archetypes: ["archetypes"] as const,
   projects: ["projects"] as const,
   profiles: ["profiles"] as const,
@@ -22,6 +23,9 @@ export const keys = {
 };
 
 export const useMeta = () => useQuery({ queryKey: keys.meta, queryFn: api.meta, staleTime: Infinity });
+/** Whether the tools in real mode answer; checked again every 30 seconds. */
+export const useTools = () =>
+  useQuery({ queryKey: keys.tools, queryFn: api.tools, refetchInterval: 30_000, staleTime: 0 });
 export const useArchetypes = () =>
   useQuery({ queryKey: keys.archetypes, queryFn: api.archetypes, staleTime: Infinity });
 export const useProjects = () => useQuery({ queryKey: keys.projects, queryFn: api.projects });
