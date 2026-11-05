@@ -19,6 +19,10 @@ uv run pytest
 Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 if needed). Works the same on
 Windows, macOS and Linux.
 
+The web app lives in `../frontend` (see its README). When `frontend/dist` exists (after
+`npm run build` there), `uv run assetgen` also serves the app at `/`; the `/api` routes always
+come first. The folder can be moved with the `frontend_dir` setting.
+
 ## Mock-first
 
 ComfyUI, Hunyuan3D, Blender, UniRig and Qwen each sit behind an adapter
@@ -55,6 +59,7 @@ hunyuan3d_url = "http://127.0.0.1:8081"
 blender_path = "blender"
 unirig_path = "UniRig"
 python_path = "python"
+frontend_dir = "../frontend/dist" # built web app served at / (default: the repo's frontend/dist)
 
 [adapters]                     # "mock" or "real" each
 llm = "mock"
@@ -70,7 +75,9 @@ Environment example: `ASSETGEN_PORT=9000`, `ASSETGEN_ADAPTERS__MESH=real`.
 
 A single in-process worker runs one job (one stage of one asset) at a time, oldest first. Each
 stage writes to `data/assets/<id>/<stage>/` (`prompt`, `mesh`, `rig`, `sprites`, `export`) and
-ends with a `manifest.json`. After a restart, assets that were running go back in the queue; a
+ends with a `manifest.json`. For Godot projects the rig stage also renders the sprite frames
+(into `sprites/`, listed under `outputs.rig.sprites` with fps, frame size, directions and the
+mirrored ones) so gate 3 can play them; the export reuses those frames. After a restart, assets that were running go back in the queue; a
 stage with a manifest is not redone and the adapters skip files that already exist, so work
 resumes where it stopped. Approving a gate keeps everything upstream; rejecting reruns only that
 stage. The image model is unloaded before the mesh stage, so it never shares the GPU with
