@@ -308,6 +308,8 @@ class Pipeline:
                 archetype_override=asset.get("archetype_override"), slot=asset.get("slot"),
                 weapon_class=asset.get("weapon_class"), notes=notes)
             if expansion["archetype"] not in load_archetypes():
+                expansion.setdefault("flags", []).append(
+                    f"The archetype {expansion['archetype']!r} is not a template; biped is used instead.")
                 expansion["archetype"] = "biped"
             expansion_file.write_text(json.dumps(expansion, indent=2), encoding="utf-8")
         changes = {"archetype": expansion["archetype"]}

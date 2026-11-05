@@ -18,6 +18,7 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
                        SPRITE_LOOKS, STAGES, WEAPON_ATTACKS, WEAPON_CLASSES, deep_merge, profile_defaults)
 from .exporters import safe_name
 from .pipeline import Conflict, Invalid, Pipeline
+from .tools import check_tools
 from .schemas import (AssetCreate, Kind, Approve, LoraRegister, LoraUpdate, ProfileCreate, ProfileUpdate,
                       ProjectCreate, ProjectUpdate, Reject, TrainingCandidate)
 
@@ -69,6 +70,11 @@ def meta(request: Request):
         "max_reference_images": MAX_REFERENCE_IMAGES,
         "worker": {"current": pipeline.current},
     }
+
+
+@router.get("/tools", tags=["meta"], summary="Whether each tool switched to real mode answers")
+def tools(request: Request):
+    return check_tools(request.app.state.settings)
 
 
 @router.get("/archetypes", tags=["meta"], summary="List archetype templates")
