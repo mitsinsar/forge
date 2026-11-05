@@ -19,7 +19,7 @@ def test_meta_and_archetypes(client):
     meta = client.get("/api/meta").json()
     assert set(meta["adapters"].values()) == {"mock"}
     assert meta["profile_defaults"]["budgets"]["triangles"] == {
-        "hero": 8000, "monster": 4000, "boss": 15000, "gear": 1500, "weapon": 1000}
+        "hero": 8000, "monster": 4000, "boss": 15000, "gear": 1500, "weapon": 800}
     assert meta["profile_defaults"]["render"]["fps"] == 12
     archetypes = {a["id"]: a for a in client.get("/api/archetypes").json()}
     assert set(archetypes) == {"biped", "quadruped", "flyer", "spider", "serpent", "blob"}

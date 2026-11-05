@@ -37,6 +37,7 @@ export function NewAssetPage() {
   const [slot, setSlot] = useState<Slot>("chest");
   const [weaponClass, setWeaponClass] = useState<WeaponClass | "">("");
   const [profileChoice, setProfileId] = useState<string | null>(null);
+  const [triangles, setTriangles] = useState("");
 
   const create = useApiMutation(api.createAsset, [keys.assets]);
 
@@ -44,6 +45,9 @@ export function NewAssetPage() {
   const project = projects.data?.find((p) => p.id === projectId);
   const projectProfiles = (profiles.data ?? []).filter((p) => p.project_id === projectId || p.project_id === null);
   const profileId = profileChoice ?? project?.default_profile_id ?? "";
+  const profileTriangles = projectProfiles.find((p) => p.id === profileId)?.budgets.triangles[kind]
+    ?? meta.data?.profile_defaults.budgets.triangles[kind];
+  const triangleLimit = Number.parseInt(triangles, 10);
 
   if (projects.isPending || meta.isPending) return <Loading />;
   if (!projects.data?.length)
@@ -67,6 +71,7 @@ export function NewAssetPage() {
         slot: kind === "gear" ? slot : undefined,
         weapon_class: kind === "weapon" && weaponClass ? weaponClass : undefined,
         profile_id: profileId || undefined,
+        overrides: triangleLimit > 0 ? { budgets: { triangles: { [kind]: triangleLimit } } } : undefined,
       },
       { onSuccess: (asset) => navigate(`/asset/${asset.id}`) },
     );
@@ -172,6 +177,19 @@ export function NewAssetPage() {
                       value: p.id,
                       label: p.id === project?.default_profile_id ? `${p.name} (default)` : p.name,
                     }))}
+                  />
+                )}
+              </Field>
+              <Field label="Triangle limit" hint="Optional. Leave empty to use the style profile's limit for this kind.">
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={1}
+                    step={100}
+                    value={triangles}
+                    onChange={(e) => setTriangles(e.target.value)}
+                    placeholder={profileTriangles ? `${profileTriangles.toLocaleString()} (profile)` : undefined}
                   />
                 )}
               </Field>

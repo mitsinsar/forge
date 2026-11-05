@@ -232,6 +232,8 @@ export interface AssetInput {
   slot?: Slot;
   weapon_class?: WeaponClass;
   profile_id?: string;
+  /** Per-asset overrides of style profile fields. */
+  overrides?: { budgets?: { triangles?: Partial<PerKind> } };
 }
 
 export interface AssetFilters {

@@ -204,3 +204,18 @@ def test_install_refuses_another_assets_folder(tmp_path):
     with pytest.raises(RuntimeError):
         install(src, dest, "mine")
     assert json.loads((dest / "asset.json").read_text())["id"] == "other"
+
+
+def test_weapon_triangle_limit_default_and_per_asset_override(client, tmp_path):
+    project = make_project(client, "unity", tmp_path / "Game")
+    base = {"project_id": project["id"], "kind": "weapon", "description": "a rusty iron sword"}
+
+    default = client.post("/api/assets", json=base).json()
+    custom = client.post("/api/assets", json={**base, "overrides": {"budgets": {"triangles": {"weapon": 400}}}}).json()
+
+    for asset_id, limit in ((default["id"], 800), (custom["id"], 400)):
+        wait_for(client, asset_id, "waiting", gate=1)
+        client.post(f"/api/assets/{asset_id}/gates/1/approve", json={"candidate": 1})
+        asset = wait_for(client, asset_id, "waiting", gate=2)
+        assert asset["outputs"]["mesh"]["triangle_budget"] == limit
+        assert asset["outputs"]["mesh"]["lods"][0]["triangles"] <= limit

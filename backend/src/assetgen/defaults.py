@@ -61,7 +61,7 @@ PROFILE_DEFAULTS: dict = {
         "frame_size": {"hero": 256, "monster": 128, "boss": 256, "gear": 256, "weapon": 256},
     },
     "budgets": {
-        "triangles": {"hero": 8000, "monster": 4000, "boss": 15000, "gear": 1500, "weapon": 1000},
+        "triangles": {"hero": 8000, "monster": 4000, "boss": 15000, "gear": 1500, "weapon": 800},
         "texture": {"hero": 1024, "monster": 512, "boss": 1024, "gear": 512, "weapon": 512},
         "lod_ratios": [0.5, 0.2],
     },
