@@ -1,0 +1,107 @@
+"""Adapter interfaces for the external tools.
+
+The pipeline only talks to these interfaces. The mock adapters implement them
+with generated placeholders; the real ones (ComfyUI, Hunyuan3D, UniRig,
+headless Blender, Qwen) will implement the same methods on the Windows machine.
+
+Every long call takes a ``progress(step, fraction)`` callback.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from pathlib import Path
+from typing import Protocol
+
+Progress = Callable[[str, float], None]
+
+
+class LLMAdapter(Protocol):
+    """Qwen via an OpenAI-compatible endpoint, answering structured JSON."""
+
+    mode: str
+
+    def expand(self, *, description: str, kind: str, archetypes: dict[str, dict],
+               archetype_override: str | None, slot: str | None, weapon_class: str | None,
+               notes: list[str]) -> dict:
+        """Returns ``{"archetype", "prompt", "negative_prompt", "slot", "weapon_class"}``.
+
+        The prompt must force the archetype's rest pose and fold in the
+        reviewer's ``notes`` from earlier rejected rounds."""
+
+
+class ImageAdapter(Protocol):
+    """ComfyUI (Qwen-Image, SDXL or Flux per style profile)."""
+
+    mode: str
+
+    def render_candidates(self, *, prompt: str, negative_prompt: str, base_model: str,
+                          loras: list[dict], reference_images: list[Path], count: int, seed: int,
+                          out_dir: Path, progress: Progress, hints: dict) -> list[Path]:
+        """Renders ``count`` PNGs into ``out_dir`` as candidate_<n>.png and
+        returns their paths. Existing files are kept (resume)."""
+
+    def unload(self) -> None:
+        """Frees the image model's VRAM before the mesh stage."""
+
+
+class MeshAdapter(Protocol):
+    """Hunyuan3D 2.1: image to textured mesh."""
+
+    mode: str
+
+    def image_to_mesh(self, *, image: Path, texture_size: int, out_path: Path,
+                      progress: Progress, hints: dict) -> dict:
+        """Writes a textured GLB to ``out_path`` and its albedo texture beside
+        it. Returns ``{"glb": path, "texture": path}``."""
+
+
+class RigAdapter(Protocol):
+    """UniRig: skeleton and skin-weight prediction."""
+
+    mode: str
+
+    def predict_skeleton(self, *, mesh: Path, archetype: dict, out_dir: Path, progress: Progress) -> dict:
+        """Returns the template joints fitted to the mesh:
+        ``{"joints": [...], "fit_score": 0..1, "fallback": bool, "file": path}``."""
+
+
+class BlenderAdapter(Protocol):
+    """Headless Blender (``blender -b -P script.py``)."""
+
+    mode: str
+
+    def cleanup_and_lods(self, *, raw_mesh: Path, triangles: int, lod_ratios: list[float],
+                         out_dir: Path, progress: Progress) -> dict:
+        """Cleans up and decimates to the budget, and makes the LODs. Returns
+        ``{"glb": path, "lods": [{"level", "ratio", "triangles"}]}``."""
+
+    def rig_and_animate(self, *, mesh_glb: Path, skeleton: dict, archetype: dict, clips: list[str],
+                        attach: dict | None, out_path: Path, progress: Progress) -> dict:
+        """Skins the mesh to the fitted template skeleton and retargets the
+        clips. ``attach`` places gear or a weapon on the mannequin. Returns
+        ``{"glb": path, "clips": [{"name", "duration", "loop"}]}``."""
+
+    def render_sprites(self, *, animated_glb: Path, clips: list[dict], directions: list[str],
+                       camera_preset: str, frame_size: int, supersample: int, fps: int, look: str,
+                       palette_size: int, out_dir: Path, progress: Progress) -> dict[str, dict[str, list[Path]]]:
+        """Eevee orthographic render with toon or pixel shading at
+        ``supersample``x, downscaled to ``frame_size``. Returns
+        ``{direction: {clip: [frame paths]}}``."""
+
+    def export_fbx(self, *, animated_glb: Path, lods: list[dict], rig_type: str, out_path: Path,
+                   progress: Progress) -> Path:
+        """Exports mesh, skeleton, clips and LODs to FBX."""
+
+
+class Adapters:
+    def __init__(self, llm: LLMAdapter, image: ImageAdapter, mesh: MeshAdapter, rig: RigAdapter,
+                 blender: BlenderAdapter):
+        self.llm = llm
+        self.image = image
+        self.mesh = mesh
+        self.rig = rig
+        self.blender = blender
+
+    def modes(self) -> dict[str, str]:
+        return {name: getattr(self, name).mode for name in ("llm", "image", "mesh", "rig", "blender")}

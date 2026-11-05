@@ -1,0 +1,31 @@
+[project]
+name = "assetgen"
+version = "0.1.0"
+description = "Local asset generator backend: text description to game-ready animated assets (mock-first)."
+readme = "README.md"
+authors = [
+    { name = "Mithat Sinan Sari", email = "m.sinan.sari@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.162.0",
+    "pillow>=13.0.0",
+    "python-multipart>=0.0.33",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+assetgen = "assetgen.main:run"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.0",
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

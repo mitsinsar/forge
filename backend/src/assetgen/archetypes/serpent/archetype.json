@@ -1,0 +1,51 @@
+{
+  "id": "serpent",
+  "name": "Serpent",
+  "description": "Long body on a spine chain. Quaternius clips or a procedural wave.",
+  "rig_type": "Generic",
+  "skeleton_source": "Spine chain (procedural)",
+  "clip_source": "Quaternius (CC0) or procedural wave",
+  "rest_pose": "body stretched out in a gentle S-curve, head raised slightly, side view",
+  "joints": [
+    "root",
+    "head",
+    "jaw",
+    "spine_01",
+    "spine_02",
+    "spine_03",
+    "spine_04",
+    "spine_05",
+    "spine_06",
+    "spine_07",
+    "spine_08",
+    "spine_09",
+    "spine_10",
+    "spine_11",
+    "spine_12",
+    "spine_13",
+    "spine_14",
+    "spine_15",
+    "spine_16"
+  ],
+  "sockets": {},
+  "clips": [
+    "idle",
+    "walk",
+    "run",
+    "attack_1",
+    "attack_2",
+    "hit",
+    "death"
+  ],
+  "keywords": [
+    "snake",
+    "serpent",
+    "worm",
+    "eel",
+    "naga",
+    "wyrm",
+    "centipede",
+    "leech",
+    "basilisk"
+  ]
+}
