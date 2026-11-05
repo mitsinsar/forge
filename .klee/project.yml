@@ -1,0 +1,22 @@
+# Klee's settings for this project. Change them here or in Klee; Klee keeps both in step.
+
+pull_requests: false  # finished work goes to a pull request
+checks_command: ""
+
+# Where the app's server runs (Project settings → Server).
+server:
+  kind: none  # none, this_mac, own or host
+  compose_file: ""  # relative to the repo; empty means found
+  after_merges: true  # rebuilt and restarted after a merge
+  own_how: ssh  # ssh or coolify, for your own server
+  coolify_url: ""
+  coolify_app: ""
+  host: fly  # fly, railway, render, aws, gcp
+  host_app: ""
+  host_url: ""
+  host_region: ""
+
+# Defaults for new tickets' agents (Project settings → Devices).
+tickets:
+  device_checks: auto  # auto, full, light or none
+  work_limit_minutes: 0  # 0 is no limit
