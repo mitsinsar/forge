@@ -171,6 +171,8 @@ export interface AssetOutputs {
     negative_prompt: string;
     base_model: BaseModel;
     attempt: number;
+    /** Lines from the image stage: LoRAs used, reference images applied or skipped. */
+    log?: string[];
     candidates: string[];
   };
   mesh?: { glb: string; texture: string; triangle_budget: number; lods: Lod[] };

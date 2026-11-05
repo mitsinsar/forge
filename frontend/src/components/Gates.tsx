@@ -199,6 +199,9 @@ export function Gate1({ asset }: { asset: Asset }) {
                 {flag}
               </Notice>
             ))}
+            {prompt?.log?.map((line) => (
+              <Notice key={line}>{line}</Notice>
+            ))}
             <Text wrap>{prompt?.prompt}</Text>
             <SectionTitle>Negative</SectionTitle>
             <Text muted small wrap>
