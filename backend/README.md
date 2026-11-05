@@ -89,7 +89,12 @@ Exports go into the project's folder:
   for characters, the slot for gear and `weapon` for weapons. Mirrored directions (for example
   `left` on the side camera) are drawn with `flip_h`.
 
-Re-export replaces the folder. The same folder is zipped for `GET /api/assets/{id}/download`.
+`<Name>` is the asset's `export_name`, picked at its first export and kept: the asset's name made
+safe for file systems, with a short id suffix (`Grey_Wolf_1a2b3c`) when another asset of the same
+project and kind already has that folder, or when a folder that assetgen did not write for this
+asset is already there. Re-export replaces only the asset's own folder; the copy step refuses to
+delete a folder whose `asset.json` belongs to another asset. The same folder is zipped for
+`GET /api/assets/{id}/download`.
 
 ## API
 

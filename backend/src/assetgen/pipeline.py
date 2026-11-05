@@ -383,6 +383,38 @@ class Pipeline:
                              "fallback": skeleton["fallback"]},
                 "grip": asset.get("grip") if asset["kind"] == "weapon" else None}
 
+    @staticmethod
+    def _export_parent(engine: str, kind: str) -> Path:
+        """Folder inside the game project that holds the exports of one kind."""
+        return (Path("Assets") / "Generated" if engine == "unity" else Path("generated")) / kind
+
+    def _claim_export_name(self, asset: dict, project: dict) -> str:
+        """The asset's own export folder name, unique within its project and kind.
+
+        Picked at the first export and kept, so re-exports only ever replace
+        this asset's folder. When another asset of the project (or a folder
+        already in the game project that is not this asset's) has the name,
+        a short id suffix is added."""
+        if asset.get("export_name"):
+            return asset["export_name"]
+        parent = (Path(project["path"]).expanduser() / self._export_parent(project["engine"], asset["kind"])
+                  if project.get("path") else None)
+        claimed = {(a.get("export_name") or "").lower()
+                   for a in self.db.list("assets", project_id=asset["project_id"], kind=asset["kind"])
+                   if a["id"] != asset["id"]}
+
+        def free(candidate: str) -> bool:
+            if candidate.lower() in claimed:
+                return False
+            return parent is None or exporters.folder_owner(parent / candidate) in (None, asset["id"])
+
+        base = exporters.safe_name(asset["name"])
+        name = base if free(base) else f"{base}_{asset['id'][:6]}"
+        if not free(name):
+            name = f"{base}_{asset['id']}"
+        self.db.update("assets", asset["id"], {"export_name": name})
+        return name
+
     def _stage_export(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)
         project = self.db.get("projects", asset["project_id"])
@@ -390,9 +422,9 @@ class Pipeline:
             raise RuntimeError("the asset's project no longer exists")
         outputs = asset.get("outputs") or {}
         rig, mesh = outputs["rig"], outputs["mesh"]
-        name = exporters.safe_name(asset["name"])
-        animated = self.asset_dir(asset["id"]) / rig["glb"]
         engine = project["engine"]
+        name = self._claim_export_name(asset, project)
+        animated = self.asset_dir(asset["id"]) / rig["glb"]
         build = directory / engine / name
         result: dict = {"engine": engine, "name": name}
         if engine == "unity":
@@ -403,7 +435,6 @@ class Pipeline:
             exporters.write_unity(out_dir=build, name=name, asset=asset, fbx=fbx,
                                   texture=self.asset_dir(asset["id"]) / mesh["texture"], lods=mesh["lods"],
                                   clips=rig["clips"], rig_type=rig["rig_type"])
-            relative = Path("Assets") / "Generated" / asset["kind"] / name
         else:
             preset = settings["camera_preset"]
             render = settings["render"]
@@ -420,16 +451,16 @@ class Pipeline:
                                   sprites=sprites, clips=rig["clips"], frame_size=frame_size,
                                   fps=int(render["fps"]), camera_preset=preset,
                                   mirrored=CAMERA_MIRRORED[preset], look=render["look"])
-            relative = Path("generated") / asset["kind"] / name
             result.update(directions=CAMERA_DIRECTIONS[preset], frame_size=frame_size, layer=layer,
                           sprites_dir="sprites")
+        relative = self._export_parent(engine, asset["kind"]) / name
         progress("Zipping", 0.9)
         zip_path = exporters.make_zip(build, directory / f"{name}.zip", name)
         installed = None
         if project.get("path"):
             destination = Path(project["path"]).expanduser() / relative
             progress("Copying into the game project", 0.95)
-            exporters.install(build, destination)
+            exporters.install(build, destination, asset["id"])
             installed = str(destination)
         result.update(
             folder=self._rel(asset["id"], build), zip=self._rel(asset["id"], zip_path),

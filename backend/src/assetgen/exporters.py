@@ -252,8 +252,23 @@ def write_godot(*, out_dir: Path, res_dir: str, name: str, asset: dict, layer: s
     return sidecar
 
 
-def install(src: Path, dest: Path) -> None:
-    """Copies an export folder into the game project, replacing what was there."""
+def folder_owner(folder: Path) -> str | None:
+    """Id of the asset an export folder belongs to; None when the folder does
+    not exist, "" when it exists but was not written by assetgen."""
+    if not folder.exists():
+        return None
+    try:
+        return str(json.loads((folder / "asset.json").read_text(encoding="utf-8"))["id"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+
+
+def install(src: Path, dest: Path, asset_id: str) -> None:
+    """Copies an export folder into the game project, replacing only the
+    asset's own earlier export. Refuses to touch another asset's folder."""
+    owner = folder_owner(dest)
+    if owner not in (None, asset_id):
+        raise RuntimeError(f"{dest} belongs to another asset; not overwriting it")
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)

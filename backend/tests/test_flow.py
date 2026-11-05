@@ -145,3 +145,62 @@ def test_reexport_overwrites(client, tmp_path):
     assert not (folder / "stray.txt").exists() and (folder / "Old_King.fbx").is_file()
     assert asset["outputs"]["mesh"] == mesh_before  # nothing upstream reran
     assert 13000 <= mesh_before["lods"][0]["triangles"] <= 15000
+
+
+def test_same_name_assets_get_their_own_export_folders(client, tmp_path):
+    game = tmp_path / "godot_game"
+    project = make_project(client, "godot", game)
+    first, second = (client.post("/api/assets", json={
+        "project_id": project["id"], "kind": "monster", "name": "Grey Wolf", "description": "a grey wolf",
+    }).json() for _ in range(2))
+    first = run_to_done(client, first["id"])
+    second = run_to_done(client, second["id"])
+
+    parent = game / "generated" / "monster"
+    first_folder = parent / first["export_name"]
+    second_folder = parent / second["export_name"]
+    assert first["export_name"] == "Grey_Wolf"
+    assert second["export_name"] == f"Grey_Wolf_{second['id'][:6]}"
+    for asset, folder in ((first, first_folder), (second, second_folder)):
+        assert (folder / "body.tres").is_file() and (folder / "PaperDoll.tscn").is_file()
+        assert json.loads((folder / "asset.json").read_text())["id"] == asset["id"]
+        assert asset["outputs"]["export"]["installed_to"] == str(folder)
+    # the .tres points at its own folder, not the other wolf's
+    assert f"res://generated/monster/{second['export_name']}/body_right.png" in (second_folder / "body.tres").read_text()
+
+    # re-exporting either one only replaces its own folder
+    second_files = sorted(p.relative_to(second_folder) for p in second_folder.rglob("*"))
+    assert client.post(f"/api/assets/{first['id']}/export").status_code == 200
+    again = wait_for(client, first["id"], "done")
+    assert again["export_name"] == "Grey_Wolf"
+    assert sorted(p.relative_to(second_folder) for p in second_folder.rglob("*")) == second_files
+    assert json.loads((first_folder / "asset.json").read_text())["id"] == first["id"]
+
+
+def test_export_never_overwrites_a_folder_it_did_not_write(client, tmp_path):
+    game = tmp_path / "unity_game"
+    project = make_project(client, "unity", game)
+    own = game / "Assets" / "Generated" / "hero" / "Ember_Knight"
+    own.mkdir(parents=True)
+    (own / "handmade.txt").write_text("keep me")
+    asset = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "name": "Ember Knight",
+                                             "description": "a knight"}).json()
+    asset = run_to_done(client, asset["id"])
+    assert (own / "handmade.txt").read_text() == "keep me"
+    assert asset["export_name"] == f"Ember_Knight_{asset['id'][:6]}"
+    assert (own.parent / asset["export_name"] / f"{asset['export_name']}.fbx").is_file()
+
+
+def test_install_refuses_another_assets_folder(tmp_path):
+    import pytest
+    from assetgen.exporters import install
+
+    dest = tmp_path / "Grey_Wolf"
+    dest.mkdir()
+    (dest / "asset.json").write_text(json.dumps({"id": "other"}))
+    src = tmp_path / "build"
+    src.mkdir()
+    (src / "asset.json").write_text(json.dumps({"id": "mine"}))
+    with pytest.raises(RuntimeError):
+        install(src, dest, "mine")
+    assert json.loads((dest / "asset.json").read_text())["id"] == "other"
