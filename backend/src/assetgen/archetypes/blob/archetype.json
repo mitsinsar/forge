@@ -1,0 +1,36 @@
+{
+  "id": "blob",
+  "name": "Blob",
+  "description": "Soft body with a squash-and-stretch rig and procedural clips.",
+  "rig_type": "Generic",
+  "skeleton_source": "Squash rig (procedural)",
+  "clip_source": "Procedural",
+  "rest_pose": "round resting shape, sitting on the ground, front view",
+  "joints": [
+    "root",
+    "squash",
+    "top",
+    "eye_l",
+    "eye_r"
+  ],
+  "sockets": {},
+  "clips": [
+    "idle",
+    "walk",
+    "run",
+    "attack_1",
+    "attack_2",
+    "hit",
+    "death"
+  ],
+  "keywords": [
+    "slime",
+    "blob",
+    "ooze",
+    "jelly",
+    "gel",
+    "pudding",
+    "amoeba",
+    "mimic"
+  ]
+}
