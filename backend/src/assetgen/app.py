@@ -7,7 +7,10 @@ import logging
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 from .adapters import build_adapters
 from .api import router
@@ -54,5 +57,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Asset generator", version=VERSION, description=DESCRIPTION, lifespan=lifespan)
     app.include_router(router)
+    mount_frontend(app, settings.frontend_dir)
     logging.getLogger("assetgen").setLevel(logging.INFO)
     return app
+
+
+def mount_frontend(app: FastAPI, dist: Path) -> None:
+    """Serves the built web app (``npm run build`` in frontend/) at ``/`` when its folder exists.
+
+    Added after the API router, so ``/api`` routes always win. Paths that are not files fall back to
+    ``index.html`` so the app's own routes (``/assets/<id>``) load on refresh."""
+    if not (dist / "index.html").is_file():
+        return
+    root = dist.resolve()
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend(path: str):
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "not found")
+        target = (root / path).resolve()
+        if path and target.is_relative_to(root) and target.is_file():
+            return FileResponse(target)
+        return FileResponse(root / "index.html", headers={"Cache-Control": "no-cache"})
