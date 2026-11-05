@@ -118,3 +118,51 @@ def test_delete_asset_removes_files(client, settings, tmp_path):
     assert client.delete(f"/api/assets/{asset['id']}").status_code == 204
     assert client.get(f"/api/assets/{asset['id']}").status_code == 404
     assert not (settings.assets_dir / asset["id"]).exists()
+
+
+def test_failed_stage_can_be_retried(client, settings, tmp_path, monkeypatch):
+    project = make_project(client, "unity", tmp_path / "g")
+    pipeline = client.app.state.pipeline
+    original = pipeline.adapters.mesh.image_to_mesh
+
+    def broken(**kwargs):
+        raise RuntimeError("Hunyuan3D is not answering")
+
+    monkeypatch.setattr(pipeline.adapters.mesh, "image_to_mesh", broken)
+    asset = _new(client, project)
+    wait_for(client, asset["id"], "waiting", gate=1)
+    client.post(f"/api/assets/{asset['id']}/gates/1/approve", json={"candidate": 1})
+    failed = wait_for(client, asset["id"], "failed")
+    assert failed["stage"] == "mesh" and "not answering" in failed["error"]
+
+    monkeypatch.setattr(pipeline.adapters.mesh, "image_to_mesh", original)
+    assert client.post(f"/api/assets/{asset['id']}/retry").status_code == 200
+    assert wait_for(client, asset["id"], "waiting", gate=2)["error"] is None
+
+
+def test_delete_while_running_cleans_up(client, settings, tmp_path):
+    import threading
+
+    project = make_project(client, "unity", tmp_path / "g")
+    pipeline = client.app.state.pipeline
+    release = threading.Event()
+    original = pipeline.adapters.llm.expand
+
+    def slow(**kwargs):
+        release.wait(5)
+        return original(**kwargs)
+
+    pipeline.adapters.llm.expand = slow
+    try:
+        asset = _new(client, project)
+        wait_for(client, asset["id"], "running")
+        assert client.delete(f"/api/assets/{asset['id']}").status_code == 204
+        release.set()
+        import time
+        for _ in range(200):
+            if pipeline.current is None and not (settings.assets_dir / asset["id"]).exists():
+                break
+            time.sleep(0.02)
+        assert not (settings.assets_dir / asset["id"]).exists()
+    finally:
+        pipeline.adapters.llm.expand = original

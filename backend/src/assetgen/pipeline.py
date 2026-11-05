@@ -247,10 +247,12 @@ class Pipeline:
         try:
             outputs = await asyncio.to_thread(self.run_stage, asset_id, stage)
         except Exception as exc:  # noqa: BLE001 - every failure is reported on the asset
+            if self.db.get("assets", asset_id) is None:  # deleted while it ran
+                shutil.rmtree(self.asset_dir(asset_id), ignore_errors=True)
+                return
             log.exception("stage %s of %s failed", stage, asset_id)
-            if self.db.get("assets", asset_id):
-                self.update(asset_id, status="failed", step=f"{stage} failed", error=f"{exc}",
-                            error_detail=traceback.format_exc(limit=5))
+            self.update(asset_id, status="failed", step=f"{stage} failed", error=f"{exc}",
+                        error_detail=traceback.format_exc(limit=5))
             return
         finally:
             self.current = None
