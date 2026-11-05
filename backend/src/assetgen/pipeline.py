@@ -374,14 +374,40 @@ class Pipeline:
             attach = {"kind": "gear", "slot": asset["slot"]}
         elif asset["kind"] == "weapon":
             attach = {"kind": "weapon", "weapon_class": asset["weapon_class"], "grip": asset["grip"]}
+        project = self.db.get("projects", asset["project_id"]) or {}
+        godot = project.get("engine") == "godot"
         result = self.adapters.blender.rig_and_animate(
             mesh_glb=mesh, skeleton=skeleton, archetype=archetype, clips=clips, attach=attach,
-            out_path=directory / "animated.glb", progress=lambda s, f: progress(s, 0.3 + 0.7 * f))
-        return {"glb": self._rel(asset["id"], result["glb"]), "clips": result["clips"],
-                "preview_clips": self.preview_clips(asset, clips), "rig_type": archetype["rig_type"],
-                "skeleton": {"joints": len(skeleton["joints"]), "fit_score": skeleton["fit_score"],
-                             "fallback": skeleton["fallback"]},
-                "grip": asset.get("grip") if asset["kind"] == "weapon" else None}
+            out_path=directory / "animated.glb",
+            progress=lambda s, f: progress(s, 0.3 + (0.4 if godot else 0.7) * f))
+        output = {"glb": self._rel(asset["id"], result["glb"]), "clips": result["clips"],
+                  "preview_clips": self.preview_clips(asset, clips), "rig_type": archetype["rig_type"],
+                  "skeleton": {"joints": len(skeleton["joints"]), "fit_score": skeleton["fit_score"],
+                               "fallback": skeleton["fallback"]},
+                  "grip": asset.get("grip") if asset["kind"] == "weapon" else None}
+        if godot:
+            sprites = self._render_sprites(asset, settings, result["glb"], result["clips"],
+                                           lambda s, f: progress(s, 0.7 + 0.3 * f))
+            output["sprites"] = {k: v for k, v in sprites.items() if k != "frames"}  # paths stay out of the db
+        return output
+
+    def _render_sprites(self, asset: dict, settings: dict, animated: Path, clips: list[dict], progress) -> dict:
+        """Renders the sprite frames into the asset's sprites folder (files already there are kept).
+
+        Godot projects render them in the rig stage so gate 3 can play them; the export reuses them."""
+        preset = settings["camera_preset"]
+        render = settings["render"]
+        frame_size = int(render["frame_size"][asset["kind"]])
+        fps = int(render["fps"])
+        frames = self.adapters.blender.render_sprites(
+            animated_glb=animated, clips=clips, directions=CAMERA_DIRECTIONS[preset],
+            camera_preset=preset, frame_size=frame_size, supersample=int(render["supersample"]),
+            fps=fps, look=render["look"], palette_size=int(render["palette_size"]),
+            out_dir=self.stage_dir(asset["id"], "sprites"), progress=progress)
+        return {"frames": frames, "camera_preset": preset, "directions": CAMERA_DIRECTIONS[preset],
+                "mirrored": CAMERA_MIRRORED[preset], "fps": fps, "frame_size": frame_size,
+                "files": {d: {c: [self._rel(asset["id"], p) for p in paths] for c, paths in by_clip.items()}
+                          for d, by_clip in frames.items()}}
 
     @staticmethod
     def _export_parent(engine: str, kind: str) -> Path:
@@ -436,14 +462,10 @@ class Pipeline:
                                   texture=self.asset_dir(asset["id"]) / mesh["texture"], lods=mesh["lods"],
                                   clips=rig["clips"], rig_type=rig["rig_type"])
         else:
-            preset = settings["camera_preset"]
+            rendered = self._render_sprites(asset, settings, animated, rig["clips"],
+                                            lambda s, f: progress(s, 0.8 * f))
+            sprites, preset, frame_size = rendered["frames"], rendered["camera_preset"], rendered["frame_size"]
             render = settings["render"]
-            frame_size = int(render["frame_size"][asset["kind"]])
-            sprites = self.adapters.blender.render_sprites(
-                animated_glb=animated, clips=rig["clips"], directions=CAMERA_DIRECTIONS[preset],
-                camera_preset=preset, frame_size=frame_size, supersample=int(render["supersample"]),
-                fps=int(render["fps"]), look=render["look"], palette_size=int(render["palette_size"]),
-                out_dir=self.stage_dir(asset["id"], "sprites"), progress=lambda s, f: progress(s, 0.8 * f))
             progress("Packing atlases", 0.85)
             layer = {"gear": asset.get("slot"), "weapon": "weapon"}.get(asset["kind"], "body")
             res_dir = f"res://generated/{asset['kind']}/{name}"

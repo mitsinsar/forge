@@ -47,6 +47,8 @@ class Settings:
     blender_path: Path = Path("blender")
     unirig_path: Path = Path("UniRig")
     python_path: Path = Path("python")
+    # The built web app (npm run build in frontend/), served at / when it exists.
+    frontend_dir: Path = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
     @property
     def db_path(self) -> Path:
