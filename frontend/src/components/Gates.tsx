@@ -194,6 +194,11 @@ export function Gate1({ asset }: { asset: Asset }) {
       <Grid cols={2}>
         <Card title="Expanded prompt" subtitle={`Base model: ${label(prompt?.base_model)}`}>
           <Stack gap={3}>
+            {prompt?.expansion.flags?.map((flag) => (
+              <Notice key={flag} tone="warning">
+                {flag}
+              </Notice>
+            ))}
             <Text wrap>{prompt?.prompt}</Text>
             <SectionTitle>Negative</SectionTitle>
             <Text muted small wrap>
