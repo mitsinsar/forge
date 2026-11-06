@@ -207,9 +207,9 @@ class MockRig(MockBase):
 
 
 class MockBlender(MockBase):
-    def cleanup_and_lods(self, *, raw_mesh, triangles, lod_ratios, out_dir, progress):
+    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress):
         info = read_glb_json(raw_mesh).get("extras") or {}
-        if "parts" not in info:  # a real mesh (Hunyuan3D): shown as made until real Blender decimates it
+        if "parts" not in info:  # a real mesh (Hunyuan3D): kept as made; the real Blender adapter decimates it
             return self._pass_through(raw_mesh, triangles, out_dir, progress)
         parts, color = _parts_from(info["parts"]), tuple(info["color"])
         progress("Cleaning up mesh", 0.2)
@@ -321,7 +321,7 @@ class MockBlender(MockBase):
         progress("Sprites rendered", 1.0)
         return result
 
-    def export_fbx(self, *, animated_glb, lods, rig_type, out_path, progress):
+    def export_fbx(self, *, animated_glb, mesh_glb, lods, rig_type, out_path, progress):
         progress("Exporting FBX", 0.5)
         self._wait()
         gltf = read_glb_json(animated_glb)

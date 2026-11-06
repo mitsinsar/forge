@@ -76,10 +76,12 @@ class BlenderAdapter(Protocol):
 
     mode: str
 
-    def cleanup_and_lods(self, *, raw_mesh: Path, triangles: int, lod_ratios: list[float],
+    def cleanup_and_lods(self, *, raw_mesh: Path, kind: str, triangles: int, lod_ratios: list[float],
                          out_dir: Path, progress: Progress) -> dict:
-        """Cleans up and decimates to the budget, and makes the LODs. Returns
-        ``{"glb": path, "lods": [{"level", "ratio", "triangles"}]}``."""
+        """Cleans up, scales to the kind's standard size with the origin at the
+        feet, decimates to the budget and makes the LODs (``lod_ratios`` of
+        LOD0). Writes ``out_dir/mesh.glb`` with one node per level (``LOD0``,
+        ``LOD1``...). Returns ``{"glb": path, "lods": [{"level", "ratio", "triangles"}]}``."""
 
     def rig_and_animate(self, *, mesh_glb: Path, skeleton: dict, archetype: dict, clips: list[str],
                         attach: dict | None, out_path: Path, progress: Progress) -> dict:
@@ -94,9 +96,11 @@ class BlenderAdapter(Protocol):
         ``supersample``x, downscaled to ``frame_size``. Returns
         ``{direction: {clip: [frame paths]}}``."""
 
-    def export_fbx(self, *, animated_glb: Path, lods: list[dict], rig_type: str, out_path: Path,
-                   progress: Progress) -> Path:
-        """Exports mesh, skeleton, clips and LODs to FBX."""
+    def export_fbx(self, *, animated_glb: Path, mesh_glb: Path, lods: list[dict], rig_type: str,
+                   out_path: Path, progress: Progress) -> Path:
+        """Exports mesh, skeleton and clips from ``animated_glb`` and the lower
+        LODs from ``mesh_glb`` to one FBX for Unity (``<name>_LOD<n>`` meshes,
+        one take per clip)."""
 
 
 class Adapters:

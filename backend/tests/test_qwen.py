@@ -176,7 +176,7 @@ def test_unreachable_endpoint_is_readable(tmp_path):
 def test_missing_real_adapters_are_named(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     settings = load_settings(data_dir=tmp_path, adapters={"llm": "real", "rig": "real", "blender": "real"})
-    with pytest.raises(RealAdapterMissing, match="rig, blender") as error:
+    with pytest.raises(RealAdapterMissing, match="built yet for: rig\\.") as error:
         build_adapters(settings)
     assert 'adapters.rig = "mock"' in str(error.value) and "llm" in str(error.value)
     assert build_adapters(load_settings(data_dir=tmp_path, adapters={"llm": "real"})).llm.mode == "real"

@@ -34,7 +34,7 @@ placeholders, so the whole API works end to end without a GPU:
 | Qwen (LLM) | archetype, slot / weapon class and prompt from keyword rules; forces the archetype's rest pose; folds in reject notes |
 | ComfyUI (image) | N candidate PNGs (default 4) of a placeholder body, coloured after colour words in the description |
 | Hunyuan3D (mesh) | textured GLB built from ellipsoids in the picked candidate's colour (real adapter: see below) |
-| Blender | clean-up to the triangle budget with LOD0/1/2 (100 / 50 / 20 %) and triangle counts; animated GLB with the clip set; sprite frames per clip and direction; a placeholder FBX |
+| Blender (real: clean-up, LODs, FBX) | clean-up to the triangle budget with LOD0/1/2 (100 / 50 / 20 %) and triangle counts; animated GLB with the clip set; sprite frames per clip and direction; a placeholder FBX |
 | UniRig (rig) | the archetype's template joints with a fit score |
 
 The engine exports (Unity folder, Godot atlases / SpriteFrames / PaperDoll, Aseprite JSON, zip)
@@ -63,9 +63,10 @@ Set `[adapters] mesh = "real"` and `hunyuan3d_url` to the machine running Hunyua
 
 Errors name the cause: server not reachable, out of GPU memory, or no result within
 `hunyuan3d_timeout`. Hunyuan3D's server does not report a crashed job (it stays
-`processing`), so a crash shows up as the timeout; its console has the reason. While Blender is
-still the mock, gate 2 shows Hunyuan3D's mesh as made, as a single LOD0, and the mock rig
-animates a placeholder body.
+`processing`), so a crash shows up as the timeout; its console has the reason.
+With `blender = "real"` the mesh is cleaned up and decimated into its LODs as usual; with the
+mock Blender, gate 2 shows Hunyuan3D's mesh as made, as a single LOD0. The mock rig animates
+a placeholder body of the archetype until the real rig adapter exists.
 
 To compare the de-light pass, untick or tick it in the profile and reject the mesh at gate 2
 (a reject makes a new mesh with a new seed).
@@ -162,6 +163,23 @@ The adapter finds the nodes it fills by title, so a workflow can be rebuilt in C
 with "Save (API)" as long as it keeps these node titles: `model` (MODEL loader, or the checkpoint
 loader), `clip` (CLIP loader, unless `model` is a checkpoint), `positive`, `negative`, `latent`,
 `sampler` (`KSampler`) and `save` (`SaveImage`). Size, steps, CFG and sampler are read from the file.
+
+## Real Blender
+
+With `[adapters] blender = "real"`, headless Blender (4.5 LTS or later, at `blender_path`) runs the
+scripts in `blender_scripts/` as `blender -b --factory-startup -P <script> -- <args.json> <result.json>`:
+
+- `cleanup_lods.py` (mesh stage): merges by distance, removes loose geometry, floating debris and
+  interior faces, fixes normals, scales to the kind's standard size (hero and gear 1.8 m tall,
+  monster 1.5 m, boss 2.7 m, weapon 1.0 m long) with the origin at the feet, decimates to the
+  triangle budget and makes the LODs at the profile's `lod_ratios`.
+- `export_fbx.py` (Unity export): mesh, armature and one take per clip, plus `<name>_LOD1`,
+  `<name>_LOD2` beside `<name>_LOD0` (skinned like LOD0) for Unity's LOD Group; Y up, scale 1,
+  no leaf bones, baked animation.
+
+Blender's output is kept as `blender_<script>.log` in the stage folder, its `PROGRESS` lines become
+the asset's progress, and a failure puts the log's last lines in the asset's error. Rigging and
+sprite rendering still use the mock until their real versions land.
 
 ## Jobs and files
 
@@ -268,10 +286,12 @@ src/assetgen/
   schemas.py       request bodies
   pipeline.py      stages, gates and the job worker
   exporters.py     Unity folder, Godot sprites, zip
-  adapters/        base.py (interfaces), mock/ (placeholders), real/ (qwen.py, comfyui.py, hunyuan3d.py)
+  adapters/        base.py (interfaces), mock/ (placeholders), real/ (qwen.py, comfyui.py, hunyuan3d.py, blender.py)
   imaging.py       background removal, de-light pass, GLB albedo texture
   archetypes/<id>/archetype.json
   config.py  db.py  defaults.py  events.py
+blender_scripts/   bpy scripts run by the real Blender adapter
 workflows/         ComfyUI API-format workflows: sdxl.json, flux.json, qwen-image.json
-tests/             pytest: mock adapters, and the real ones against fake Qwen, ComfyUI and Hunyuan3D servers
+tests/             pytest: mock adapters, the real ones against fake Qwen, ComfyUI and Hunyuan3D servers,
+                   and the Blender scripts when Blender is installed (skipped otherwise)
 ```

@@ -44,6 +44,14 @@ STAGES = ("prompt", "mesh", "rig", "export")
 GATE_OF_STAGE = {"prompt": 1, "mesh": 2, "rig": 3}
 STAGE_OF_GATE = {v: k for k, v in GATE_OF_STAGE.items()}
 
+# Standard model size per kind after the mesh clean-up, in metres, and what it
+# measures: "height" (feet to top) or "longest" (the longest side, for weapons).
+# Gear is previewed worn by the mannequin, so it is scaled like a hero.
+MODEL_SIZES: dict[str, tuple[float, str]] = {
+    "hero": (1.8, "height"), "monster": (1.5, "height"), "boss": (2.7, "height"),
+    "gear": (1.8, "height"), "weapon": (1.0, "longest"),
+}
+
 PROFILE_DEFAULTS: dict = {
     "base_model": "sdxl",
     "prompt_suffix": "game asset, full body, plain background, flat even lighting",

@@ -361,7 +361,7 @@ class Pipeline:
                 progress=lambda s, f: progress(s, 0.5 * f), hints=self._hints(asset), delight=delight)
         triangles = int(settings["budgets"]["triangles"][asset["kind"]])
         result = self.adapters.blender.cleanup_and_lods(
-            raw_mesh=raw, triangles=triangles, lod_ratios=list(settings["budgets"]["lod_ratios"]),
+            raw_mesh=raw, kind=asset["kind"], triangles=triangles, lod_ratios=list(settings["budgets"]["lod_ratios"]),
             out_dir=directory, progress=lambda s, f: progress(s, 0.5 + 0.5 * f))
         return {"glb": self._rel(asset["id"], result["glb"]), "texture": self._rel(asset["id"], texture),
                 "triangle_budget": triangles, "lods": result["lods"], "delight": delight}
@@ -459,8 +459,8 @@ class Pipeline:
         result: dict = {"engine": engine, "name": name}
         if engine == "unity":
             fbx = self.adapters.blender.export_fbx(
-                animated_glb=animated, lods=mesh["lods"], rig_type=rig["rig_type"],
-                out_path=directory / "fbx" / f"{name}.fbx", progress=lambda s, f: progress(s, 0.6 * f))
+                animated_glb=animated, mesh_glb=self.asset_dir(asset["id"]) / mesh["glb"], lods=mesh["lods"],
+                rig_type=rig["rig_type"], out_path=directory / "fbx" / f"{name}.fbx", progress=lambda s, f: progress(s, 0.6 * f))
             progress("Writing the Unity folder", 0.7)
             exporters.write_unity(out_dir=build, name=name, asset=asset, fbx=fbx,
                                   texture=self.asset_dir(asset["id"]) / mesh["texture"], lods=mesh["lods"],
