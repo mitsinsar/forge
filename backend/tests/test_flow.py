@@ -49,11 +49,20 @@ def test_unity_hero_end_to_end(client, tmp_path):
     assert asset["outputs"]["rig"]["rig_type"] == "Humanoid"
 
     folder = game / "Assets" / "Generated" / "hero" / "Ember_Knight"
-    for name in ("Ember_Knight.fbx", "asset.json", "Materials/Ember_Knight.mat",
+    for name in ("Ember_Knight.fbx", "asset.json",
                  "Textures/Ember_Knight_Albedo.png", "Textures/Ember_Knight_Albedo.png.meta"):
         assert (folder / name).is_file(), name
     sidecar = json.loads((folder / "asset.json").read_text())
     assert sidecar["rig"] == "Humanoid" and len(sidecar["lods"]) == 3 and len(sidecar["clips"]) == 9
+    assert sidecar["prefab"] == "Ember_Knight.prefab"
+    assert sidecar["material"]["file"] == "Materials/Ember_Knight.mat"  # made by the import script
+    # the editor import script came with the export
+    for name in ("Editor/AssetForgeImporter.cs", "Editor/AssetForge.Editor.asmdef",
+                 "Runtime/AssetForgeGear.cs", "Runtime/AssetForge.Runtime.asmdef"):
+        assert (game / "Assets" / "Generated" / name).is_file(), name
+    asmdef = json.loads((game / "Assets" / "Generated" / "Editor" / "AssetForge.Editor.asmdef").read_text())
+    assert asmdef["includePlatforms"] == ["Editor"]
+    assert asset["outputs"]["export"]["importer"]["written"]
 
     download = client.get(f"/api/assets/{asset_id}/download")
     assert download.status_code == 200
@@ -126,9 +135,67 @@ def test_unity_weapon_writes_prefab(client, tmp_path):
                                            "description": "a yew longbow"}).json()
     run_to_done(client, bow["id"])
     folder = game / "Assets" / "Generated" / "weapon" / "Yew_Bow"
-    assert (folder / "Yew_Bow.prefab").is_file()
     sidecar = json.loads((folder / "asset.json").read_text())
     assert sidecar["weapon"]["class"] == "bow" and sidecar["weapon"]["socket"] == "weapon_l"
+    assert sidecar["weapon"]["prefab"] == "Yew_Bow.prefab"  # made in Unity by the import script
+    assert sidecar["weapon"]["grip"]["position"] == [0.0, 0.0, 0.0]
+
+
+def test_unity_gear_lists_the_biped_bones(client, tmp_path):
+    game = tmp_path / "unity"
+    project = make_project(client, "unity", game)
+    helmet = client.post("/api/assets", json={"project_id": project["id"], "kind": "gear", "name": "Iron Helm",
+                                              "description": "a dented iron helmet"}).json()
+    run_to_done(client, helmet["id"])
+    sidecar = json.loads((game / "Assets" / "Generated" / "gear" / "Iron_Helm" / "asset.json").read_text())
+    assert sidecar["gear"]["slot"] == "head" and sidecar["gear"]["skinned"] is True
+    assert "mixamorig:Hips" in sidecar["gear"]["bones"] and sidecar["gear"]["hide_body"] == ["head_top"]
+
+
+def test_reexport_keeps_what_unity_made(client, tmp_path):
+    game = tmp_path / "unity"
+    project = make_project(client, "unity", game)
+    asset = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "name": "Ash Mage",
+                                             "description": "a mage in grey robes"}).json()
+    asset = run_to_done(client, asset["id"])
+    folder = game / "Assets" / "Generated" / "hero" / "Ash_Mage"
+    # what Unity and the import script add after the first import
+    unity_made = {"Ash_Mage.fbx.meta": "guid: fbx", "asset.json.meta": "guid: json", "Ash_Mage.prefab": "prefab",
+                  "Ash_Mage.prefab.meta": "guid: prefab", "Ash_Mage.controller": "controller",
+                  "Materials.meta": "guid: folder", "Materials/Ash_Mage.mat": "material",
+                  "Materials/Ash_Mage.mat.meta": "guid: material"}
+    for rel, text in unity_made.items():
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_text(text)
+    (folder / "stray.txt").write_text("left over")
+    (folder / "stray.txt.meta").write_text("guid: stray")
+    (folder / "Ash_Mage.fbx").write_text("old fbx")
+    assert client.post(f"/api/assets/{asset['id']}/export").status_code == 200
+    wait_for(client, asset["id"], "done")
+    for rel, text in unity_made.items():
+        assert (folder / rel).read_text() == text, rel
+    assert not (folder / "stray.txt").exists() and not (folder / "stray.txt.meta").exists()
+    assert (folder / "Ash_Mage.fbx").read_text() != "old fbx"
+
+
+def test_importer_script_is_replaced_only_by_a_newer_version(tmp_path):
+    from assetgen import exporters
+
+    bundled = exporters.script_version(exporters.UNITY_SCRIPTS_DIR / "Editor" / "AssetForgeImporter.cs")
+    assert bundled and bundled >= 1
+    first = exporters.install_unity_importer(tmp_path)
+    assert sorted(first["written"]) == ["Assets/Generated/Editor/AssetForge.Editor.asmdef",
+                                        "Assets/Generated/Editor/AssetForgeImporter.cs",
+                                        "Assets/Generated/Runtime/AssetForge.Runtime.asmdef",
+                                        "Assets/Generated/Runtime/AssetForgeGear.cs"]
+    assert exporters.install_unity_importer(tmp_path)["written"] == []
+    script = tmp_path / "Assets" / "Generated" / "Editor" / "AssetForgeImporter.cs"
+    script.write_text("// assetgen-importer-version: 0\n// older\n")
+    assert "Assets/Generated/Editor/AssetForgeImporter.cs" in exporters.install_unity_importer(tmp_path)["written"]
+    assert exporters.script_version(script) == bundled
+    script.write_text(f"// assetgen-importer-version: {bundled + 1}\n// newer, from a later assetgen\n")
+    assert exporters.install_unity_importer(tmp_path)["written"] == []
+    assert "newer" in script.read_text()
 
 
 def test_reexport_overwrites(client, tmp_path):

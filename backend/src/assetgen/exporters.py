@@ -16,7 +16,8 @@ from pathlib import Path
 
 from PIL import Image
 
-URP_LIT_SHADER_GUID = "933532a4fcc9baf4fa0491de14d08ed7"
+from .archetypes import get_archetype
+
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
                     *(f"LPT{i}" for i in range(1, 10))}
 
@@ -44,82 +45,17 @@ def _texture_meta(guid: str) -> str:
             f"  mipmaps:\n    enableMipMap: 1\n  textureType: 0\n  sRGBTexture: 1\n")
 
 
-def _urp_material(name: str, texture_guid: str) -> str:
-    return f"""%YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
---- !u!21 &2100000
-Material:
-  serializedVersion: 8
-  m_ObjectHideFlags: 0
-  m_Name: {name}
-  m_Shader: {{fileID: 4800000, guid: {URP_LIT_SHADER_GUID}, type: 3}}
-  m_SavedProperties:
-    serializedVersion: 3
-    m_TexEnvs:
-    - _BaseMap:
-        m_Texture: {{fileID: 2800000, guid: {texture_guid}, type: 3}}
-        m_Scale: {{x: 1, y: 1}}
-        m_Offset: {{x: 0, y: 0}}
-    - _MainTex:
-        m_Texture: {{fileID: 2800000, guid: {texture_guid}, type: 3}}
-        m_Scale: {{x: 1, y: 1}}
-        m_Offset: {{x: 0, y: 0}}
-    m_Floats:
-    - _Smoothness: 0.2
-    - _Metallic: 0
-    m_Colors:
-    - _BaseColor: {{r: 1, g: 1, b: 1, a: 1}}
-"""
-
-
-def _weapon_prefab(name: str, grip: dict) -> str:
-    x, y, z = grip.get("position", [0, 0, 0])
-    rx, ry, rz = grip.get("rotation", [0, 0, 0])
-    return f"""%YAML 1.1
-%TAG !u! tag:unity3d.com,2011:
---- !u!1 &100000
-GameObject:
-  m_Name: {name}
-  m_Component:
-  - component: {{fileID: 400000}}
---- !u!4 &400000
-Transform:
-  m_GameObject: {{fileID: 100000}}
-  m_LocalPosition: {{x: 0, y: 0, z: 0}}
-  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}
-  m_LocalScale: {{x: 1, y: 1, z: 1}}
-  m_Children:
-  - {{fileID: 400002}}
-  m_Father: {{fileID: 0}}
---- !u!1 &100002
-GameObject:
-  m_Name: Grip
-  m_Component:
-  - component: {{fileID: 400002}}
---- !u!4 &400002
-Transform:
-  m_GameObject: {{fileID: 100002}}
-  m_LocalPosition: {{x: {-x}, y: {-y}, z: {-z}}}
-  m_LocalEulerAnglesHint: {{x: {rx}, y: {ry}, z: {rz}}}
-  m_LocalScale: {{x: 1, y: 1, z: 1}}
-  m_Children: []
-  m_Father: {{fileID: 400000}}
-"""
-
-
 def write_unity(*, out_dir: Path, name: str, asset: dict, fbx: Path, texture: Path, lods: list[dict],
                 clips: list[dict], rig_type: str) -> dict:
     """Assets/Generated/<type>/<name>/ contents."""
     if out_dir.exists():
         shutil.rmtree(out_dir)
     (out_dir / "Textures").mkdir(parents=True)
-    (out_dir / "Materials").mkdir()
     shutil.copy2(fbx, out_dir / f"{name}.fbx")
     albedo = out_dir / "Textures" / f"{name}_Albedo.png"
     shutil.copy2(texture, albedo)
     texture_guid = _guid(f"{asset['id']}:albedo")
     albedo.with_name(albedo.name + ".meta").write_text(_texture_meta(texture_guid), encoding="utf-8")
-    (out_dir / "Materials" / f"{name}.mat").write_text(_urp_material(name, texture_guid), encoding="utf-8")
     sidecar = {
         "generator": "assetgen",
         "id": asset["id"],
@@ -128,6 +64,7 @@ def write_unity(*, out_dir: Path, name: str, asset: dict, fbx: Path, texture: Pa
         "archetype": asset["archetype"],
         "rig": rig_type,
         "fbx": f"{name}.fbx",
+        "prefab": f"{name}.prefab",
         "material": {"file": f"Materials/{name}.mat", "shader": "Universal Render Pipeline/Lit",
                      "albedo": f"Textures/{name}_Albedo.png"},
         "lods": [{"level": lod["level"], "ratio": lod["ratio"], "triangles": lod["triangles"]} for lod in lods],
@@ -135,12 +72,11 @@ def write_unity(*, out_dir: Path, name: str, asset: dict, fbx: Path, texture: Pa
     }
     if asset["kind"] == "gear":
         sidecar["gear"] = {"slot": asset["slot"], "skeleton": "biped", "skinned": True,
-                           "hide_body": SLOT_BODY_MASK.get(asset["slot"], [])}
+                           "hide_body": SLOT_BODY_MASK.get(asset["slot"], []),
+                           "bones": list(get_archetype("biped")["joints"])}
     if asset["kind"] == "weapon":
-        prefab = f"{name}.prefab"
-        (out_dir / prefab).write_text(_weapon_prefab(name, asset["grip"]), encoding="utf-8")
         sidecar["weapon"] = {"class": asset["weapon_class"], "socket": asset["grip"].get("socket", "weapon_r"),
-                             "grip": asset["grip"], "prefab": prefab}
+                             "grip": asset["grip"], "prefab": f"{name}.prefab"}
     (out_dir / "asset.json").write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
     return sidecar
 
@@ -263,16 +199,83 @@ def folder_owner(folder: Path) -> str | None:
         return ""
 
 
-def install(src: Path, dest: Path, asset_id: str) -> None:
+def unity_importer_outputs(name: str) -> list[str]:
+    """Files the Unity import script makes in an export folder. A re-export keeps
+    them (and the .meta files Unity wrote), so the prefab is updated in place and
+    scenes keep their references."""
+    return [f"{name}.prefab", f"{name}.controller", f"Materials/{name}.mat", "Materials"]
+
+
+def install(src: Path, dest: Path, asset_id: str, keep: list[str] | None = None) -> None:
     """Copies an export folder into the game project, replacing only the
-    asset's own earlier export. Refuses to touch another asset's folder."""
+    asset's own earlier export. Refuses to touch another asset's folder.
+
+    With ``keep`` (paths relative to the folder) the folder is updated instead
+    of replaced: the new files overwrite the old ones, files of the earlier
+    export that are gone are removed, and the ``keep`` files and the ``.meta``
+    file of every file or folder still there stay as they are."""
     owner = folder_owner(dest)
     if owner not in (None, asset_id):
         raise RuntimeError(f"{dest} belongs to another asset; not overwriting it")
+    if dest.exists() and keep is not None:
+        new = {p.relative_to(src).as_posix() for p in src.rglob("*")}
+        kept = set(keep)
+        for path in sorted(dest.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            rel = path.relative_to(dest).as_posix()
+            if rel in new or rel in kept or any(rel.startswith(k + "/") for k in kept) or path.suffix == ".meta":
+                continue
+            if path.is_dir():
+                if not any(path.iterdir()):
+                    path.rmdir()
+            else:
+                path.unlink()
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+        for meta in dest.rglob("*.meta"):
+            if not meta.with_suffix("").exists():
+                meta.unlink()
+        return
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(src, dest)
+
+
+UNITY_SCRIPTS_DIR = Path(__file__).parent / "unity"
+UNITY_SCRIPTS_DEST = Path("Assets") / "Generated"
+_VERSION_LINE = re.compile(r"assetgen-importer-version:\s*(\d+)")
+
+
+def script_version(path: Path) -> int | None:
+    """Version of a shipped Unity script (its ``assetgen-importer-version`` line)."""
+    try:
+        with path.open(encoding="utf-8") as file:
+            head = file.read(400)
+    except OSError:
+        return None
+    match = _VERSION_LINE.search(head)
+    return int(match.group(1)) if match else None
+
+
+def install_unity_importer(project_root: Path) -> dict:
+    """Writes the editor import script (and the small runtime script gear uses)
+    to ``Assets/Generated/{Editor,Runtime}/`` of a Unity project when they are
+    missing or older than the bundled version. Returns the version and the
+    files written."""
+    bundled = script_version(UNITY_SCRIPTS_DIR / "Editor" / "AssetForgeImporter.cs") or 0
+    dest_root = project_root / UNITY_SCRIPTS_DEST
+    installed = script_version(dest_root / "Editor" / "AssetForgeImporter.cs")
+    written: list[str] = []
+    for source in sorted(UNITY_SCRIPTS_DIR.rglob("*")):
+        if not source.is_file() or source.suffix not in (".cs", ".asmdef"):
+            continue
+        rel = source.relative_to(UNITY_SCRIPTS_DIR)
+        target = dest_root / rel
+        if target.exists() and installed is not None and installed >= bundled:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        written.append((UNITY_SCRIPTS_DEST / rel).as_posix())
+    return {"version": max(bundled, installed or 0), "written": written}
 
 
 def make_zip(src: Path, zip_path: Path, root: str) -> Path:

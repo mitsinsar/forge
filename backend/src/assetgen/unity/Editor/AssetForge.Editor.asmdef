@@ -1,0 +1,10 @@
+{
+    "name": "AssetForge.Editor",
+    "rootNamespace": "AssetForge.Editor",
+    "references": ["AssetForge.Runtime"],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "autoReferenced": true,
+    "noEngineReferences": false
+}

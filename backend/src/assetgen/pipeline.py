@@ -486,7 +486,11 @@ class Pipeline:
         if project.get("path"):
             destination = Path(project["path"]).expanduser() / relative
             progress("Copying into the game project", 0.95)
-            exporters.install(build, destination, asset["id"])
+            if engine == "unity":
+                result["importer"] = exporters.install_unity_importer(Path(project["path"]).expanduser())
+                exporters.install(build, destination, asset["id"], keep=exporters.unity_importer_outputs(name))
+            else:
+                exporters.install(build, destination, asset["id"])
             installed = str(destination)
         result.update(
             folder=self._rel(asset["id"], build), zip=self._rel(asset["id"], zip_path),

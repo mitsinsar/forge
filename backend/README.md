@@ -209,10 +209,10 @@ Hunyuan3D.
 Exports go into the project's folder:
 
 * **Unity** — `<path>/Assets/Generated/<kind>/<Name>/`: `<Name>.fbx` (mesh, skeleton, clips,
-  LODs; Humanoid for bipeds, Generic otherwise), `Materials/<Name>.mat` (URP Lit),
-  `Textures/<Name>_Albedo.png` (+ `.meta`), `<Name>.prefab` for weapons (grip offset) and
-  `asset.json` for the editor import script (LODs, clips, slot and hidden body parts for gear,
-  socket and grip for weapons).
+  LODs), `Textures/<Name>_Albedo.png` (+ `.meta`) and `asset.json` for the editor import script
+  (rig type, LODs, clips, slot, bones and hidden body parts for gear, socket and grip for weapons).
+  The first export also puts the import script into the project (see below), which makes
+  `<Name>.prefab`, `Materials/<Name>.mat` and `<Name>.controller` beside them in Unity.
 * **Godot** — `<path>/generated/<kind>/<Name>/` (`res://generated/<kind>/<Name>/`): one atlas PNG
   and Aseprite JSON per layer and direction, `<layer>.tres` SpriteFrames (one animation per
   `<clip>_<direction>`, fps and loop set), `PaperDoll.tscn` and `asset.json`. Layers are `body`
@@ -223,8 +223,90 @@ Exports go into the project's folder:
 safe for file systems, with a short id suffix (`Grey_Wolf_1a2b3c`) when another asset of the same
 project and kind already has that folder, or when a folder that assetgen did not write for this
 asset is already there. Re-export replaces only the asset's own folder; the copy step refuses to
-delete a folder whose `asset.json` belongs to another asset. The same folder is zipped for
+delete a folder whose `asset.json` belongs to another asset. In a Unity folder a re-export keeps the
+`.meta` files Unity wrote and the prefab, controller and material the import script made, so their
+GUIDs stay and scenes keep their references. The same folder is zipped for
 `GET /api/assets/{id}/download`.
+
+### Unity import script
+
+Every Unity export checks the game project for the editor import script and writes it when it is
+missing or older than the one bundled with assetgen (`src/assetgen/unity/`, versioned by the
+`assetgen-importer-version` line at the top; a newer copy in the project is left alone). The export's
+`importer` output lists what was written. Nothing has to be set up in the game project:
+
+| File in the project | What it is |
+|---|---|
+| `Assets/Generated/Editor/AssetForgeImporter.cs` | The `AssetPostprocessor` that turns each export folder into a prefab |
+| `Assets/Generated/Editor/AssetForge.Editor.asmdef` | Editor-only assembly (`includePlatforms: ["Editor"]`), so builds never include it |
+| `Assets/Generated/Runtime/AssetForgeGear.cs` + `AssetForge.Runtime.asmdef` | The small component on gear prefabs that binds them to a character's bones |
+
+Written for Unity 6 LTS with URP (checked with 6000.3). When Unity imports `<Name>.fbx` and its
+`asset.json`:
+
+1. **Model import** — material import off, scale 1. `rig` `Humanoid` makes a Humanoid avatar from the
+   model, anything else Generic; weapons are imported without a rig or clips, gear as Generic without
+   an avatar. Each entry of `clips` becomes a clip of that name, matched to the FBX take of the same
+   name (`idle`, or `Armature|idle`), with its loop flag and cut to its `duration`. A change to
+   `asset.json` re-imports the FBX.
+2. **Material** — `Materials/<Name>.mat`, URP Lit with `Textures/<Name>_Albedo.png` as base map
+   (Standard shader, with a warning, when URP is missing).
+3. **Animator controller** (heroes, monsters, bosses) — `<Name>.controller` with one state per clip,
+   `idle` as the default state.
+4. **Prefab** — `<Name>.prefab`: the FBX as child `Model` with the material on every renderer and
+   the Animator (controller and avatar) on it; a `LODGroup` on the root with LOD0/1/2 from the
+   `<Name>_LOD<n>` meshes. Level *n* is shown down to a screen height of 0.5 × ratio(*n*+1) / ratio(0),
+   so 25 % and 10 % for the default ratios 1, 0.5, 0.2, and the last level culls at 1 %.
+   * **Weapons** — the prefab root is the grip: `Model` sits at minus the grip `position`, turned
+     back by its `rotation`. Parent the prefab to the `weapon_r` (or `weapon_l`, see `socket`) bone
+     with zero local position and rotation.
+   * **Gear** — the skinned meshes keep their bones, and an `AssetForgeGear` component (slot,
+     `hide_body`) binds them to the wearer's bones by name when the gear is parented under a
+     character (it looks for the nearest `Animator` above it), or when `BindTo(characterRoot)` is
+     called. Prefixes such as `mixamorig:` are ignored when matching. The import warns about bones
+     that are not in the biped skeleton (`gear.bones` in `asset.json`).
+
+A re-export overwrites the files and Unity re-imports them; the prefab is opened and updated in place
+(the `Model` child stays a nested instance of the FBX), as are the controller's states and the
+material, so their GUIDs and the prefab root do not change. **Tools → AssetForge → Rebuild All
+Prefabs** (or `-executeMethod AssetForge.Editor.AssetForgeImporter.RebuildAll`) rebuilds every
+folder by hand.
+
+#### Checking the import script in Unity (batch mode)
+
+On a Mac with Unity 6 from Unity Hub and Blender installed, from `backend/`:
+
+```sh
+UNITY=/Applications/Unity/Hub/Editor/6000.3.27f2/Unity.app/Contents/MacOS/Unity
+TEMPLATE="$(dirname "$UNITY")/../Resources/PackageManager/ProjectTemplates/com.unity.template.3d-cross-platform-17.0.14.tgz"
+GAME=/tmp/UrpGame
+
+# 1. A fresh URP project (the "Universal 3D" template)
+"$UNITY" -batchmode -nographics -quit -createProject "$GAME" -cloneFromTemplate "$TEMPLATE" -logFile -
+
+# 2. Export a hero, a one-handed sword and a helmet into it. --skinned gives the hero and the helmet
+#    a skinned biped skeleton (the mock rig has none, and Humanoid needs real bones).
+uv run python tests/unity/export_samples.py "$GAME" --data /tmp/unity-samples --skinned
+
+# 3. Import in Unity and check every prefab (writes a report; exit code 1 when a check fails)
+mkdir -p "$GAME/Assets/Editor" && cp tests/unity/AssetForgeCheck.cs "$GAME/Assets/Editor/"
+"$UNITY" -batchmode -nographics -projectPath "$GAME" -executeMethod AssetForgeCheck.Run \
+  -afReport /tmp/report1.json -quit -logFile /tmp/unity1.log
+
+# 4. Re-export the same assets and check again: same GUIDs, and the scene the first check saved
+#    (Assets/AssetForgeCheck.unity) still holds the three prefabs
+uv run python tests/unity/export_samples.py "$GAME" --data /tmp/unity-samples --skinned --reexport
+"$UNITY" -batchmode -nographics -projectPath "$GAME" -executeMethod AssetForgeCheck.Run \
+  -afReport /tmp/report2.json -quit -logFile /tmp/unity2.log
+```
+
+The check fails unless: every folder has a prefab with one `LODGroup` of three levels and one URP
+Lit material with the albedo; the hero has a valid Humanoid avatar and an Animator whose states are
+every clip of `asset.json` (same lengths and loop flags, `idle` first); the weapon's model sits at
+the grip and is imported without a rig; the helmet has `AssetForgeGear` and skinned meshes, and binds
+to an instance of the hero with no bone missing; and, on the second run, the scene's instances still
+point at their prefabs. Compare `prefab_guid`, `root_id` and `fbx_guid` in the two reports to see
+the in-place update.
 
 ## API
 
@@ -298,7 +380,8 @@ src/assetgen/
   api.py           routes
   schemas.py       request bodies
   pipeline.py      stages, gates and the job worker
-  exporters.py     Unity folder, Godot sprites, zip
+  exporters.py     Unity folder (and the import script it ships), Godot sprites, zip
+  unity/           the Unity editor import script and gear component written into Unity projects
   adapters/        base.py (interfaces), mock/ (placeholders), real/ (qwen.py, comfyui.py, hunyuan3d.py, blender.py)
   imaging.py       background removal, de-light pass, GLB albedo texture
   archetypes/<id>/archetype.json
@@ -307,4 +390,5 @@ blender_scripts/   bpy scripts run by the real Blender adapter
 workflows/         ComfyUI API-format workflows: sdxl.json, flux.json, qwen-image.json
 tests/             pytest: mock adapters, the real ones against fake Qwen, ComfyUI and Hunyuan3D servers,
                    and the Blender scripts when Blender is installed (skipped otherwise)
+tests/unity/       the batch-mode check of the Unity import script (not run by pytest)
 ```
