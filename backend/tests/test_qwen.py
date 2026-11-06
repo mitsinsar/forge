@@ -20,10 +20,13 @@ from conftest import make_project, wait_for
 
 class FakeQwen:
     """A tiny OpenAI-compatible server. ``replies`` are the message contents it
-    answers, in order; the last one repeats. Every request body is kept."""
+    answers, in order; the last one repeats. Every request body is kept.
+    ``refuse`` lists response_format types answered with HTTP 400, as LM Studio
+    does for json_object."""
 
-    def __init__(self, replies: list[str]):
+    def __init__(self, replies: list[str], refuse: tuple[str, ...] = ()):
         self.replies = list(replies)
+        self.refuse = refuse
         self.requests: list[dict] = []
         fake = self
 
@@ -37,12 +40,16 @@ class FakeQwen:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 fake.requests.append({"path": self.path, "body": body})
+                kind = (body.get("response_format") or {}).get("type")
+                if kind in fake.refuse:
+                    self._json({"error": "'response_format.type' must be 'json_schema' or 'text'"}, status=400)
+                    return
                 content = fake.replies.pop(0) if len(fake.replies) > 1 else fake.replies[0]
                 self._json({"choices": [{"index": 0, "message": {"role": "assistant", "content": content}}]})
 
-            def _json(self, data):
+            def _json(self, data, status=200):
                 raw = json.dumps(data).encode()
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
@@ -68,8 +75,8 @@ def reply(**fields) -> str:
 def fake_qwen():
     servers = []
 
-    def start(*replies: str) -> FakeQwen:
-        server = FakeQwen(list(replies))
+    def start(*replies: str, refuse: tuple[str, ...] = ()) -> FakeQwen:
+        server = FakeQwen(list(replies), refuse)
         servers.append(server)
         return server
 
@@ -98,12 +105,43 @@ def test_valid_reply_and_request_shape(fake_qwen, tmp_path):
     assert request["path"] == "/v1/chat/completions"
     body = request["body"]
     assert body["model"] == "qwen3:14b"
-    assert body["response_format"] == {"type": "json_object"}
+    assert body["response_format"]["type"] == "json_schema"
+    schema = body["response_format"]["json_schema"]["schema"]
+    assert set(schema["required"]) == {"archetype", "prompt", "negative_prompt", "slot", "weapon_class"}
     system = body["messages"][0]["content"]
     for archetype in load_archetypes().values():  # every archetype with its rest pose
         assert archetype["id"] in system and archetype["rest_pose"] in system
     assert "background" in system and "lighting" in system
     assert "a red wolf" in body["messages"][1]["content"]
+
+
+def test_lm_studio_json_schema_only(fake_qwen, tmp_path):
+    """LM Studio refuses json_object; json_schema is asked first and works."""
+    server = fake_qwen(reply(prompt="lm studio knight"), refuse=("json_object",))
+    assert expand(adapter_for(server, tmp_path))["prompt"] == "lm studio knight"
+    assert [r["body"]["response_format"]["type"] for r in server.requests] == ["json_schema"]
+
+
+@pytest.mark.parametrize("refuse, used", [
+    (("json_schema",), "json_object"),
+    (("json_schema", "json_object"), None),
+])
+def test_refused_format_falls_back_and_is_remembered(fake_qwen, tmp_path, refuse, used):
+    server = fake_qwen(reply(prompt="first"), reply(prompt="second"), refuse=refuse)
+    llm = adapter_for(server, tmp_path)
+    assert expand(llm)["prompt"] == "first"
+    assert expand(llm)["prompt"] == "second"
+    answered = [r["body"].get("response_format", {}).get("type") for r in server.requests
+                if (r["body"].get("response_format") or {}).get("type") not in refuse]
+    assert answered == [used, used]  # the second call goes straight to the working format
+    assert len(server.requests) == len(refuse) + 2
+
+
+def test_other_http_errors_still_fail(fake_qwen, tmp_path):
+    server = fake_qwen(reply(), refuse=("json_schema", "json_object", None))
+    with pytest.raises(LLMError, match="answered HTTP 400"):
+        expand(adapter_for(server, tmp_path))
+    assert len(server.requests) == 3
 
 
 def test_invalid_reply_then_valid(fake_qwen, tmp_path):

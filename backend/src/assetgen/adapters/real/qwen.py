@@ -1,5 +1,5 @@
 """Qwen prompt expansion through an OpenAI-compatible ``/chat/completions``
-endpoint (Ollama, llama.cpp server, vLLM...).
+endpoint (LM Studio, Ollama, llama.cpp server, vLLM...).
 
 Qwen turns the user's short description into an image prompt for the preview
 stage. The archetype rules are enforced here, not trusted to the model:
@@ -23,6 +23,10 @@ ATTEMPTS = 2  # one retry on an invalid reply
 
 class LLMError(RuntimeError):
     """A readable failure of the prompt stage."""
+
+
+class _FormatRefused(Exception):
+    """The server refused the requested response_format; try the next one."""
 
 
 SYSTEM_PROMPT = """You write prompts for an image model that makes ONE concept image of a game asset.
@@ -97,6 +101,29 @@ def parse_reply(content: str) -> dict:
     return data
 
 
+REPLY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "archetype": {"type": "string"},
+        "prompt": {"type": "string"},
+        "negative_prompt": {"type": "string"},
+        "slot": {"type": ["string", "null"]},
+        "weapon_class": {"type": ["string", "null"]},
+    },
+    "required": ["archetype", "prompt", "negative_prompt", "slot", "weapon_class"],
+    "additionalProperties": False,
+}
+
+# JSON modes to ask for, best first. LM Studio accepts only json_schema (it
+# rejects json_object with HTTP 400); older servers know only json_object; the
+# last resort asks for nothing and relies on the prompt and parse_reply.
+RESPONSE_FORMATS: list[dict | None] = [
+    {"type": "json_schema", "json_schema": {"name": "asset_prompt", "strict": True, "schema": REPLY_SCHEMA}},
+    {"type": "json_object"},
+    None,
+]
+
+
 class QwenLLM:
     mode = "real"
     timeout = 180.0
@@ -104,10 +131,20 @@ class QwenLLM:
     def __init__(self, settings: Settings):
         self.url = settings.qwen_url.rstrip("/") + "/chat/completions"
         self.model = settings.qwen_model
+        self._format = 0  # index into RESPONSE_FORMATS; moves on when the server refuses one
 
     def _post(self, messages: list[dict]) -> str:
-        body = json.dumps({"model": self.model, "messages": messages, "temperature": 0.4,
-                           "response_format": {"type": "json_object"}}).encode("utf-8")
+        while True:
+            try:
+                return self._post_once(messages, RESPONSE_FORMATS[self._format])
+            except _FormatRefused:
+                self._format += 1
+
+    def _post_once(self, messages: list[dict], response_format: dict | None) -> str:
+        fields = {"model": self.model, "messages": messages, "temperature": 0.4}
+        if response_format is not None:
+            fields["response_format"] = response_format
+        body = json.dumps(fields).encode("utf-8")
         request = urllib.request.Request(self.url, data=body, method="POST",
                                          headers={"Content-Type": "application/json"})
         try:
@@ -115,6 +152,8 @@ class QwenLLM:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:300]
+            if exc.code in (400, 422) and response_format is not None:
+                raise _FormatRefused() from exc
             raise LLMError(f"Qwen at {self.url} answered HTTP {exc.code}: {detail}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
