@@ -34,7 +34,7 @@ placeholders, so the whole API works end to end without a GPU:
 | Qwen (LLM) | archetype, slot / weapon class and prompt from keyword rules; forces the archetype's rest pose; folds in reject notes |
 | ComfyUI (image) | N candidate PNGs (default 4) of a placeholder body, coloured after colour words in the description |
 | Hunyuan3D (mesh) | textured GLB built from ellipsoids in the picked candidate's colour |
-| Blender | clean-up to the triangle budget with LOD0/1/2 (100 / 50 / 20 %) and triangle counts; animated GLB with the clip set; sprite frames per clip and direction; a placeholder FBX |
+| Blender (real: clean-up, LODs, FBX) | clean-up to the triangle budget with LOD0/1/2 (100 / 50 / 20 %) and triangle counts; animated GLB with the clip set; sprite frames per clip and direction; a placeholder FBX |
 | UniRig (rig) | the archetype's template joints with a fit score |
 
 The engine exports (Unity folder, Godot atlases / SpriteFrames / PaperDoll, Aseprite JSON, zip)
@@ -70,6 +70,23 @@ blender = "mock"
 ```
 
 Environment example: `ASSETGEN_PORT=9000`, `ASSETGEN_ADAPTERS__MESH=real`.
+
+## Real Blender
+
+With `[adapters] blender = "real"`, headless Blender (4.5 LTS or later, at `blender_path`) runs the
+scripts in `blender_scripts/` as `blender -b --factory-startup -P <script> -- <args.json> <result.json>`:
+
+- `cleanup_lods.py` (mesh stage): merges by distance, removes loose geometry, floating debris and
+  interior faces, fixes normals, scales to the kind's standard size (hero and gear 1.8 m tall,
+  monster 1.5 m, boss 2.7 m, weapon 1.0 m long) with the origin at the feet, decimates to the
+  triangle budget and makes the LODs at the profile's `lod_ratios`.
+- `export_fbx.py` (Unity export): mesh, armature and one take per clip, plus `<name>_LOD1`,
+  `<name>_LOD2` beside `<name>_LOD0` (skinned like LOD0) for Unity's LOD Group; Y up, scale 1,
+  no leaf bones, baked animation.
+
+Blender's output is kept as `blender_<script>.log` in the stage folder, its `PROGRESS` lines become
+the asset's progress, and a failure puts the log's last lines in the asset's error. Rigging and
+sprite rendering still use the mock until their real versions land.
 
 ## Jobs and files
 
@@ -176,8 +193,9 @@ src/assetgen/
   schemas.py       request bodies
   pipeline.py      stages, gates and the job worker
   exporters.py     Unity folder, Godot sprites, zip
-  adapters/        base.py (interfaces), mock/ (placeholders)
+  adapters/        base.py (interfaces), mock/ (placeholders), real/ (Qwen, Blender)
   archetypes/<id>/archetype.json
   config.py  db.py  defaults.py  events.py
-tests/             pytest, all on mock adapters
+blender_scripts/   bpy scripts run by the real Blender adapter
+tests/             pytest; the Blender tests run when Blender is installed and skip otherwise
 ```
