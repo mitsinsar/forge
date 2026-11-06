@@ -47,6 +47,10 @@ def run_script(blender: Path, script: str, args: dict, *, work_dir: Path, log_pa
     """Runs ``blender_scripts/<script>`` with ``args`` and returns the JSON result it wrote."""
     executable = resolve_blender(blender)
     script_path = SCRIPTS_DIR / script
+    # Blender runs inside work_dir, so every path it is given must be absolute: with a relative
+    # data_dir (the default "data") a relative args path would be looked up inside work_dir again.
+    work_dir = Path(work_dir).resolve()
+    log_path = Path(log_path).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(script).stem
     args_path = work_dir / f"{stem}.args.json"

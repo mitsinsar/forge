@@ -33,7 +33,7 @@ stage needs its tool running; the header of the web app (`GET /api/tools`) shows
 |---|---|---|
 | Qwen (LLM) | prompt | an OpenAI-compatible server (LM Studio or Ollama) at `qwen_url` with `qwen_model` |
 | ComfyUI (image) | prompt (skipped for an uploaded image) | ComfyUI at `comfyui_url` with the workflow's models |
-| Hunyuan3D (mesh) | mesh | `api_server.py` at `hunyuan3d_url` |
+| Hunyuan3D or Modly (mesh) | mesh | `mesh_tool = "hunyuan3d"`: `api_server.py` at `hunyuan3d_url`; `mesh_tool = "modly"`: the Modly app at `modly_url` |
 | Blender | mesh, rig (sprites), export | Blender 4.5 LTS at `blender_path` |
 | UniRig (rig) | rig | **not built yet** (ticket #11): the rig stage fails with that message, so assets stop after gate 2 |
 
@@ -92,6 +92,54 @@ of GPU memory. `http://<machine>:8081/docs` lists the API and `/health` answers
 Windows firewall when assetgen runs on another machine. Keep ComfyUI's models unloaded while
 it runs: assetgen unloads them before every mesh stage.
 
+### Modly (mesh, gate 2), the alternative to Hunyuan3D 2.1
+
+[Modly](https://github.com/lightningpixel/modly) is a desktop app that runs image-to-3D models on
+the local GPU through a FastAPI server (port 8765). Set `mesh_tool = "modly"` to use it instead
+of Hunyuan3D's `api_server.py`. For each asset the adapter (`adapters/real/modly.py`):
+
+1. sends the picked candidate as it is (Modly removes the background itself) to
+   `POST /workflow-runs/from-image` with `model_id = modly_model`, `collection = "assetgen"` and
+   `params` = `{"enable_texture": true, "seed": <per asset and attempt>}` plus `modly_params`, and
+   saves the run id in `mesh/modly_run.json` so a restart polls the same run;
+2. polls `GET /workflow-runs/{run_id}` (its `step` text becomes the asset's progress) until `done`;
+3. downloads the GLB with `GET /export/glb?path=<workspace path>` into `mesh/modly.glb`, then
+   finishes the texture as for Hunyuan3D (`mesh/texture.png`, `mesh/raw.glb`).
+
+Errors name the cause: Modly not open, the texture extensions not built, out of GPU memory, or no
+result within `modly_timeout`. Its meshes are large (about 900k triangles); Blender decimates them
+to the budget.
+
+**Setting it up on the RTX 5090 machine** (Modly 0.4.3, Hunyuan3D 2 Mini Turbo):
+
+1. In Modly: Extensions → Install from GitHub →
+   `https://github.com/lightningpixel/modly-hunyuan3d-mini-turbo-extension`. On an RTX 50 card it
+   installs PyTorch with CUDA 12.8 (about 2.7 GB; a slow download can time out, just retry).
+2. Texture needs two C++ parts built by hand, with Visual Studio 2022 (C++) and the CUDA Toolkit
+   12.8, in the extension's venv. From an "x64 Native Tools" prompt:
+
+   ```bat
+   set PY=%USERPROFILE%\Desktop\Modly\extensions\hunyuan3d-mini-turbo\venv\Scripts\python.exe
+   set TEX=%USERPROFILE%\Desktop\Modly\models\hunyuan3d-mini-turbo\generate\_hy3dgen\hy3dgen\texgen
+   set CUDA_HOME=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8
+   set TORCH_CUDA_ARCH_LIST=12.0
+   set DISTUTILS_USE_SDK=1
+   %PY% -m pip install setuptools wheel ninja pybind11 xatlas pygltflib
+   cd /d %TEX%\custom_rasterizer && %PY% -m pip install . --no-build-isolation
+   cd /d %TEX%\differentiable_renderer && %PY% setup.py build_ext --inplace
+   ```
+
+   Two fixes were needed with PyTorch 2.11 and current diffusers:
+   - `custom_rasterizer/lib/custom_rasterizer_kernel/rasterizer.h`: include `<torch/types.h>`
+     instead of `<torch/extension.h>` when `__CUDACC__` is defined (MSVC otherwise stops with
+     "'std': ambiguous symbol" in `compiled_autograd.h`).
+   - `utils/multiview_utils.py`: pass `trust_remote_code=True` to `DiffusionPipeline.from_pretrained`
+     (the paint pipeline is local code in the same source tree).
+
+   Restart Modly after changing them. If Modly downloads the Hunyuan3D source again, redo both.
+3. The first textured run downloads the paint weights; after that a textured mesh takes about
+   4 minutes, a shape-only one about 15 seconds.
+
 ## Settings
 
 Defaults, overridden by `assetgen.toml` in the working directory (or the file in `ASSETGEN_CONFIG`),
@@ -110,6 +158,12 @@ qwen_model = "qwen3"                       # LM Studio: the model id it lists, e
 hunyuan3d_url = "http://127.0.0.1:8081"
 hunyuan3d_timeout = 1800       # seconds one image-to-mesh job may take
 hunyuan3d_poll = 2             # seconds between status checks
+mesh_tool = "hunyuan3d"        # or "modly"
+modly_url = "http://127.0.0.1:8765"
+modly_model = "hunyuan3d-mini-turbo/generate"   # a model id from Modly's GET /model/all
+modly_params = ""              # extra generation params as JSON, e.g. '{"num_inference_steps": 5}'
+modly_timeout = 1800           # seconds one Modly run may take
+modly_poll = 2
 blender_path = "blender"
 unirig_path = "UniRig"
 python_path = "python"
@@ -374,7 +428,7 @@ src/assetgen/
   pipeline.py      stages, gates and the job worker
   exporters.py     Unity folder (and the import script it ships), Godot sprites, zip
   unity/           the Unity editor import script and gear component written into Unity projects
-  adapters/        base.py (interfaces), real/ (qwen.py, comfyui.py, hunyuan3d.py, blender.py)
+  adapters/        base.py (interfaces), real/ (qwen.py, comfyui.py, hunyuan3d.py, modly.py, mesh_common.py, blender.py)
   imaging.py       background removal, de-light pass, GLB albedo texture
   archetypes/<id>/archetype.json
   config.py  db.py  defaults.py  events.py

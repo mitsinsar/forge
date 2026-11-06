@@ -17,7 +17,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-import os
 import time
 import urllib.error
 import urllib.request
@@ -28,27 +27,14 @@ from PIL import Image
 
 from ... import imaging
 from ...config import Settings
+from .mesh_common import MeshError, finish_textured_glb
+from .mesh_common import is_oom as _is_oom
+from .mesh_common import write_atomic as _write_atomic
 
 JOB_FILE = "hunyuan3d_job.json"
 DOWNLOAD_FILE = "hunyuan3d.glb"
 CUTOUT_FILE = "input_cutout.png"
 REQUEST_TIMEOUT = 60.0
-OOM_WORDS = ("out of memory", "outofmemory", "cuda error: out of memory")
-
-
-class MeshError(RuntimeError):
-    """A readable failure of the mesh stage."""
-
-
-def _is_oom(text: str) -> bool:
-    lowered = (text or "").lower()
-    return any(word in lowered for word in OOM_WORDS)
-
-
-def _write_atomic(path: Path, data: bytes) -> None:
-    tmp = path.with_name(path.name + ".part")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
 
 
 class Hunyuan3DMesh:
@@ -149,7 +135,6 @@ class Hunyuan3DMesh:
         out_path = Path(out_path)
         directory = out_path.parent
         download = directory / DOWNLOAD_FILE
-        texture = out_path.with_name("texture.png")
         background = "kept"
         if not download.is_file():
             cutout = directory / CUTOUT_FILE
@@ -177,31 +162,8 @@ class Hunyuan3DMesh:
             _write_atomic(download, glb)
             job_file.unlink(missing_ok=True)
 
-        progress("Extracting the albedo texture", 0.9)
-        try:
-            gltf, binary = imaging.read_glb(download)
-        except ValueError as exc:
-            download.unlink(missing_ok=True)  # a retry downloads it again
-            raise MeshError(f"Hunyuan3D sent a file that is not a GLB ({exc}).") from exc
-        index = imaging.albedo_image_index(gltf)
-        if index is None:
-            raise MeshError("Hunyuan3D sent a mesh without an albedo texture. Is the texture model "
-                            "(hunyuan3d-paintpbr-v2-1) installed on the server?")
-        with Image.open(io.BytesIO(imaging.image_bytes(gltf, binary, index))) as albedo:
-            albedo = albedo.convert("RGBA" if albedo.mode in ("RGBA", "LA", "P") else "RGB")
-            if albedo.size != (texture_size, texture_size):
-                albedo = albedo.resize((texture_size, texture_size), Image.Resampling.LANCZOS)
-        if delight:
-            progress("Evening out baked lighting", 0.95)
-            albedo = imaging.delight(albedo)
-        png = imaging.png_bytes(albedo)
-        _write_atomic(texture, png)
-        gltf, binary = imaging.replace_image(gltf, binary, index, png)
-        gltf.setdefault("asset", {}).setdefault("extras", {}).update(
-            {"source": "hunyuan3d-2.1", "delight": bool(delight), "texture_size": texture_size})
-        tmp = out_path.with_name(out_path.name + ".part")
-        imaging.write_glb(tmp, gltf, binary)
-        os.replace(tmp, out_path)
-        progress("Mesh ready", 1.0)
-        return {"glb": out_path, "texture": texture, "background": background,
-                "triangles": imaging.triangle_count(gltf)}
+        result = finish_textured_glb(
+            download=download, out_path=out_path, texture_size=texture_size, delight=delight, progress=progress,
+            tool="Hunyuan3D", source="hunyuan3d-2.1",
+            no_texture_hint="Is the texture model (hunyuan3d-paintpbr-v2-1) installed on the server?")
+        return {**result, "background": background}

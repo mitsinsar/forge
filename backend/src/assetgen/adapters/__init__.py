@@ -23,7 +23,8 @@ class PendingRig:
 
 def build_adapters(settings: Settings) -> Adapters:
     """The real adapter of every tool (rigging fails clearly until it is built)."""
-    chosen = {name: real_adapter_class(name)(settings) for name in ADAPTER_NAMES if name in REAL_ADAPTERS}
+    chosen = {name: real_adapter_class(name, settings.mesh_tool)(settings)
+              for name in ADAPTER_NAMES if name in REAL_ADAPTERS}
     chosen.setdefault("rig", PendingRig())
     return Adapters(**chosen)
 

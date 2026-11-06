@@ -41,7 +41,8 @@ def _check(name: str, settings: Settings) -> tuple[bool, str]:
     if name == "image":
         return _url_check(settings.comfyui_url.rstrip("/") + "/system_stats")
     if name == "mesh":
-        return _url_check(settings.hunyuan3d_url.rstrip("/") + "/health")
+        base = settings.modly_url if settings.mesh_tool == "modly" else settings.hunyuan3d_url
+        return _url_check(base.rstrip("/") + "/health")
     if name == "blender":
         return _path_check("Blender", settings.blender_path)
     unirig = _path_check("UniRig", settings.unirig_path)
@@ -60,5 +61,6 @@ def check_tools(settings: Settings) -> list[dict]:
         ok, detail = results[name]
         if name not in REAL_ADAPTERS:
             ok, detail = False, f"adapter not built yet (ticket #11); {detail}"
-        report.append({"tool": name, "name": TOOL_NAMES[name], "ok": ok, "detail": detail})
+        label = "Modly" if name == "mesh" and settings.mesh_tool == "modly" else TOOL_NAMES[name]
+        report.append({"tool": name, "name": label, "ok": ok, "detail": detail})
     return report
