@@ -1,8 +1,7 @@
 """Adapter interfaces for the external tools.
 
-The pipeline only talks to these interfaces. The mock adapters implement them
-with generated placeholders; the real ones (ComfyUI, Hunyuan3D, UniRig,
-headless Blender, Qwen) will implement the same methods on the Windows machine.
+The pipeline only talks to these interfaces. The real adapters in ``real/``
+implement them; the tests swap in the doubles in ``backend/tests/fakes``.
 
 Every long call takes a ``progress(step, fraction)`` callback.
 """
@@ -19,8 +18,6 @@ Progress = Callable[[str, float], None]
 class LLMAdapter(Protocol):
     """Qwen via an OpenAI-compatible endpoint, answering structured JSON."""
 
-    mode: str
-
     def expand(self, *, description: str, kind: str, archetypes: dict[str, dict],
                archetype_override: str | None, slot: str | None, weapon_class: str | None,
                notes: list[str]) -> dict:
@@ -32,8 +29,6 @@ class LLMAdapter(Protocol):
 
 class ImageAdapter(Protocol):
     """ComfyUI (Qwen-Image, SDXL or Flux per style profile)."""
-
-    mode: str
 
     def render_candidates(self, *, prompt: str, negative_prompt: str, base_model: str,
                           loras: list[dict], reference_images: list[Path], count: int, seed: int,
@@ -51,8 +46,6 @@ class ImageAdapter(Protocol):
 class MeshAdapter(Protocol):
     """Hunyuan3D 2.1: image to textured mesh."""
 
-    mode: str
-
     def image_to_mesh(self, *, image: Path, texture_size: int, out_path: Path,
                       progress: Progress, hints: dict, delight: bool = True) -> dict:
         """Removes the image's background, writes a textured GLB to
@@ -64,8 +57,6 @@ class MeshAdapter(Protocol):
 class RigAdapter(Protocol):
     """UniRig: skeleton and skin-weight prediction."""
 
-    mode: str
-
     def predict_skeleton(self, *, mesh: Path, archetype: dict, out_dir: Path, progress: Progress) -> dict:
         """Returns the template joints fitted to the mesh:
         ``{"joints": [...], "fit_score": 0..1, "fallback": bool, "file": path}``."""
@@ -73,8 +64,6 @@ class RigAdapter(Protocol):
 
 class BlenderAdapter(Protocol):
     """Headless Blender (``blender -b -P script.py``)."""
-
-    mode: str
 
     def cleanup_and_lods(self, *, raw_mesh: Path, kind: str, triangles: int, lod_ratios: list[float],
                          out_dir: Path, progress: Progress) -> dict:
@@ -112,5 +101,3 @@ class Adapters:
         self.rig = rig
         self.blender = blender
 
-    def modes(self) -> dict[str, str]:
-        return {name: getattr(self, name).mode for name in ("llm", "image", "mesh", "rig", "blender")}

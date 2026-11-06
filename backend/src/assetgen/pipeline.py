@@ -21,12 +21,11 @@ import traceback
 from pathlib import Path
 
 from .adapters import Adapters
-from .adapters.mock.shapes import DEFAULT_GRIPS, seed_of
 from .archetypes import get_archetype, load_archetypes
 from .config import Settings
 from .db import Database, now
-from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, GATE_OF_STAGE, PROFILE_SETTING_KEYS, STAGE_OF_GATE,
-                       STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults)
+from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
+                       STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import exporters
 

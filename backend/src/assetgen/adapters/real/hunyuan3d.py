@@ -52,7 +52,6 @@ def _write_atomic(path: Path, data: bytes) -> None:
 
 
 class Hunyuan3DMesh:
-    mode = "real"
 
     def __init__(self, settings: Settings):
         self.url = settings.hunyuan3d_url.rstrip("/")

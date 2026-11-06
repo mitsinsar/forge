@@ -1,6 +1,6 @@
-"""Placeholder bodies and motion shared by the mock adapters.
+﻿"""Placeholder bodies and motion shared by the test doubles.
 
-Every mock output (candidate images, meshes, animations, sprite frames) is
+Every fake output (candidate images, meshes, animations, sprite frames) is
 drawn from the same ellipsoid parts and the same motion curves, so the
 placeholders of one asset look consistent from gate to gate.
 """
@@ -8,8 +8,9 @@ placeholders of one asset look consistent from gate to gate.
 from __future__ import annotations
 
 import colorsys
-import hashlib
 import math
+
+from assetgen.defaults import DEFAULT_GRIPS, seed_of  # noqa: F401  (seed_of is re-exported)
 
 from .glb import Part
 
@@ -67,13 +68,6 @@ WEAPON_PARTS = {
             Part((0, 0, 0), (0.04, 0.08, 0.04), 1)],
     "staff": [Part((0, 0.2, 0), (0.025, 0.85, 0.025), 2), Part((0, 1.08, 0), (0.09, 0.09, 0.09), 1)],
 }
-# Grip point (where the hand holds it) relative to the weapon origin.
-DEFAULT_GRIPS = {
-    "one_handed": {"socket": "weapon_r", "position": [0.0, -0.06, 0.0], "rotation": [0.0, 0.0, 0.0]},
-    "two_handed": {"socket": "weapon_r", "position": [0.0, -0.12, 0.0], "rotation": [0.0, 0.0, 0.0]},
-    "bow": {"socket": "weapon_l", "position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0]},
-    "staff": {"socket": "weapon_r", "position": [0.0, 0.1, 0.0], "rotation": [0.0, 0.0, 0.0]},
-}
 
 
 def offset_parts(parts: list[Part], offset: tuple[float, float, float]) -> list[Part]:
@@ -95,11 +89,6 @@ def asset_parts(kind: str, archetype: str, slot: str | None = None,
     if kind == "boss":  # bosses are bigger
         return [Part(tuple(c * 1.5 for c in p.center), tuple(r * 1.5 for r in p.radii), p.weight) for p in parts]
     return parts
-
-
-def seed_of(*values) -> int:
-    digest = hashlib.sha256("|".join(str(v) for v in values).encode()).digest()
-    return int.from_bytes(digest[:8], "big")
 
 
 COLOR_HUES = {"red": 0, "crimson": 350, "ember": 12, "orange": 28, "gold": 45, "golden": 45, "yellow": 52,

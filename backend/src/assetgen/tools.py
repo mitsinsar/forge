@@ -1,4 +1,4 @@
-"""Health check of the external tools switched to ``real``.
+"""Health check of the external tools.
 
 URL tools (Qwen, ComfyUI, Hunyuan3D) answer if an HTTP GET gets any reply;
 path tools (Blender, UniRig and its Python) answer if the path exists or the
@@ -50,13 +50,15 @@ def _check(name: str, settings: Settings) -> tuple[bool, str]:
 
 
 def check_tools(settings: Settings) -> list[dict]:
-    """One entry per tool: ``{tool, name, mode, ok, detail}``. ``ok`` is ``None`` for mocks."""
-    real = [n for n in ADAPTER_NAMES if getattr(settings.adapters, n) == "real"]
-    with ThreadPoolExecutor(max_workers=len(real) or 1) as pool:
-        results = dict(zip(real, pool.map(lambda n: _check(n, settings), real)))
+    """One entry per tool: ``{tool, name, ok, detail}``. Rigging is never ok until its adapter exists."""
+    from .adapters.real import REAL_ADAPTERS
+
+    with ThreadPoolExecutor(max_workers=len(ADAPTER_NAMES)) as pool:
+        results = dict(zip(ADAPTER_NAMES, pool.map(lambda n: _check(n, settings), ADAPTER_NAMES)))
     report = []
     for name in ADAPTER_NAMES:
-        ok, detail = results.get(name, (None, "mock adapter, nothing to check"))
-        report.append({"tool": name, "name": TOOL_NAMES[name], "mode": getattr(settings.adapters, name),
-                       "ok": ok, "detail": detail})
+        ok, detail = results[name]
+        if name not in REAL_ADAPTERS:
+            ok, detail = False, f"adapter not built yet (ticket #11); {detail}"
+        report.append({"tool": name, "name": TOOL_NAMES[name], "ok": ok, "detail": detail})
     return report

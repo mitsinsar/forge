@@ -23,31 +23,31 @@ The web app lives in `../frontend` (see its README). When `frontend/dist` exists
 `npm run build` there), `uv run assetgen` also serves the app at `/`; the `/api` routes always
 come first. The folder can be moved with the `frontend_dir` setting.
 
-## Mock-first
+## The tools
 
 ComfyUI, Hunyuan3D, Blender, UniRig and Qwen each sit behind an adapter
-(`src/assetgen/adapters/base.py`). Today every adapter is a mock that returns generated
-placeholders, so the whole API works end to end without a GPU:
+(`src/assetgen/adapters/base.py`). The app always uses the real ones in `adapters/real/`, so every
+stage needs its tool running; the header of the web app (`GET /api/tools`) shows which answer:
 
-| Tool | Mock output |
-|---|---|
-| Qwen (LLM) | archetype, slot / weapon class and prompt from keyword rules; forces the archetype's rest pose; folds in reject notes |
-| ComfyUI (image) | N candidate PNGs (default 4) of a placeholder body, coloured after colour words in the description |
-| Hunyuan3D (mesh) | textured GLB built from ellipsoids in the picked candidate's colour (real adapter: see below) |
-| Blender (real: clean-up, LODs, sprites, FBX) | clean-up to the triangle budget with LOD0/1/2 (100 / 50 / 20 %) and triangle counts; animated GLB with the clip set; sprite frames per clip and direction; a placeholder FBX |
-| UniRig (rig) | the archetype's template joints with a fit score |
+| Tool | Stage | Needs |
+|---|---|---|
+| Qwen (LLM) | prompt | an OpenAI-compatible server (LM Studio or Ollama) at `qwen_url` with `qwen_model` |
+| ComfyUI (image) | prompt (skipped for an uploaded image) | ComfyUI at `comfyui_url` with the workflow's models |
+| Hunyuan3D (mesh) | mesh | `api_server.py` at `hunyuan3d_url` |
+| Blender | mesh, rig (sprites), export | Blender 4.5 LTS at `blender_path` |
+| UniRig (rig) | rig | **not built yet** (ticket #11): the rig stage fails with that message, so assets stop after gate 2 |
+
+A stage whose tool is down fails with a readable error; fix the tool and press Retry.
 
 The engine exports (Unity folder, Godot atlases / SpriteFrames / PaperDoll, Aseprite JSON, zip)
-are real code and run the same with mock or real adapters. `GET /api/meta` reports each adapter's
-mode. Asking for a real adapter that is not built yet stops the server at start-up with a clear
-message.
+are plain code. The tests swap the tools for the GPU-free doubles in `tests/fakes/` (placeholder
+images, ellipsoid meshes and animations), so the whole pipeline is tested without a GPU.
 
 ## Real adapters
 
 ### Hunyuan3D 2.1 (mesh, gate 2)
 
-Set `[adapters] mesh = "real"` and `hunyuan3d_url` to the machine running Hunyuan3D's
-`api_server.py`. For each asset the adapter:
+Set `hunyuan3d_url` to the machine running Hunyuan3D's `api_server.py`. For each asset the adapter:
 
 1. cuts the picked candidate out of its plain background (a flood fill from the border, or
    [rembg](https://github.com/danielgatis/rembg) when it is installed:
@@ -64,9 +64,7 @@ Set `[adapters] mesh = "real"` and `hunyuan3d_url` to the machine running Hunyua
 Errors name the cause: server not reachable, out of GPU memory, or no result within
 `hunyuan3d_timeout`. Hunyuan3D's server does not report a crashed job (it stays
 `processing`), so a crash shows up as the timeout; its console has the reason.
-With `blender = "real"` the mesh is cleaned up and decimated into its LODs as usual; with the
-mock Blender, gate 2 shows Hunyuan3D's mesh as made, as a single LOD0. The mock rig animates
-a placeholder body of the archetype until the real rig adapter exists.
+Blender then cleans the mesh up and decimates it into its LODs.
 
 To compare the de-light pass, untick or tick it in the profile and reject the mesh at gate 2
 (a reject makes a new mesh with a new seed).
@@ -103,7 +101,6 @@ then by environment variables `ASSETGEN_<NAME>`:
 host = "127.0.0.1"
 port = 8000
 data_dir = "data"              # SQLite database, data/assets/<id>/<stage>/, uploads
-mock_step_delay = 0.15         # seconds per mock step, so progress is visible
 comfyui_url = "http://127.0.0.1:8188"
 comfyui_dir = ""               # ComfyUI folder (with models/); LoRAs it lacks are copied to models/loras
 comfyui_timeout = 600          # seconds one candidate may take in ComfyUI before the stage fails
@@ -117,20 +114,14 @@ blender_path = "blender"
 unirig_path = "UniRig"
 python_path = "python"
 frontend_dir = "../frontend/dist" # built web app served at / (default: the repo's frontend/dist)
-
-[adapters]                     # "mock" or "real" each
-llm = "mock"
-image = "mock"
-mesh = "mock"
-rig = "mock"
-blender = "mock"
 ```
 
-Environment example: `ASSETGEN_PORT=9000`, `ASSETGEN_ADAPTERS__MESH=real`.
+Environment example: `ASSETGEN_PORT=9000`, `ASSETGEN_COMFYUI_URL=http://gpu:8188`. An old
+`[adapters]` table is ignored: there is no mock mode any more.
 
 ## ComfyUI (image adapter)
 
-With `[adapters] image = "real"`, gate 1's candidates come from ComfyUI at `comfyui_url`. Each
+Gate 1's candidates come from ComfyUI at `comfyui_url`. Each
 style profile's `base_model` picks an API-format workflow in `workflows/`:
 
 | Workflow | Model files (folder under ComfyUI's `models/`) | LoRAs | Reference images |
@@ -166,7 +157,7 @@ loader), `clip` (CLIP loader, unless `model` is a checkpoint), `positive`, `nega
 
 ## Real Blender
 
-With `[adapters] blender = "real"`, headless Blender (4.5 LTS or later, at `blender_path`) runs the
+Headless Blender (4.5 LTS or later, at `blender_path`) runs the
 scripts in `blender_scripts/` as `blender -b --factory-startup -P <script> -- <args.json> <result.json>`:
 
 - `cleanup_lods.py` (mesh stage): merges by distance, removes loose geometry, floating debris and
@@ -191,8 +182,8 @@ scripts in `blender_scripts/` as `blender -b --factory-startup -P <script> -- <a
   reuse them.
 
 Blender's output is kept as `blender_<script>.log` in the stage folder, its `PROGRESS` lines become
-the asset's progress, and a failure puts the log's last lines in the asset's error. Rigging still uses the mock until
-its real version lands.
+the asset's progress, and a failure puts the log's last lines in the asset's error. Skinning and clip retargeting
+(`rig_and_animate`) come with the rig adapter in ticket #11.
 
 ## Jobs and files
 
@@ -285,7 +276,7 @@ GAME=/tmp/UrpGame
 "$UNITY" -batchmode -nographics -quit -createProject "$GAME" -cloneFromTemplate "$TEMPLATE" -logFile -
 
 # 2. Export a hero, a one-handed sword and a helmet into it. --skinned gives the hero and the helmet
-#    a skinned biped skeleton (the mock rig has none, and Humanoid needs real bones).
+#    a skinned biped skeleton (the fake rig has none, and Humanoid needs real bones).
 uv run python tests/unity/export_samples.py "$GAME" --data /tmp/unity-samples --skinned
 
 # 3. Import in Unity and check every prefab (writes a report; exit code 1 when a check fails)
@@ -383,13 +374,14 @@ src/assetgen/
   pipeline.py      stages, gates and the job worker
   exporters.py     Unity folder (and the import script it ships), Godot sprites, zip
   unity/           the Unity editor import script and gear component written into Unity projects
-  adapters/        base.py (interfaces), mock/ (placeholders), real/ (qwen.py, comfyui.py, hunyuan3d.py, blender.py)
+  adapters/        base.py (interfaces), real/ (qwen.py, comfyui.py, hunyuan3d.py, blender.py)
   imaging.py       background removal, de-light pass, GLB albedo texture
   archetypes/<id>/archetype.json
   config.py  db.py  defaults.py  events.py
 blender_scripts/   bpy scripts run by the real Blender adapter
 workflows/         ComfyUI API-format workflows: sdxl.json, flux.json, qwen-image.json
-tests/             pytest: mock adapters, the real ones against fake Qwen, ComfyUI and Hunyuan3D servers,
+tests/             pytest: the pipeline on the doubles in tests/fakes/, the real adapters against fake Qwen,
+                   ComfyUI and Hunyuan3D servers,
                    and the Blender scripts when Blender is installed (skipped otherwise)
 tests/unity/       the batch-mode check of the Unity import script (not run by pytest)
 ```

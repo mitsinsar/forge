@@ -58,12 +58,11 @@ def _run(action):
 
 # ---- meta -------------------------------------------------------------------
 
-@router.get("/meta", tags=["meta"], summary="Adapter modes, vocabularies and style-profile defaults")
+@router.get("/meta", tags=["meta"], summary="Vocabularies, style-profile defaults and the worker's current asset")
 def meta(request: Request):
     pipeline = pipeline_of(request)
     return {
         "version": request.app.version,
-        "adapters": pipeline.adapters.modes(),
         "profile_defaults": profile_defaults(),
         "kinds": KINDS, "engines": ENGINES, "base_models": BASE_MODELS, "camera_presets": CAMERA_PRESETS,
         "camera_directions": CAMERA_DIRECTIONS, "sprite_looks": SPRITE_LOOKS, "gear_slots": GEAR_SLOTS,
@@ -74,7 +73,7 @@ def meta(request: Request):
     }
 
 
-@router.get("/tools", tags=["meta"], summary="Whether each tool switched to real mode answers")
+@router.get("/tools", tags=["meta"], summary="Whether each external tool answers")
 def tools(request: Request):
     return check_tools(request.app.state.settings)
 

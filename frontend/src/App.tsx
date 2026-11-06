@@ -1,7 +1,7 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLiveUpdates } from "./api/live";
-import { useMeta, useTools } from "./api/queries";
+import { useTools } from "./api/queries";
 import { Badge, EmptyState, LinkButton } from "./ui/kit";
 import { AssetsPage } from "./pages/AssetsPage";
 import { NewAssetPage } from "./pages/NewAssetPage";
@@ -18,36 +18,16 @@ const NAV = [
   { to: "/loras", label: "LoRA library" },
 ];
 
-function AdapterModes() {
-  const meta = useMeta();
-  if (!meta.data) return null;
-  const modes = Object.entries(meta.data.adapters);
-  const mocks = modes.filter(([, mode]) => mode === "mock").map(([name]) => name);
-  const title = modes.map(([name, mode]) => `${name}: ${mode}`).join(" · ");
-  return (
-    <span title={title}>
-      {mocks.length ? (
-        <Badge tone="warning">
-          Mock{mocks.length < modes.length ? `: ${mocks.join(", ")}` : ""}
-        </Badge>
-      ) : (
-        <Badge tone="success">Real adapters</Badge>
-      )}
-    </span>
-  );
-}
-
-/** One badge per tool in real mode: green when it answers, red when it does not. */
+/** One badge per external tool: green when it answers, red when it does not (or is not built yet). */
 function ToolHealth() {
   const tools = useTools();
-  const real = (tools.data ?? []).filter((t) => t.mode === "real");
   return (
     <>
-      {real.map((t) => (
+      {(tools.data ?? []).map((t) => (
         <span key={t.tool} title={t.detail}>
           <Badge tone={t.ok ? "success" : "danger"} dot>
             {t.name}
-            {t.ok ? "" : " unreachable"}
+            {t.ok ? "" : t.detail.includes("not built yet") ? " not built" : " unreachable"}
           </Badge>
         </span>
       ))}
@@ -72,7 +52,6 @@ export function App() {
           ))}
         </nav>
         <div className="topbar__status">
-          <AdapterModes />
           <ToolHealth />
           <span title="Live updates from the server">
             {live === "live" ? (

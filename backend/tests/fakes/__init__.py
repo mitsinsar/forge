@@ -1,4 +1,6 @@
-"""Mock adapters: generated placeholders instead of the real tools."""
+"""Test doubles for the external tools: generated placeholders, fast and GPU-free.
+
+Only the tests use these; the app always runs the real adapters."""
 
 from __future__ import annotations
 
@@ -11,9 +13,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, PngImagePlugin
 
-from ... import imaging
-from ...defaults import CAMERA_TILT, DIRECTION_YAW, GEAR_SLOTS, LOOPING_CLIPS
-from ..base import Progress
+from assetgen import imaging
+from assetgen.defaults import CAMERA_TILT, DIRECTION_YAW, GEAR_SLOTS, LOOPING_CLIPS
+from assetgen.adapters.base import Progress
 from .draw import Camera, draw_parts, font
 from .glb import Animation, GlbBuilder, Part, build_mesh, read_glb_json
 from .shapes import (BIPED, asset_parts, clip_duration, color_of, hue_hint, pose, quat, seed_of,
@@ -35,9 +37,7 @@ WEAPON_WORDS = {
 }
 
 
-class MockBase:
-    mode = "mock"
-
+class FakeBase:
     def __init__(self, step_delay: float = 0.0):
         self.step_delay = step_delay
 
@@ -54,7 +54,7 @@ def _has(text: str, word: str) -> bool:
     return f" {word} " in text
 
 
-class MockLLM(MockBase):
+class FakeLLM(FakeBase):
     """Keyword rules standing in for Qwen's structured JSON answer."""
 
     def expand(self, *, description, kind, archetypes, archetype_override, slot, weapon_class, notes):
@@ -91,7 +91,7 @@ class MockLLM(MockBase):
         }
 
 
-class MockImage(MockBase):
+class FakeImage(FakeBase):
     """Draws the placeholder body with a different colour per candidate."""
 
     size = 512
@@ -136,7 +136,7 @@ class MockImage(MockBase):
         layers.append((parts, to_rgb255(color)))
         draw_parts(image, camera, layers)
         draw = ImageDraw.Draw(image)
-        draw.text((14, 12), f"MOCK · {base_model} · #{index + 1}", fill=(40, 40, 40, 255), font=font(18))
+        draw.text((14, 12), f"FAKE · {base_model} · #{index + 1}", fill=(40, 40, 40, 255), font=font(18))
         draw.text((14, self.size - 30), (hints.get("name") or "")[:40], fill=(40, 40, 40, 255), font=font(16))
         meta = PngImagePlugin.PngInfo()
         meta.add_text("assetgen", json.dumps({"color": color, "jitter": jitter, "prompt": prompt}))
@@ -161,7 +161,7 @@ def _parts_info(parts: list[Part]) -> list[dict]:
     return [{"center": list(p.center), "radii": list(p.radii), "weight": p.weight} for p in parts]
 
 
-class MockMesh(MockBase):
+class FakeMesh(FakeBase):
     """Builds an ellipsoid body in the colour of the picked candidate."""
 
     def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True):
@@ -177,7 +177,7 @@ class MockMesh(MockBase):
         parts = [Part(p.center, tuple(r * j for r, j in zip(p.radii, jitter)), p.weight) for p in parts]
         progress("Painting texture", 0.6)
         self._wait()
-        builder = GlbBuilder(extras={"mock": True, "color": color, "parts": _parts_info(parts),
+        builder = GlbBuilder(extras={"fake": True, "color": color, "parts": _parts_info(parts),
                                      "texture_size": texture_size, "hints": hints})
         material = builder.add_material("albedo", color)
         builder.add_node("raw", builder.add_mesh("raw", build_mesh(parts, 20000), material))
@@ -190,7 +190,7 @@ class MockMesh(MockBase):
         return {"glb": out_path, "texture": texture}
 
 
-class MockRig(MockBase):
+class FakeRig(FakeBase):
     def predict_skeleton(self, *, mesh, archetype, out_dir, progress):
         progress("Predicting skeleton", 0.2)
         self._wait()
@@ -203,7 +203,7 @@ class MockRig(MockBase):
         return {**result, "file": str(path)}
 
 
-class MockBlender(MockBase):
+class FakeBlender(FakeBase):
     def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress):
         info = read_glb_json(raw_mesh).get("extras") or {}
         if "parts" not in info:  # a real mesh (Hunyuan3D): kept as made; the real Blender adapter decimates it
@@ -230,7 +230,7 @@ class MockBlender(MockBase):
         return {"glb": glb, "lods": lods}
 
     def _pass_through(self, raw_mesh, triangles, out_dir, progress):
-        progress("Keeping the mesh as made (mock Blender)", 0.5)
+        progress("Keeping the mesh as made (fake Blender)", 0.5)
         gltf, binary = imaging.read_glb(raw_mesh)
         color = (0.7, 0.7, 0.7)
         albedo = imaging.albedo_image(gltf, binary)
@@ -246,7 +246,7 @@ class MockBlender(MockBase):
 
     def rig_and_animate(self, *, mesh_glb, skeleton, archetype, clips, attach, out_path, progress):
         info = read_glb_json(mesh_glb).get("extras") or {}
-        if "parts" not in info:  # a real mesh: the mock rig animates a placeholder body of the archetype
+        if "parts" not in info:  # a real mesh: the fake rig animates a placeholder body of the archetype
             info = {**info, "parts": _parts_info(asset_parts("hero", archetype["id"])),
                     "color": info.get("color", (0.7, 0.7, 0.7))}
         parts, color = _parts_from(info["parts"]), tuple(info["color"])
@@ -326,12 +326,12 @@ class MockBlender(MockBase):
         joints = gltf.get("extras", {}).get("skeleton", [])
         lines = [
             "; FBX 7.4.0 project file",
-            "; MOCK placeholder written by the assetgen mock Blender adapter.",
+            "; FAKE placeholder written by the test Blender double.",
             "; The real adapter exports this file with headless Blender.",
             "FBXHeaderExtension:  {",
             "\tFBXHeaderVersion: 1003",
             "\tFBXVersion: 7400",
-            '\tCreator: "assetgen mock"',
+            '\tCreator: "assetgen test double"',
             "}",
             f'; RigType: "{rig_type}"',
             f"; Joints: {len(joints)}",
@@ -355,4 +355,4 @@ def _downscale(image: Image.Image, size: int, look: str, palette_size: int) -> I
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
-__all__ = ["MockLLM", "MockImage", "MockMesh", "MockRig", "MockBlender", "seed_of"]
+__all__ = ["FakeLLM", "FakeImage", "FakeMesh", "FakeRig", "FakeBlender", "seed_of"]

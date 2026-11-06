@@ -1,37 +1,31 @@
-"""Builds the adapter set from the settings."""
+"""Builds the adapter set from the settings: always the real tools."""
 
 from __future__ import annotations
 
 from ..config import ADAPTER_NAMES, Settings
 from .base import Adapters
-from .mock import MockBlender, MockImage, MockLLM, MockMesh, MockRig
 from .real import REAL_ADAPTERS, real_adapter_class
 
-MOCKS = {"llm": MockLLM, "image": MockImage, "mesh": MockMesh, "rig": MockRig, "blender": MockBlender}
+RIG_NOT_BUILT = ("Rigging is not built yet: the UniRig adapter and clip retargeting are ticket #11 "
+                 "(after the archetype templates, ticket #10). Assets stop after gate 2 until then.")
 
 
-class RealAdapterMissing(RuntimeError):
-    pass
+class RigNotBuilt(RuntimeError):
+    """Raised by the rig stage until the UniRig adapter exists."""
+
+
+class PendingRig:
+    """Stands in for UniRig until ticket #11: the rig stage fails with a clear message."""
+
+    def predict_skeleton(self, **kwargs):
+        raise RigNotBuilt(RIG_NOT_BUILT)
 
 
 def build_adapters(settings: Settings) -> Adapters:
-    """Mock or real per tool. Every tool asked for as ``real`` must have a real
-    class; otherwise this fails before anything starts, naming all of them."""
-    missing = [name for name in ADAPTER_NAMES
-               if getattr(settings.adapters, name) == "real" and name not in REAL_ADAPTERS]
-    if missing:
-        names = ", ".join(missing)
-        fixes = "; ".join(f'adapters.{n} = "mock" (or ASSETGEN_ADAPTERS__{n.upper()}=mock)' for n in missing)
-        built = ", ".join(sorted(REAL_ADAPTERS)) or "none"
-        raise RealAdapterMissing(
-            f"No real adapter is built yet for: {names}. Real adapters so far: {built}. Set {fixes}.")
-    chosen = {}
-    for name in ADAPTER_NAMES:
-        if getattr(settings.adapters, name) == "real":
-            chosen[name] = real_adapter_class(name)(settings)
-        else:
-            chosen[name] = MOCKS[name](settings.mock_step_delay)
+    """The real adapter of every tool (rigging fails clearly until it is built)."""
+    chosen = {name: real_adapter_class(name)(settings) for name in ADAPTER_NAMES if name in REAL_ADAPTERS}
+    chosen.setdefault("rig", PendingRig())
     return Adapters(**chosen)
 
 
-__all__ = ["Adapters", "build_adapters", "RealAdapterMissing"]
+__all__ = ["Adapters", "build_adapters", "PendingRig", "RigNotBuilt", "RIG_NOT_BUILT"]

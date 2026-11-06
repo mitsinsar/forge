@@ -10,9 +10,8 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from assetgen.adapters.real.comfyui import DEFAULT_WORKFLOWS_DIR, ComfyUIError, ComfyUIImage, find_node
-from assetgen.app import create_app
 from assetgen.config import load_settings
-from conftest import make_project, wait_for
+from conftest import make_app, make_project, wait_for
 from fake_comfyui import CORE_NODES, FakeComfyUI
 
 MODELS = {
@@ -249,10 +248,8 @@ def test_timeout_cancels_the_prompt(fake_comfy, tmp_path):
 def test_gate_one_shows_comfyui_candidates_and_mesh_stage_unloads(fake_comfy, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     server = fake_comfy(loras=["painterly.safetensors"])
-    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, comfyui_url=server.url,
-                             adapters={"image": "real"})
-    with TestClient(create_app(settings)) as client:
-        assert client.get("/api/meta").json()["adapters"]["image"] == "real"
+    settings = load_settings(data_dir=tmp_path / "data", comfyui_url=server.url)
+    with TestClient(make_app(settings, image=ComfyUIImage(settings))) as client:
         lora = client.post("/api/loras", json={"name": "Painterly", "path": str(tmp_path / "painterly.safetensors"),
                                                "base_model": "sdxl"}).json()
         profile = client.post("/api/profiles", json={"name": "Painted", "base_model": "sdxl",
@@ -285,9 +282,8 @@ def test_gate_one_shows_comfyui_candidates_and_mesh_stage_unloads(fake_comfy, tm
 
 def test_failed_comfyui_fails_the_preview_stage(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, comfyui_url="http://127.0.0.1:9",
-                             adapters={"image": "real"})
-    with TestClient(create_app(settings)) as client:
+    settings = load_settings(data_dir=tmp_path / "data", comfyui_url="http://127.0.0.1:9")
+    with TestClient(make_app(settings, image=ComfyUIImage(settings))) as client:
         project = make_project(client, "godot", tmp_path / "game")
         created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero",
                                                    "description": "a knight"})

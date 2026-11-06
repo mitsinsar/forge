@@ -1,4 +1,4 @@
-"""End-to-end runs on mock data, from creation through gates 1-3 to done."""
+"""End-to-end runs with the test doubles, from creation through gates 1-3 to done."""
 
 from __future__ import annotations
 

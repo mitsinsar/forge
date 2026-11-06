@@ -1,11 +1,13 @@
-"""Settings: tool paths, service URLs and adapter modes.
+"""Settings: tool paths and service URLs.
 
 Values come from (lowest to highest priority):
   1. the defaults below,
   2. a TOML file (``assetgen.toml`` in the working directory, or the path in
      ``ASSETGEN_CONFIG``),
   3. environment variables ``ASSETGEN_<FIELD>`` (for example
-     ``ASSETGEN_PORT=9000`` or ``ASSETGEN_ADAPTERS__MESH=real``).
+     ``ASSETGEN_PORT=9000`` or ``ASSETGEN_COMFYUI_URL=http://gpu:8188``).
+
+Keys that are not settings (such as an old ``[adapters]`` table) are ignored.
 
 Nothing here is shell- or OS-specific, so the same settings work on Windows.
 """
@@ -14,21 +16,10 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 ADAPTER_NAMES = ("llm", "image", "mesh", "rig", "blender")
-
-
-@dataclass
-class AdapterModes:
-    """``mock`` or ``real`` per external tool."""
-
-    llm: str = "mock"  # Qwen via an OpenAI-compatible endpoint
-    image: str = "mock"  # ComfyUI
-    mesh: str = "mock"  # Hunyuan3D 2.1
-    rig: str = "mock"  # UniRig
-    blender: str = "mock"  # headless Blender
 
 
 @dataclass
@@ -36,10 +27,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     data_dir: Path = Path("data")
-    # Seconds the mock adapters wait per step, so progress is visible in the UI.
-    mock_step_delay: float = 0.15
-    adapters: AdapterModes = field(default_factory=AdapterModes)
-    # Real tools (used once the real adapters replace the mocks).
+    # The external tools.
     comfyui_url: str = "http://127.0.0.1:8188"
     # The ComfyUI folder (the one with models/); LoRAs ComfyUI doesn't have are copied to models/loras.
     comfyui_dir: str = ""
@@ -87,15 +75,7 @@ def _apply(target, values: dict) -> None:
     for f in fields(target):
         if f.name not in values:
             continue
-        current = getattr(target, f.name)
-        value = values[f.name]
-        if isinstance(current, AdapterModes):
-            if isinstance(value, AdapterModes):
-                setattr(target, f.name, value)
-            else:
-                _apply(current, value)
-        else:
-            setattr(target, f.name, _coerce(value, current))
+        setattr(target, f.name, _coerce(values[f.name], getattr(target, f.name)))
 
 
 def load_settings(**overrides) -> Settings:
@@ -117,9 +97,4 @@ def load_settings(**overrides) -> Settings:
             env[name] = value
     _apply(settings, env)
     _apply(settings, overrides)
-
-    for name in ADAPTER_NAMES:
-        mode = getattr(settings.adapters, name)
-        if mode not in ("mock", "real"):
-            raise ValueError(f"adapters.{name} must be 'mock' or 'real', got {mode!r}")
     return settings

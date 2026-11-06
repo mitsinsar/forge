@@ -3,12 +3,12 @@ editor import script in Unity (see README, "Checking the Unity import script").
 
     uv run python tests/unity/export_samples.py <UnityProject> [--data <dir>] [--skinned] [--reexport]
 
-Runs the pipeline in-process with the mock adapters and, when Blender is
-installed, the real Blender adapter (so the FBX files are real). The first run
+Runs the pipeline in-process with the test doubles in ``tests/fakes`` and, when
+Blender is installed, the real Blender adapter (so the FBX files are real). The first run
 creates the assets and approves every gate; ``--reexport`` exports the same
 assets again (keep the same ``--data``), which is how a re-export is checked.
 
-The mock rig animates the whole model without a skeleton, which Unity cannot
+The fake rig animates the whole model without a skeleton, which Unity cannot
 make a Humanoid avatar of. ``--skinned`` (needs Blender) swaps the hero's and
 the gear's animated GLB for a skinned biped with the archetype's Mixamo bone
 names (``make_biped_glb.py``), as the real rig stage will make them.
@@ -26,8 +26,20 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from assetgen.adapters import Adapters
+from assetgen.adapters.real.blender import BlenderTools
 from assetgen.app import create_app
 from assetgen.config import load_settings
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tests/, for the fakes
+from fakes import FakeBlender, FakeImage, FakeLLM, FakeMesh, FakeRig  # noqa: E402
+
+
+class RealBlenderFakeRig(BlenderTools):
+    """The real Blender, with skinning from the fake rig until the rig adapter exists (ticket #11)."""
+
+    def rig_and_animate(self, **kwargs):
+        return FakeBlender().rig_and_animate(**kwargs)
 
 SAMPLES = [
     {"kind": "hero", "name": "Ember Knight", "description": "a knight in ember-red plate armour"},
@@ -76,10 +88,11 @@ def main() -> None:
     args = parser.parse_args()
     blender = shutil.which("blender") or "/Applications/Blender.app/Contents/MacOS/Blender"
     real_blender = Path(blender).is_file()
-    settings = load_settings(data_dir=args.data, mock_step_delay=0.0, blender_path=blender,
-                             adapters={"blender": "real" if real_blender else "mock"})
-    print(f"Blender: {'real (' + blender + ')' if real_blender else 'mock (placeholder FBX)'}")
-    with TestClient(create_app(settings)) as client:
+    settings = load_settings(data_dir=args.data, blender_path=blender)
+    print(f"Blender: {'real (' + blender + ')' if real_blender else 'fake (placeholder FBX)'}")
+    adapters = Adapters(llm=FakeLLM(), image=FakeImage(), mesh=FakeMesh(), rig=FakeRig(),
+                        blender=RealBlenderFakeRig(settings) if real_blender else FakeBlender())
+    with TestClient(create_app(settings, adapters=adapters)) as client:
         if args.skinned:
             if not real_blender:
                 sys.exit("--skinned needs Blender")

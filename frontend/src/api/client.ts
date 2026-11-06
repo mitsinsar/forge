@@ -50,15 +50,12 @@ export interface ProfileSettings {
 export interface ToolStatus {
   tool: string;
   name: string;
-  mode: "mock" | "real";
-  /** null for mock tools, which have nothing to check. */
-  ok: boolean | null;
+  ok: boolean;
   detail: string;
 }
 
 export interface Meta {
   version: string;
-  adapters: Record<string, "mock" | "real">;
   profile_defaults: ProfileSettings;
   kinds: Kind[];
   engines: Engine[];

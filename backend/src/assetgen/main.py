@@ -10,8 +10,7 @@ from .config import load_settings
 
 def run() -> None:
     settings = load_settings()
-    modes = ", ".join(f"{k}={v}" for k, v in vars(settings.adapters).items())
-    print(f"assetgen: data in {settings.data_dir.resolve()} | adapters: {modes}")
+    print(f"assetgen: data in {settings.data_dir.resolve()}")
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
 
 
