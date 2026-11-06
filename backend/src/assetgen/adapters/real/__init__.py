@@ -14,6 +14,7 @@ from importlib import import_module
 REAL_ADAPTERS: dict[str, tuple[str, str]] = {
     "llm": ("qwen", "QwenLLM"),
     "image": ("comfyui", "ComfyUIImage"),
+    "blender": ("blender", "BlenderTools"),
 }
 
 
