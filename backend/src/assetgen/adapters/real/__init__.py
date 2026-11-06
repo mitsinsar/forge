@@ -19,8 +19,15 @@ REAL_ADAPTERS: dict[str, tuple[str, str]] = {
 }
 
 
-def real_adapter_class(name: str) -> type | None:
-    entry = REAL_ADAPTERS.get(name)
+# mesh_tool setting -> (module, class) for the mesh adapter
+MESH_ADAPTERS: dict[str, tuple[str, str]] = {
+    "hunyuan3d": ("hunyuan3d", "Hunyuan3DMesh"),
+    "modly": ("modly", "ModlyMesh"),
+}
+
+
+def real_adapter_class(name: str, mesh_tool: str = "hunyuan3d") -> type | None:
+    entry = MESH_ADAPTERS[mesh_tool] if name == "mesh" else REAL_ADAPTERS.get(name)
     if entry is None:
         return None
     module, cls = entry

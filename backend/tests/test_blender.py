@@ -158,6 +158,17 @@ def test_glb_extras_survive_blender(tmp_path):
 
 
 @needs_blender
+def test_relative_folders_work(tmp_path):
+    """The app's default data_dir is the relative "data"; Blender runs inside the stage folder."""
+    raw = write_raw(tmp_path / "raw.glb", asset_parts("hero", "biped"), 3000)
+    tools = BlenderTools(load_settings(data_dir=Path("data"), blender_path=BLENDER))
+    result = tools.cleanup_and_lods(raw_mesh=Path("raw.glb"), kind="hero", triangles=1000, lod_ratios=[0.5],
+                                    out_dir=Path("data") / "assets" / "a1" / "mesh", progress=lambda s, f: None)
+    assert (tmp_path / "data" / "assets" / "a1" / "mesh" / "mesh.glb").is_file()
+    assert result["lods"][0]["triangles"] <= 1000
+
+
+@needs_blender
 def test_cleanup_hits_the_budget_scales_and_makes_lods(tmp_path):
     parts = asset_parts("hero", "biped")
     extras = {"color": [0.6, 0.3, 0.2], "parts": _parts_info(parts), "hints": {"kind": "hero"}}

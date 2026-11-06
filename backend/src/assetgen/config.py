@@ -20,6 +20,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 ADAPTER_NAMES = ("llm", "image", "mesh", "rig", "blender")
+MESH_TOOLS = ("hunyuan3d", "modly")
 
 
 @dataclass
@@ -40,6 +41,13 @@ class Settings:
     hunyuan3d_url: str = "http://127.0.0.1:8081"
     hunyuan3d_timeout: float = 1800.0  # seconds one image-to-mesh job may take
     hunyuan3d_poll: float = 2.0  # seconds between status checks
+    # The image-to-mesh tool: "hunyuan3d" (its api_server.py) or "modly" (the Modly desktop app).
+    mesh_tool: str = "hunyuan3d"
+    modly_url: str = "http://127.0.0.1:8765"
+    modly_model: str = "hunyuan3d-mini-turbo/generate"  # a model id from Modly's GET /model/all
+    modly_params: str = ""  # extra generation params as a JSON object, e.g. '{"num_inference_steps": 5}'
+    modly_timeout: float = 1800.0  # seconds one run may take (the first run downloads the model)
+    modly_poll: float = 2.0
     blender_path: Path = Path("blender")
     unirig_path: Path = Path("UniRig")
     python_path: Path = Path("python")
@@ -97,4 +105,6 @@ def load_settings(**overrides) -> Settings:
             env[name] = value
     _apply(settings, env)
     _apply(settings, overrides)
+    if settings.mesh_tool not in MESH_TOOLS:
+        raise ValueError(f"mesh_tool must be one of {', '.join(MESH_TOOLS)}, got {settings.mesh_tool!r}")
     return settings
