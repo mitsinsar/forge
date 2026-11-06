@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, PngImagePlugin
 
 from ... import imaging
-from ...defaults import GEAR_SLOTS, LOOPING_CLIPS
+from ...defaults import CAMERA_TILT, DIRECTION_YAW, GEAR_SLOTS, LOOPING_CLIPS
 from ..base import Progress
 from .draw import Camera, draw_parts, font
 from .glb import Animation, GlbBuilder, Part, build_mesh, read_glb_json
@@ -33,9 +33,6 @@ WEAPON_WORDS = {
     "two_handed": ["greatsword", "great sword", "claymore", "halberd", "greataxe", "great axe",
                    "warhammer", "maul", "two-handed", "two handed", "zweihander", "scythe", "spear"],
 }
-DIRECTION_YAW = {"down": 0, "down_right": 45, "right": 90, "up_right": 135, "up": 180,
-                 "up_left": 225, "left": 270, "down_left": 315}
-CAMERA_TILT = {"side": 0, "three_quarter": 30, "topdown_4": 50, "topdown_8": 50}
 
 
 class MockBase:
