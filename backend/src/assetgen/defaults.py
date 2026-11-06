@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 
-KINDS = ("hero", "monster", "boss", "gear", "weapon")
+KINDS =("hero", "monster", "boss", "gear", "weapon")
 ENGINES = ("unity", "godot")
 BASE_MODELS = ("qwen-image", "sdxl", "flux")
 CAMERA_PRESETS = ("side", "three_quarter", "topdown_4", "topdown_8")
@@ -12,6 +13,20 @@ SPRITE_LOOKS = ("hd", "pixel")
 GEAR_SLOTS = ("head", "chest", "legs", "hands", "feet", "cape")
 WEAPON_CLASSES = ("one_handed", "two_handed", "bow", "staff")
 WEAPON_SOCKETS = ("weapon_r", "weapon_l")
+
+# Grip point (where the hand holds it) relative to the weapon origin, per weapon class.
+DEFAULT_GRIPS = {
+    "one_handed": {"socket": "weapon_r", "position": [0.0, -0.06, 0.0], "rotation": [0.0, 0.0, 0.0]},
+    "two_handed": {"socket": "weapon_r", "position": [0.0, -0.12, 0.0], "rotation": [0.0, 0.0, 0.0]},
+    "bow": {"socket": "weapon_l", "position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0]},
+    "staff": {"socket": "weapon_r", "position": [0.0, 0.1, 0.0], "rotation": [0.0, 0.0, 0.0]},
+}
+
+
+def seed_of(*values) -> int:
+    """A stable 64-bit seed from any values (the same asset and attempt always get the same seed)."""
+    digest = hashlib.sha256("|".join(str(v) for v in values).encode()).digest()
+    return int.from_bytes(digest[:8], "big")
 
 # Directions rendered per camera preset. Directions in MIRRORED are drawn
 # by flipping their partner with flip_h in Godot instead of rendering them.

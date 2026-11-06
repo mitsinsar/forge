@@ -1,4 +1,5 @@
-"""Stages resume after a restart, and per-asset overrides reach the outputs."""
+"""Stages resume after a restart, per-asset overrides reach the outputs, settings load,
+and the rig stage fails clearly until UniRig is built."""
 
 from __future__ import annotations
 
@@ -8,15 +9,14 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from assetgen.adapters import RealAdapterMissing
-from assetgen.app import create_app
+from assetgen.adapters import PendingRig
 from assetgen.config import load_settings
 from assetgen.db import Database
-from conftest import make_project, wait_for
+from conftest import make_app, make_project, wait_for
 
 
 def test_running_asset_resumes_after_restart(settings, tmp_path):
-    with TestClient(create_app(settings)) as client:
+    with TestClient(make_app(settings)) as client:
         project = make_project(client, "unity", tmp_path / "g")
         asset = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero",
                                                  "description": "a knight"}).json()
@@ -33,7 +33,7 @@ def test_running_asset_resumes_after_restart(settings, tmp_path):
     db.update("assets", asset["id"], {"status": "running", "gate": None, "outputs": {}})
     db.close()
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(make_app(settings)) as client:
         resumed = wait_for(client, asset["id"], "waiting", gate=1)
         assert len(resumed["outputs"]["prompt"]["candidates"]) == 4
         assert (prompt_dir / "candidate_1.png").stat().st_mtime_ns == kept  # not redone
@@ -65,16 +65,26 @@ def test_overrides_pixel_topdown(client, tmp_path):
         assert atlas.width % 64 == 0
 
 
-def test_settings_from_env_and_real_adapter_refused(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "assetgen.toml").write_text('port = 9001\ncomfyui_url = "http://gpu:8188"\n[adapters]\nllm = "mock"\n')
+def test_settings_from_file_and_env(tmp_path, monkeypatch):
+    (tmp_path / "assetgen.toml").write_text('port = 9001\ncomfyui_url = "http://gpu:8188"\n')
     monkeypatch.setenv("ASSETGEN_DATA_DIR", str(tmp_path / "d"))
-    monkeypatch.setenv("ASSETGEN_ADAPTERS__RIG", "real")
+    monkeypatch.setenv("ASSETGEN_PORT", "9003")
     settings = load_settings()
-    assert settings.port == 9001 and settings.comfyui_url == "http://gpu:8188"
-    assert settings.data_dir == tmp_path / "d" and settings.adapters.rig == "real"
-    with pytest.raises(RealAdapterMissing):
-        create_app(settings)
-    monkeypatch.setenv("ASSETGEN_ADAPTERS__MESH", "fake")
+    assert settings.port == 9003 and settings.comfyui_url == "http://gpu:8188"  # env wins over the file
+    assert settings.data_dir == tmp_path / "d"
+    monkeypatch.setenv("ASSETGEN_PORT", "not a number")
     with pytest.raises(ValueError):
         load_settings()
+
+
+def test_the_rig_stage_fails_clearly_until_unirig_is_built(settings, tmp_path):
+    with TestClient(make_app(settings, rig=PendingRig())) as client:
+        project = make_project(client, "unity", tmp_path / "g")
+        asset = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero",
+                                                 "description": "a knight"}).json()
+        wait_for(client, asset["id"], "waiting", gate=1)
+        client.post(f"/api/assets/{asset['id']}/gates/1/approve", json={"candidate": 1})
+        wait_for(client, asset["id"], "waiting", gate=2)
+        client.post(f"/api/assets/{asset['id']}/gates/2/approve")
+        failed = wait_for(client, asset["id"], "failed")
+        assert failed["stage"] == "rig" and "ticket #11" in failed["error"]

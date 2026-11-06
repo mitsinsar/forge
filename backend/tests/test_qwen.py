@@ -1,5 +1,5 @@
-"""The real Qwen adapter against a faked OpenAI-compatible endpoint, the real-adapter
-switch and the tool check."""
+"""The real Qwen adapter against a faked OpenAI-compatible endpoint, the adapter set
+the app builds and the tool check."""
 
 from __future__ import annotations
 
@@ -10,12 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from fastapi.testclient import TestClient
 
-from assetgen.adapters import RealAdapterMissing, build_adapters
+from assetgen.adapters import PendingRig, RigNotBuilt, build_adapters
 from assetgen.adapters.real.qwen import LLMError, QwenLLM
-from assetgen.app import create_app
 from assetgen.archetypes import load_archetypes
 from assetgen.config import load_settings
-from conftest import make_project, wait_for
+from conftest import make_app, make_project, wait_for
 
 
 class FakeQwen:
@@ -211,22 +210,31 @@ def test_unreachable_endpoint_is_readable(tmp_path):
         expand(llm)
 
 
-def test_missing_real_adapters_are_named(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    settings = load_settings(data_dir=tmp_path, adapters={"llm": "real", "rig": "real", "blender": "real"})
-    with pytest.raises(RealAdapterMissing, match="built yet for: rig\\.") as error:
-        build_adapters(settings)
-    assert 'adapters.rig = "mock"' in str(error.value) and "llm" in str(error.value)
-    assert build_adapters(load_settings(data_dir=tmp_path, adapters={"llm": "real"})).llm.mode == "real"
+def test_the_app_builds_only_real_adapters(tmp_path):
+    from assetgen.adapters.real.blender import BlenderTools
+    from assetgen.adapters.real.comfyui import ComfyUIImage
+    from assetgen.adapters.real.hunyuan3d import Hunyuan3DMesh
+
+    adapters = build_adapters(load_settings(data_dir=tmp_path))
+    assert isinstance(adapters.llm, QwenLLM) and isinstance(adapters.image, ComfyUIImage)
+    assert isinstance(adapters.mesh, Hunyuan3DMesh) and isinstance(adapters.blender, BlenderTools)
+    assert isinstance(adapters.rig, PendingRig)
+    with pytest.raises(RigNotBuilt, match="ticket #11"):
+        adapters.rig.predict_skeleton(mesh=None, archetype={}, out_dir=tmp_path, progress=print)
+    with pytest.raises(RigNotBuilt, match="ticket #11"):
+        adapters.blender.rig_and_animate(mesh_glb=None)
+
+
+def test_an_old_adapters_table_is_ignored(tmp_path):
+    (tmp_path / "assetgen.toml").write_text('port = 9002\n[adapters]\nllm = "mock"\n')
+    assert load_settings(data_dir=tmp_path).port == 9002
 
 
 def test_preview_stage_uses_qwen_and_tools_report(fake_qwen, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     server = fake_qwen("not json", reply(archetype="biped", prompt="QWEN PROMPT a knight in red plate"))
-    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, qwen_url=server.url,
-                             adapters={"llm": "real"})
-    with TestClient(create_app(settings)) as client:
-        assert client.get("/api/meta").json()["adapters"]["llm"] == "real"
+    settings = load_settings(data_dir=tmp_path / "data", qwen_url=server.url, comfyui_url="http://127.0.0.1:9")
+    with TestClient(make_app(settings, llm=QwenLLM(settings))) as client:
         project = make_project(client, "godot", tmp_path / "game")
         created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero",
                                                    "description": "a knight in red plate"})
@@ -235,16 +243,15 @@ def test_preview_stage_uses_qwen_and_tools_report(fake_qwen, tmp_path, monkeypat
         assert len(server.requests) == 2
 
         tools = {t["tool"]: t for t in client.get("/api/tools").json()}
-        assert tools["llm"]["mode"] == "real" and tools["llm"]["ok"] is True
-        assert tools["image"] == {"tool": "image", "name": "ComfyUI", "mode": "mock", "ok": None,
-                                  "detail": "mock adapter, nothing to check"}
+        assert tools["llm"]["ok"] is True
+        assert tools["image"]["name"] == "ComfyUI" and tools["image"]["ok"] is False  # checked even when down
+        assert tools["rig"]["ok"] is False and "not built yet" in tools["rig"]["detail"]
 
 
 def test_failed_qwen_fails_the_stage(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, qwen_url="http://127.0.0.1:9/v1",
-                             adapters={"llm": "real"})
-    with TestClient(create_app(settings)) as client:
+    settings = load_settings(data_dir=tmp_path / "data", qwen_url="http://127.0.0.1:9/v1")
+    with TestClient(make_app(settings, llm=QwenLLM(settings))) as client:
         project = make_project(client, "godot", tmp_path / "game")
         created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero",
                                                    "description": "a knight"})
@@ -258,8 +265,7 @@ def test_tools_report_paths(tmp_path, monkeypatch):
     from assetgen.tools import check_tools
     blender = tmp_path / "blender.exe"
     blender.write_text("")
-    settings = load_settings(data_dir=tmp_path, blender_path=blender, unirig_path=tmp_path / "missing",
-                             adapters={"blender": "real", "rig": "real"})
+    settings = load_settings(data_dir=tmp_path, blender_path=blender, unirig_path=tmp_path / "missing")
     tools = {t["tool"]: t for t in check_tools(settings)}
     assert tools["blender"]["ok"] is True
     assert tools["rig"]["ok"] is False and "UniRig not found" in tools["rig"]["detail"]

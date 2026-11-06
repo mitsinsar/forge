@@ -21,18 +21,16 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from assetgen.adapters import build_adapters
-from assetgen.adapters.mock import MockBlender, MockRig, _parts_info
-from assetgen.adapters.mock.glb import GlbBuilder, build_mesh, read_glb_json
-from assetgen.adapters.mock.shapes import Part, asset_parts
 from assetgen.adapters.real.blender import BlenderTools, merge_glb_extras
 from assetgen.adapters.real.blender_runner import SCRIPTS_DIR, BlenderError, run_script
-from assetgen.app import create_app
 from assetgen.archetypes import get_archetype
 from assetgen.config import load_settings
 from assetgen.defaults import CAMERA_DIRECTIONS
 from assetgen.imaging import finish_sprites
-from conftest import make_project, wait_for
+from conftest import make_app, make_project, wait_for
+from fakes import FakeBlender, FakeRig, _parts_info
+from fakes.glb import GlbBuilder, build_mesh, read_glb_json
+from fakes.shapes import Part, asset_parts
 
 HELPERS = Path(__file__).parent / "blender"
 
@@ -134,10 +132,15 @@ def test_missing_blender_is_explained(tmp_path):
                    log_path=tmp_path / "l.log", progress=lambda s, f: None)
 
 
-def test_real_blender_is_registered_and_keeps_the_rig_on_the_mock(tmp_path):
-    adapters = build_adapters(load_settings(data_dir=tmp_path, adapters={"blender": "real"}))
-    assert isinstance(adapters.blender, BlenderTools) and adapters.blender.mode == "real"
-    assert isinstance(adapters.blender.mock, MockBlender)
+class RealBlenderFakeRig(BlenderTools):
+    """The real Blender for clean-up, sprites and FBX; skinning comes from the fake rig until ticket #11."""
+
+    def rig_and_animate(self, **kwargs):
+        return FakeBlender().rig_and_animate(**kwargs)
+
+
+def real_blender_app(settings):
+    return make_app(settings, blender=RealBlenderFakeRig(settings))
 
 
 def test_glb_extras_survive_blender(tmp_path):
@@ -221,11 +224,11 @@ def _mesh_stage(tmp_path: Path, tools: BlenderTools) -> tuple[Path, list[dict]]:
 
 
 @needs_blender
-def test_export_of_the_mock_rig_reimports_with_lods_and_clips(tmp_path):
-    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER, mock_step_delay=0.0))
+def test_export_of_the_fake_rig_reimports_with_lods_and_clips(tmp_path):
+    tools = RealBlenderFakeRig(load_settings(data_dir=tmp_path, blender_path=BLENDER))
     mesh_glb, lods = _mesh_stage(tmp_path, tools)
     biped = get_archetype("biped")
-    skeleton = MockRig(0).predict_skeleton(mesh=mesh_glb, archetype=biped, out_dir=tmp_path / "rig",
+    skeleton = FakeRig().predict_skeleton(mesh=mesh_glb, archetype=biped, out_dir=tmp_path / "rig",
                                            progress=lambda s, f: None)
     animated = tools.rig_and_animate(mesh_glb=mesh_glb, skeleton=skeleton, archetype=biped,
                                      clips=["idle", "walk", "attack_1"], attach=None,
@@ -271,10 +274,9 @@ def test_export_of_a_skinned_rig_skins_every_lod(tmp_path):
 @needs_blender
 def test_unity_run_with_real_blender_finishes_end_to_end(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, blender_path=BLENDER,
-                             adapters={"blender": "real"})
+    settings = load_settings(data_dir=tmp_path / "data", blender_path=BLENDER)
     game = tmp_path / "UnityGame"
-    with TestClient(create_app(settings)) as client:
+    with TestClient(real_blender_app(settings)) as client:
         project = make_project(client, "unity", game)
         asset_id = client.post("/api/assets", json={
             "project_id": project["id"], "kind": "monster", "name": "Moss Wolf",
@@ -297,9 +299,8 @@ def test_unity_run_with_real_blender_finishes_end_to_end(tmp_path, monkeypatch):
 @needs_blender
 def test_blender_failure_shows_on_the_asset(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, blender_path=BLENDER,
-                             adapters={"blender": "real"})
-    with TestClient(create_app(settings)) as client:
+    settings = load_settings(data_dir=tmp_path / "data", blender_path=BLENDER)
+    with TestClient(real_blender_app(settings)) as client:
         app_adapters = client.app.state.pipeline.adapters
         mesh_adapter = app_adapters.mesh
 
@@ -394,7 +395,7 @@ def test_empty_end_frames_of_non_looping_clips_are_trimmed(tmp_path):
 
 
 def _animated_sample(tmp_path: Path, clips: list[str]) -> tuple[Path, list[dict]]:
-    """The mock rig's animated GLB of a small biped (as the rig stage writes it today)."""
+    """The fake rig's animated GLB of a small biped (as the rig stage writes it today)."""
     parts = asset_parts("hero", "biped")
     mesh = tmp_path / "mesh.glb"
     builder = GlbBuilder(extras={"color": [0.6, 0.3, 0.2], "parts": _parts_info(parts),
@@ -403,9 +404,9 @@ def _animated_sample(tmp_path: Path, clips: list[str]) -> tuple[Path, list[dict]
     builder.add_node("LOD0", builder.add_mesh("LOD0", build_mesh(parts, 1500), material))
     builder.write(mesh)
     biped = get_archetype("biped")
-    skeleton = MockRig(0).predict_skeleton(mesh=mesh, archetype=biped, out_dir=tmp_path / "rig",
+    skeleton = FakeRig().predict_skeleton(mesh=mesh, archetype=biped, out_dir=tmp_path / "rig",
                                            progress=lambda s, f: None)
-    result = MockBlender(0).rig_and_animate(mesh_glb=mesh, skeleton=skeleton, archetype=biped, clips=clips,
+    result = FakeBlender().rig_and_animate(mesh_glb=mesh, skeleton=skeleton, archetype=biped, clips=clips,
                                             attach=None, out_path=tmp_path / "rig" / "animated.glb",
                                             progress=lambda s, f: None)
     return result["glb"], result["clips"]
@@ -480,9 +481,8 @@ def test_pixel_sprites_use_nearest_neighbour_and_the_palette_size(tmp_path):
 @needs_blender
 def test_godot_run_with_real_blender_shows_sprites_at_gate_3(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, blender_path=BLENDER,
-                             adapters={"blender": "real"})
-    with TestClient(create_app(settings)) as client:
+    settings = load_settings(data_dir=tmp_path / "data", blender_path=BLENDER)
+    with TestClient(real_blender_app(settings)) as client:
         project = make_project(client, "godot", tmp_path / "GodotGame")
         asset_id = client.post("/api/assets", json={
             "project_id": project["id"], "kind": "monster", "name": "Moss Wolf",

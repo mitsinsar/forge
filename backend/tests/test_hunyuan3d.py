@@ -19,9 +19,8 @@ from PIL import Image
 
 from assetgen import imaging
 from assetgen.adapters.real.hunyuan3d import CUTOUT_FILE, DOWNLOAD_FILE, JOB_FILE, Hunyuan3DMesh, MeshError
-from assetgen.app import create_app
 from assetgen.config import load_settings
-from conftest import make_project, wait_for
+from conftest import make_app, make_project, wait_for
 
 GREY = (200, 200, 200)
 
@@ -295,9 +294,8 @@ def test_timeout(fake_hunyuan, tmp_path):
 def test_gate_2_shows_the_hunyuan_mesh(fake_hunyuan, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     server = fake_hunyuan()
-    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, hunyuan3d_url=server.url,
-                             hunyuan3d_poll=0.01, adapters={"mesh": "real"})
-    with TestClient(create_app(settings)) as client:
+    settings = load_settings(data_dir=tmp_path / "data", hunyuan3d_url=server.url, hunyuan3d_poll=0.01)
+    with TestClient(make_app(settings, mesh=Hunyuan3DMesh(settings))) as client:
         assert client.get("/api/meta").json()["profile_defaults"]["delight"] is True
         project = make_project(client, "unity", tmp_path / "game")
         created = client.post("/api/assets", json={"project_id": project["id"], "kind": "monster",
@@ -318,7 +316,7 @@ def test_gate_2_shows_the_hunyuan_mesh(fake_hunyuan, tmp_path, monkeypatch):
         tools = {t["tool"]: t for t in client.get("/api/tools").json()}
         assert tools["mesh"]["ok"] is True and tools["mesh"]["detail"].endswith("/health answered HTTP 200")
 
-        # Through gate 3 too: the mock rig copes with a real mesh.
+        # Through gate 3 too: the fake rig copes with a real mesh.
         assert client.post(f"/api/assets/{asset_id}/gates/2/approve").status_code == 200
         wait_for(client, asset_id, "waiting", gate=3)
 

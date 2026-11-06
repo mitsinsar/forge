@@ -190,7 +190,6 @@ class WorkflowBuilder:
 
 
 class ComfyUIImage:
-    mode = "real"
 
     def __init__(self, settings: Settings):
         self.url = settings.comfyui_url.rstrip("/")

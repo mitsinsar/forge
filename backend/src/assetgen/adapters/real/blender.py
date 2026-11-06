@@ -2,8 +2,8 @@
 frames and the Unity FBX.
 
 The work happens in the scripts in ``backend/blender_scripts/``, run by
-``blender_runner``. Rigging still uses the mock until the rig ticket lands, so
-a run with the real Blender finishes end to end.
+``blender_runner``. Skinning and clip retargeting (``rig_and_animate``) come
+with the rig adapter in ticket #11; until then it fails with a clear message.
 """
 
 from __future__ import annotations
@@ -15,9 +15,7 @@ from pathlib import Path
 
 from ...config import Settings
 from ...defaults import CAMERA_TILT, DIRECTION_YAW, MODEL_SIZES
-from ...imaging import finish_sprites
-from ..mock import MockBlender
-from ..mock.glb import read_glb_json
+from ...imaging import finish_sprites, read_glb
 from .blender_runner import run_script
 
 
@@ -25,9 +23,9 @@ def merge_glb_extras(source: Path, target: Path, extra: dict | None = None) -> N
     """Copies the root ``extras`` of ``source`` (plus ``extra``) into ``target``.
 
     Blender keeps no root extras, and the later stages read the asset's hints
-    from them (the mock rig rebuilds its shape from them)."""
+    (such as the triangle budget) from them."""
     try:
-        extras = dict(read_glb_json(source).get("extras") or {})
+        extras = dict(read_glb(source)[0].get("extras") or {})
     except (OSError, ValueError):
         extras = {}
     extras.update(extra or {})
@@ -45,11 +43,9 @@ def merge_glb_extras(source: Path, target: Path, extra: dict | None = None) -> N
 
 
 class BlenderTools:
-    mode = "real"
 
     def __init__(self, settings: Settings):
         self.blender = settings.blender_path
-        self.mock = MockBlender(settings.mock_step_delay)
 
     def _run(self, script: str, args: dict, out_dir: Path, progress) -> dict:
         return run_script(self.blender, script, args, work_dir=out_dir,
@@ -66,7 +62,8 @@ class BlenderTools:
         return {"glb": glb, "lods": result["lods"]}
 
     def rig_and_animate(self, **kwargs):
-        return self.mock.rig_and_animate(**kwargs)
+        from .. import RIG_NOT_BUILT, RigNotBuilt  # the adapters package imports this module
+        raise RigNotBuilt(RIG_NOT_BUILT)
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
                        look, palette_size, out_dir, progress):

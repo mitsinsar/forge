@@ -17,7 +17,7 @@ def _png() -> bytes:
 
 def test_meta_and_archetypes(client):
     meta = client.get("/api/meta").json()
-    assert set(meta["adapters"].values()) == {"mock"}
+    assert "adapters" not in meta  # the app always runs the real tools
     assert meta["profile_defaults"]["budgets"]["triangles"] == {
         "hero": 8000, "monster": 4000, "boss": 15000, "gear": 1500, "weapon": 800}
     assert meta["profile_defaults"]["render"]["fps"] == 12

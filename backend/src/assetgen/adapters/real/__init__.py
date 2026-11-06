@@ -2,8 +2,8 @@
 
 To add one, write ``adapters/real/<tool>.py`` with a class that takes the
 ``Settings`` and implements the matching interface in ``adapters/base.py``,
-then add it to ``REAL_ADAPTERS`` below. Modules are imported only when their
-tool is switched to ``real``.
+then add it to ``REAL_ADAPTERS`` below. A tool missing here (rig, until
+ticket #11) gets a stand-in that fails its stage with a clear message.
 """
 
 from __future__ import annotations

@@ -125,7 +125,6 @@ RESPONSE_FORMATS: list[dict | None] = [
 
 
 class QwenLLM:
-    mode = "real"
     timeout = 180.0
 
     def __init__(self, settings: Settings):

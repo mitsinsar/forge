@@ -6,8 +6,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from assetgen.adapters import Adapters
 from assetgen.app import create_app
 from assetgen.config import load_settings
+from fakes import FakeBlender, FakeImage, FakeLLM, FakeMesh, FakeRig
 
 
 @pytest.fixture(autouse=True)
@@ -18,14 +20,27 @@ def _no_local_config(tmp_path, monkeypatch):
         monkeypatch.delenv(name)
 
 
+def fake_adapters(**real) -> Adapters:
+    """The test doubles for every tool; pass a real adapter by name to use it instead
+    (for example ``mesh=Hunyuan3DMesh(settings)`` against a fake server)."""
+    adapters = {"llm": FakeLLM(), "image": FakeImage(), "mesh": FakeMesh(), "rig": FakeRig(),
+                "blender": FakeBlender()}
+    return Adapters(**{**adapters, **real})
+
+
+def make_app(settings, **real):
+    """The app with the test doubles (and any real adapters given by name)."""
+    return create_app(settings, adapters=fake_adapters(**real))
+
+
 @pytest.fixture
 def settings(tmp_path):
-    return load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0)
+    return load_settings(data_dir=tmp_path / "data")
 
 
 @pytest.fixture
 def client(settings):
-    with TestClient(create_app(settings)) as test_client:
+    with TestClient(make_app(settings)) as test_client:
         yield test_client
 
 

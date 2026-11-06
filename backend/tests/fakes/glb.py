@@ -1,4 +1,4 @@
-"""A small glTF 2.0 binary (GLB) writer and reader for the mock adapters.
+﻿"""A small glTF 2.0 binary (GLB) writer and reader for the test doubles.
 
 Builds ellipsoid meshes whose triangle count matches a budget, plus node
 animations (translation, rotation, scale), so viewers such as three.js and
@@ -91,7 +91,7 @@ class Animation:
 class GlbBuilder:
     def __init__(self, extras: dict | None = None):
         self.gltf: dict = {
-            "asset": {"version": "2.0", "generator": "assetgen mock"},
+            "asset": {"version": "2.0", "generator": "assetgen test double"},
             "scene": 0,
             "scenes": [{"nodes": []}],
             "nodes": [],

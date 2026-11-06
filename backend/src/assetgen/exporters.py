@@ -1,7 +1,7 @@
 """Engine exports: the Unity folder, the Godot sprite folder and the zip.
 
-These run for real on both mock and real data: they only arrange files the
-adapters produced (Pillow packs the atlases), so nothing here is mocked.
+They only arrange files the adapters produced (Pillow packs the atlases), so
+the tests run them as they are.
 """
 
 from __future__ import annotations

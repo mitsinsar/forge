@@ -1,5 +1,5 @@
 """Run inside Blender: writes a skinned, animated biped GLB with the archetype's
-Mixamo bone names, standing in for the real rig stage (the mock rig has no
+Mixamo bone names, standing in for the real rig stage (the fake rig has no
 skeleton) when checking the Unity import script.
 
     blender -b --factory-startup -P make_biped_glb.py -- <args.json>

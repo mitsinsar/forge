@@ -1,7 +1,7 @@
 [project]
 name = "assetgen"
 version = "0.1.0"
-description = "Local asset generator backend: text description to game-ready animated assets (mock-first)."
+description = "Local asset generator backend: text description to game-ready animated assets."
 readme = "README.md"
 authors = [
     { name = "Mithat Sinan Sari", email = "m.sinan.sari@gmail.com" }

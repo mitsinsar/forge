@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from .adapters import build_adapters
+from .adapters import Adapters, build_adapters
 from .api import router
 from .config import Settings, load_settings
 from .db import Database
@@ -28,14 +28,15 @@ DESCRIPTION = """Local backend of the asset generator: a text description become
 animated asset through three approval gates (preview image, mesh, animated result), then is exported
 into a Unity or Godot project.
 
-ComfyUI, Hunyuan3D, Blender, UniRig and Qwen sit behind adapters; `GET /api/meta` shows which are
-mocks. Live progress comes over the WebSocket at `/api/ws`.
+ComfyUI, Hunyuan3D, Blender, UniRig and Qwen sit behind adapters; `GET /api/tools` shows which
+answer. Live progress comes over the WebSocket at `/api/ws`.
 """
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, adapters: Adapters | None = None) -> FastAPI:
+    """The app with the real tools, or with ``adapters`` given (the tests pass their doubles)."""
     settings = settings or load_settings()
-    adapters = build_adapters(settings)  # fails fast if a real adapter is asked for but missing
+    adapters = adapters or build_adapters(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
