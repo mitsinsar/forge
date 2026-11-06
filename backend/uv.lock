@@ -42,6 +42,7 @@ dependencies = [
     { name = "pillow" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -56,6 +57,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "python-multipart", specifier = ">=0.0.33" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
+    { name = "websockets", specifier = ">=15" },
 ]
 
 [package.metadata.requires-dev]

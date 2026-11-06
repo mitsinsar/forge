@@ -37,9 +37,12 @@ class ImageAdapter(Protocol):
 
     def render_candidates(self, *, prompt: str, negative_prompt: str, base_model: str,
                           loras: list[dict], reference_images: list[Path], count: int, seed: int,
-                          out_dir: Path, progress: Progress, hints: dict) -> list[Path]:
+                          out_dir: Path, progress: Progress, hints: dict,
+                          log: Callable[[str], None] | None = None) -> list[Path]:
         """Renders ``count`` PNGs into ``out_dir`` as candidate_<n>.png and
-        returns their paths. Existing files are kept (resume)."""
+        returns their paths. Existing files are kept (resume). ``log`` takes
+        lines for the stage log shown at gate 1 (for example reference images
+        a base model can't use)."""
 
     def unload(self) -> None:
         """Frees the image model's VRAM before the mesh stage."""

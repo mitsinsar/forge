@@ -175,10 +175,10 @@ def test_unreachable_endpoint_is_readable(tmp_path):
 
 def test_missing_real_adapters_are_named(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    settings = load_settings(data_dir=tmp_path, adapters={"llm": "real", "image": "real", "rig": "real"})
-    with pytest.raises(RealAdapterMissing, match="image, rig") as error:
+    settings = load_settings(data_dir=tmp_path, adapters={"llm": "real", "mesh": "real", "rig": "real"})
+    with pytest.raises(RealAdapterMissing, match="mesh, rig") as error:
         build_adapters(settings)
-    assert 'adapters.image = "mock"' in str(error.value) and "llm" in str(error.value)
+    assert 'adapters.mesh = "mock"' in str(error.value) and "llm" in str(error.value)
     assert build_adapters(load_settings(data_dir=tmp_path, adapters={"llm": "real"})).llm.mode == "real"
 
 
