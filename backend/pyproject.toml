@@ -13,6 +13,7 @@ dependencies = [
     "pillow>=13.0.0",
     "python-multipart>=0.0.33",
     "uvicorn[standard]>=0.54.0",
+    "websockets>=15",
 ]
 
 [project.scripts]

@@ -41,6 +41,12 @@ class Settings:
     adapters: AdapterModes = field(default_factory=AdapterModes)
     # Real tools (used once the real adapters replace the mocks).
     comfyui_url: str = "http://127.0.0.1:8188"
+    # The ComfyUI folder (the one with models/); LoRAs ComfyUI doesn't have are copied to models/loras.
+    comfyui_dir: str = ""
+    # Seconds one candidate may take in ComfyUI (queue wait included) before the stage fails.
+    comfyui_timeout: float = 600.0
+    # API-format workflows, one per base model (empty: backend/workflows).
+    comfyui_workflows_dir: str = ""
     qwen_url: str = "http://127.0.0.1:11434/v1"
     qwen_model: str = "qwen3"
     hunyuan3d_url: str = "http://127.0.0.1:8081"

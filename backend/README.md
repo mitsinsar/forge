@@ -104,6 +104,9 @@ port = 8000
 data_dir = "data"              # SQLite database, data/assets/<id>/<stage>/, uploads
 mock_step_delay = 0.15         # seconds per mock step, so progress is visible
 comfyui_url = "http://127.0.0.1:8188"
+comfyui_dir = ""               # ComfyUI folder (with models/); LoRAs it lacks are copied to models/loras
+comfyui_timeout = 600          # seconds one candidate may take in ComfyUI before the stage fails
+comfyui_workflows_dir = ""     # API-format workflows per base model (empty: backend/workflows)
 qwen_url = "http://127.0.0.1:11434/v1"
 qwen_model = "qwen3"
 hunyuan3d_url = "http://127.0.0.1:8081"
@@ -123,6 +126,42 @@ blender = "mock"
 ```
 
 Environment example: `ASSETGEN_PORT=9000`, `ASSETGEN_ADAPTERS__MESH=real`.
+
+## ComfyUI (image adapter)
+
+With `[adapters] image = "real"`, gate 1's candidates come from ComfyUI at `comfyui_url`. Each
+style profile's `base_model` picks an API-format workflow in `workflows/`:
+
+| Workflow | Model files (folder under ComfyUI's `models/`) | LoRAs | Reference images |
+|---|---|---|---|
+| `sdxl.json` | `sd_xl_base_1.0.safetensors` (`checkpoints/`) | `LoraLoader` (model + CLIP) | IP-Adapter, needs the [ComfyUI_IPAdapter_plus](https://github.com/cubiq/ComfyUI_IPAdapter_plus) nodes and their **PLUS (high strength)** SDXL files: `ip-adapter-plus_sdxl_vit-h.safetensors` (`ipadapter/`) and `CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors` (`clip_vision/`) |
+| `flux.json` | `flux1-dev.safetensors` (`diffusion_models/`), `t5xxl_fp16.safetensors` and `clip_l.safetensors` (`text_encoders/`), `ae.safetensors` (`vae/`) | `LoraLoader` (model + CLIP) | Flux Redux (core nodes): `flux1-redux-dev.safetensors` (`style_models/`) and `sigclip_vision_patch14_384.safetensors` (`clip_vision/`) |
+| `qwen-image.json` | `qwen_image_fp8_e4m3fn.safetensors` (`diffusion_models/`), `qwen_2.5_vl_7b_fp8_scaled.safetensors` (`text_encoders/`), `qwen_image_vae.safetensors` (`vae/`) | `LoraLoaderModelOnly` | none: Qwen-Image text-to-image has no reference input, so they are skipped |
+
+How a render goes:
+
+* One prompt per missing candidate (seed + n − 1) is queued with `POST /prompt`; progress comes
+  over the `/ws` WebSocket (sampler steps), the image is fetched with `/history` and `/view` and
+  written as `candidate_<n>.png`. Candidates already on disk are kept, so a retried stage only
+  renders the missing ones.
+* The profile's LoRAs (only those of the same base model) are chained after the model loader
+  with their weights. ComfyUI's `GET /models/loras` is matched by file name; a LoRA ComfyUI does
+  not have is copied into `<comfyui_dir>/models/loras` (set `comfyui_dir`, or copy it there
+  yourself).
+* The profile's 2–3 reference images are uploaded with `/upload/image` (into `input/assetgen/`)
+  and applied as style references. When the model or ComfyUI can't use them, the render goes on
+  without them.
+* What was used or skipped is kept in the prompt stage's `log` and shown at gate 1.
+* Before the mesh stage, `POST /free` with `unload_models` and `free_memory` empties ComfyUI's VRAM
+  for Hunyuan3D.
+* Clear stage errors: ComfyUI not reachable, a missing model file (with the folder it goes in, from
+  ComfyUI's validation answer), a missing node, an error while running, and a candidate taking longer
+  than `comfyui_timeout` (the prompt is then removed from ComfyUI's queue and interrupted).
+
+The adapter finds the nodes it fills by title, so a workflow can be rebuilt in ComfyUI and exported
+with "Save (API)" as long as it keeps these node titles: `model` (MODEL loader, or the checkpoint
+loader), `clip` (CLIP loader, unless `model` is a checkpoint), `positive`, `negative`, `latent`,
+`sampler` (`KSampler`) and `save` (`SaveImage`). Size, steps, CFG and sampler are read from the file.
 
 ## Jobs and files
 
@@ -229,9 +268,10 @@ src/assetgen/
   schemas.py       request bodies
   pipeline.py      stages, gates and the job worker
   exporters.py     Unity folder, Godot sprites, zip
-  adapters/        base.py (interfaces), mock/ (placeholders), real/ (qwen, hunyuan3d)
+  adapters/        base.py (interfaces), mock/ (placeholders), real/ (qwen.py, comfyui.py, hunyuan3d.py)
   imaging.py       background removal, de-light pass, GLB albedo texture
   archetypes/<id>/archetype.json
   config.py  db.py  defaults.py  events.py
-tests/             pytest: mock adapters, and the real ones against fake servers
+workflows/         ComfyUI API-format workflows: sdxl.json, flux.json, qwen-image.json
+tests/             pytest: mock adapters, and the real ones against fake Qwen, ComfyUI and Hunyuan3D servers
 ```
