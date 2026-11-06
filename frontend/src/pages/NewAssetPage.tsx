@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, type Kind, type Slot, type WeaponClass } from "../api/client";
+import { api, type AssetInput, type Kind, type Slot, type WeaponClass } from "../api/client";
 import { keys, useApiMutation, useArchetypes, useMeta, useProfiles, useProjects } from "../api/queries";
 import { KIND_LABEL, isCharacter, label, options } from "../labels";
 import {
@@ -18,8 +18,21 @@ import {
   Select,
   Stack,
   Tabs,
+  Text,
   TextArea,
+  Thumb,
 } from "../ui/kit";
+
+type Start = "describe" | "image";
+
+/** An object URL for a picked file, revoked when the file changes or the page closes. */
+function usePreviewUrl(file: File | null): string | null {
+  const url = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+  useEffect(() => () => {
+    if (url) URL.revokeObjectURL(url);
+  }, [url]);
+  return url;
+}
 
 export function NewAssetPage() {
   const navigate = useNavigate();
@@ -38,8 +51,15 @@ export function NewAssetPage() {
   const [weaponClass, setWeaponClass] = useState<WeaponClass | "">("");
   const [profileChoice, setProfileId] = useState<string | null>(null);
   const [triangles, setTriangles] = useState("");
+  const [start, setStart] = useState<Start>("describe");
+  const [image, setImage] = useState<File | null>(null);
+  const preview = usePreviewUrl(image);
 
-  const create = useApiMutation(api.createAsset, [keys.assets]);
+  const create = useApiMutation(
+    (input: AssetInput) => (start === "image" && image ? api.createAssetFromImage(input, image) : api.createAsset(input)),
+    [keys.assets],
+  );
+  const fromImage = start === "image";
 
   const projectId = projectChoice || projects.data?.[0]?.id || "";
   const project = projects.data?.find((p) => p.id === projectId);
@@ -80,9 +100,46 @@ export function NewAssetPage() {
   return (
     <form onSubmit={submit}>
       <Stack gap={4}>
-        <PageHeader title="New asset" subtitle="Describe it; the generator renders previews for you to pick from." back={{ to: "/", label: "Assets" }} />
+        <PageHeader title="New asset" subtitle="Describe it, or bring your own image of it." back={{ to: "/", label: "Assets" }} />
         <Card>
           <Stack gap={4}>
+            <Field
+              label="Start from"
+              group
+              hint={
+                fromImage
+                  ? "The mesh is built straight from your image; no previews are generated."
+                  : "The generator renders previews for you to pick from."
+              }
+            >
+              {() => (
+                <Tabs
+                  label="Start from"
+                  value={start}
+                  onChange={setStart}
+                  items={[
+                    { value: "describe", label: "Description" },
+                    { value: "image", label: "My own image" },
+                  ]}
+                />
+              )}
+            </Field>
+            {fromImage && (
+              <Grid cols={2}>
+                <Field label="Image" hint="PNG, JPEG or WebP. One subject, whole and uncropped, on a plain background works best.">
+                  {(id) => (
+                    <Input
+                      id={id}
+                      type="file"
+                      required
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(e) => setImage(e.target.files?.[0] ?? null)}
+                    />
+                  )}
+                </Field>
+                {preview ? <Thumb src={preview} alt="Your image" /> : <Text small faint>No image picked yet.</Text>}
+              </Grid>
+            )}
             <Field label="Kind" group>
               {() => (
                 <Tabs
@@ -93,7 +150,14 @@ export function NewAssetPage() {
                 />
               )}
             </Field>
-            <Field label="Description" hint="What it looks like. Colours, materials and silhouette help most.">
+            <Field
+              label="Description"
+              hint={
+                fromImage
+                  ? "A few words on what it is. They name the asset and pick the archetype when it is automatic."
+                  : "What it looks like. Colours, materials and silhouette help most."
+              }
+            >
               {(id) => (
                 <TextArea
                   id={id}
@@ -196,8 +260,13 @@ export function NewAssetPage() {
             </Grid>
             <ErrorNotice error={create.error} />
             <Row justify="end">
-              <Button type="submit" variant="primary" busy={create.isPending} disabled={!description.trim()}>
-                Start generating
+              <Button
+                type="submit"
+                variant="primary"
+                busy={create.isPending}
+                disabled={!description.trim() || (fromImage && !image)}
+              >
+                {fromImage ? "Build from my image" : "Start generating"}
               </Button>
             </Row>
           </Stack>

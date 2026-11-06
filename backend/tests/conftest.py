@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
@@ -9,9 +10,16 @@ from assetgen.app import create_app
 from assetgen.config import load_settings
 
 
+@pytest.fixture(autouse=True)
+def _no_local_config(tmp_path, monkeypatch):
+    """Every test runs in its own folder, so the developer's backend/assetgen.toml is never picked up."""
+    monkeypatch.chdir(tmp_path)
+    for name in [n for n in os.environ if n.startswith("ASSETGEN_")]:
+        monkeypatch.delenv(name)
+
+
 @pytest.fixture
-def settings(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # no stray assetgen.toml is picked up
+def settings(tmp_path):
     return load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0)
 
 

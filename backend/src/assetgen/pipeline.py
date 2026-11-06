@@ -1,5 +1,9 @@
 """The asset pipeline: stage work, gates and the single job worker.
 
+An asset made from the user's own image (``source == "upload"``) skips the
+image model: the prompt stage only settles the archetype (asking the LLM when
+the user left it automatic) and offers that image as the single candidate.
+
 Stages run in order: prompt -> (gate 1) -> mesh -> (gate 2) -> rig -> (gate 3)
 -> export -> done. Each stage writes into data/assets/<id>/<stage>/ and ends by
 writing manifest.json; a stage whose manifest exists is not run again, and the
@@ -54,6 +58,10 @@ class Pipeline:
 
     def stage_dir(self, asset_id: str, stage: str) -> Path:
         return self.asset_dir(asset_id) / stage
+
+    def source_image(self, asset_id: str) -> Path:
+        """The user's own image for an asset made from an upload (kept outside every stage folder)."""
+        return self.asset_dir(asset_id) / "source.png"
 
     def asset_settings(self, asset: dict) -> dict:
         """The style profile with the asset's overrides merged in."""
@@ -295,11 +303,27 @@ class Pipeline:
                 "attempt": (asset.get("attempts") or {}).get(asset["stage"], 1),
                 "notes": [n["note"] for n in asset.get("notes") or [] if n["stage"] == asset["stage"]]}
 
+    def _needs_llm(self, asset: dict) -> bool:
+        """Whether an uploaded image still needs the LLM to pick something from the description."""
+        if asset["kind"] == "gear":
+            return not asset.get("slot")
+        if asset["kind"] == "weapon":
+            return not asset.get("weapon_class")
+        return not asset.get("archetype_override")
+
     def _stage_prompt(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)
+        upload = asset.get("source") == "upload"
         expansion_file = directory / "expansion.json"
         if expansion_file.is_file():
             expansion = json.loads(expansion_file.read_text(encoding="utf-8"))
+        elif upload and not self._needs_llm(asset):
+            # Everything is chosen: no text model needed for the user's own image.
+            biped = asset["kind"] in ("gear", "weapon")
+            expansion = {"archetype": "biped" if biped else asset["archetype_override"], "prompt": "",
+                         "negative_prompt": "", "slot": asset.get("slot"),
+                         "weapon_class": asset.get("weapon_class"), "flags": []}
+            expansion_file.write_text(json.dumps(expansion, indent=2), encoding="utf-8")
         else:
             progress("Expanding the description", 0.0)
             notes = [n["note"] for n in asset.get("notes") or [] if n["stage"] == "prompt"]
@@ -319,11 +343,18 @@ class Pipeline:
             changes["weapon_class"] = expansion.get("weapon_class") or asset.get("weapon_class") or "one_handed"
             changes["grip"] = asset.get("grip") or dict(DEFAULT_GRIPS[changes["weapon_class"]])
         asset = self.db.update("assets", asset["id"], changes)
+        attempt = (asset.get("attempts") or {}).get("prompt", 1)
+        if upload:
+            progress("Using your image", 0.5)
+            candidate = directory / "candidate_1.png"
+            shutil.copy2(self.source_image(asset["id"]), candidate)
+            return {"source": "upload", "expansion": expansion, "prompt": "", "negative_prompt": "",
+                    "base_model": None, "loras": [], "attempt": attempt, "log": [],
+                    "candidates": [self._rel(asset["id"], candidate)]}
         prompt = ", ".join(p for p in (expansion["prompt"], settings.get("prompt_suffix")) if p)
         negative = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
         loras = self._profile_loras(settings)
         references = [self.settings.uploads_dir / "references" / r["file"] for r in settings["reference_images"]]
-        attempt = (asset.get("attempts") or {}).get("prompt", 1)
 
         def scaled(step, fraction):
             progress(step, 0.1 + 0.9 * fraction)

@@ -114,11 +114,14 @@ function GateBar({
   candidate,
   rejectExtra,
   rejectInput,
+  canReject = true,
 }: {
   gate: Gate;
   asset: Asset;
   approveLabel: string;
   canApprove?: boolean;
+  /** False hides Reject (gate 1 of the user's own image: there is nothing to redo). */
+  canReject?: boolean;
   /** Gate 1: the picked candidate sent with the approval. */
   candidate?: number;
   rejectExtra?: React.ReactNode;
@@ -130,9 +133,11 @@ function GateBar({
     <Stack>
       <ErrorNotice error={approve.error} />
       <Row justify="end">
-        <Button variant="danger" onClick={() => setRejecting(true)}>
-          Reject…
-        </Button>
+        {canReject && (
+          <Button variant="danger" onClick={() => setRejecting(true)}>
+            Reject…
+          </Button>
+        )}
         <Button variant="primary" disabled={!canApprove} busy={approve.isPending} onClick={() => approve.mutate(candidate)}>
           {approveLabel}
         </Button>
@@ -155,18 +160,25 @@ function GateBar({
 // ---- gate 1: preview ------------------------------------------------------------
 
 export function Gate1({ asset }: { asset: Asset }) {
-  const [picked, setPicked] = useState<number | null>(null);
+  const prompt = asset.outputs.prompt;
+  const upload = prompt?.source === "upload";
+  const [pickedByUser, setPicked] = useState<number | null>(null);
+  // The user's own image is the only candidate; derived, so it holds even when the outputs load after mounting.
+  const picked = upload ? 1 : pickedByUser;
   const [archetype, setArchetype] = useState(asset.archetype ?? "");
   const archetypes = useArchetypes();
   const rerun = useApiMutation((value: string) => api.reject(asset.id, 1, { archetype: value }), [keys.assets, keys.asset(asset.id)]);
-  const prompt = asset.outputs.prompt;
   const candidates = asset.urls?.candidates ?? [];
 
   return (
     <Stack gap={4}>
       <Card
-        title="Gate 1 · Pick a preview"
-        subtitle={`Attempt ${prompt?.attempt ?? 1}. Pick the image the mesh is built from.`}
+        title={upload ? "Gate 1 · Check your image" : "Gate 1 · Pick a preview"}
+        subtitle={
+          upload
+            ? "The mesh is built from this image. Check the archetype below, then build the mesh."
+            : `Attempt ${prompt?.attempt ?? 1}. Pick the image the mesh is built from.`
+        }
       >
         <Stack gap={4}>
           <Grid min={180}>
@@ -184,31 +196,47 @@ export function Gate1({ asset }: { asset: Asset }) {
           <GateBar
             gate={1}
             asset={asset}
-            approveLabel={picked ? `Use candidate ${picked}` : "Pick a candidate"}
+            approveLabel={upload ? "Build the mesh" : picked ? `Use candidate ${picked}` : "Pick a candidate"}
             canApprove={picked !== null}
             candidate={picked ?? undefined}
+            canReject={!upload}
           />
         </Stack>
       </Card>
 
       <Grid cols={2}>
-        <Card title="Expanded prompt" subtitle={`Base model: ${label(prompt?.base_model)}`}>
-          <Stack gap={3}>
-            {prompt?.expansion.flags?.map((flag) => (
-              <Notice key={flag} tone="warning">
-                {flag}
-              </Notice>
-            ))}
-            {prompt?.log?.map((line) => (
-              <Notice key={line}>{line}</Notice>
-            ))}
-            <Text wrap>{prompt?.prompt}</Text>
-            <SectionTitle>Negative</SectionTitle>
-            <Text muted small wrap>
-              {prompt?.negative_prompt}
-            </Text>
-          </Stack>
-        </Card>
+        {upload ? (
+          <Card title="Your image" subtitle="No image model ran for this asset.">
+            <Stack gap={3}>
+              {prompt?.expansion.flags?.map((flag) => (
+                <Notice key={flag} tone="warning">
+                  {flag}
+                </Notice>
+              ))}
+              <Text muted small>
+                Hunyuan3D cuts the background away before it builds the mesh. To try a different image, make a new asset.
+              </Text>
+            </Stack>
+          </Card>
+        ) : (
+          <Card title="Expanded prompt" subtitle={`Base model: ${label(prompt?.base_model)}`}>
+            <Stack gap={3}>
+              {prompt?.expansion.flags?.map((flag) => (
+                <Notice key={flag} tone="warning">
+                  {flag}
+                </Notice>
+              ))}
+              {prompt?.log?.map((line) => (
+                <Notice key={line}>{line}</Notice>
+              ))}
+              <Text wrap>{prompt?.prompt}</Text>
+              <SectionTitle>Negative</SectionTitle>
+              <Text muted small wrap>
+                {prompt?.negative_prompt}
+              </Text>
+            </Stack>
+          </Card>
+        )}
         <Card title="Archetype" subtitle="The skeleton and clip set the asset is rigged with.">
           <Stack gap={3}>
             <Row>
@@ -217,7 +245,14 @@ export function Gate1({ asset }: { asset: Asset }) {
             </Row>
             {isCharacter(asset.kind) ? (
               <>
-                <Field label="Override" hint="Changing it renders new previews with that archetype's rest pose.">
+                <Field
+                  label="Override"
+                  hint={
+                    upload
+                      ? "Pick the body plan your image shows; it decides the skeleton and clips."
+                      : "Changing it renders new previews with that archetype's rest pose."
+                  }
+                >
                   {(id) => (
                     <Select
                       id={id}
@@ -233,7 +268,9 @@ export function Gate1({ asset }: { asset: Asset }) {
                     busy={rerun.isPending}
                     onClick={() => rerun.mutate(archetype)}
                   >
-                    {archetype && archetype !== asset.archetype ? `Rerun preview as ${label(archetype)}` : "Rerun preview"}
+                    {upload
+                      ? archetype && archetype !== asset.archetype ? `Use ${label(archetype)}` : "Use this archetype"
+                      : archetype && archetype !== asset.archetype ? `Rerun preview as ${label(archetype)}` : "Rerun preview"}
                   </Button>
                 </Row>
                 <ErrorNotice error={rerun.error} />

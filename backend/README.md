@@ -338,6 +338,7 @@ All routes are under `/api`; `/docs` has every request and response field.
 | DELETE | `/api/loras/{id}` | Delete a LoRA (removed from profiles; uploaded file deleted) |
 | GET | `/api/assets` | List assets, newest first; filters `project_id`, `kind`, `status`, `archetype`, `training_candidate`, `q` (text) |
 | POST | `/api/assets` | Create an asset and queue it: `project_id`, `kind` (`hero`\|`monster`\|`boss`\|`gear`\|`weapon`), `description`, `name`, `archetype` (override), `slot` (gear), `weapon_class` (weapons), `profile_id`, `overrides` (any profile fields) |
+| POST | `/api/assets/from-image` | Create an asset from your own image (multipart: `file` as PNG, JPEG or WebP up to 30 MB, and `asset` holding the same JSON as `POST /api/assets`). No image model runs: gate 1 offers that image as the only candidate. The LLM is asked only when the archetype (or gear slot, or weapon class) is left automatic |
 | GET | `/api/assets/{id}` | One asset with its outputs, file URLs and effective settings |
 | DELETE | `/api/assets/{id}` | Delete an asset and its files |
 | POST | `/api/assets/{id}/gates/{n}/approve` | Approve gate `n` (1–3) and queue the next stage; gate 1 needs `{"candidate": k}` |
