@@ -168,6 +168,18 @@ def test_success_sends_the_image_and_finishes_the_texture(fake_modly, tmp_path):
     assert fractions == sorted(fractions) and fractions[-1] == 1.0
 
 
+def test_profile_quality_reaches_modly(fake_modly, tmp_path):
+    server = fake_modly()
+    mesh = adapter(tmp_path, server.url, modly_params='{"num_inference_steps": 5, "extra": 1}')
+    mesh.image_to_mesh(image=candidate(tmp_path), texture_size=64, out_path=tmp_path / "raw.glb",
+                       progress=lambda s, f: None, hints={"asset_id": "a1", "attempt": 1},
+                       quality={"steps": 30, "resolution": 512, "guidance": 7.0, "remove_floaters": True})
+    params = json.loads(server.posts[0]["fields"]["params"])
+    assert params["num_inference_steps"] == 30  # the profile wins over modly_params
+    assert params["octree_resolution"] == 512 and params["guidance_scale"] == 7.0 and params["extra"] == 1
+    assert "remove_floaters" not in params  # that one is for Blender
+
+
 def test_the_same_seed_for_the_same_attempt(fake_modly, tmp_path):
     server = fake_modly()
     mesh = adapter(tmp_path, server.url)

@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from assetgen.adapters import PendingRig, RigNotBuilt, build_adapters
-from assetgen.adapters.real.qwen import LLMError, QwenLLM
+from assetgen.adapters.real.qwen import BIPED_NEGATIVE, CREATURE_NEGATIVE, LLMError, QwenLLM
 from assetgen.archetypes import load_archetypes
 from assetgen.config import load_settings
 from conftest import make_app, make_project, wait_for
@@ -99,7 +99,8 @@ def test_valid_reply_and_request_shape(fake_qwen, tmp_path):
     server = fake_qwen(reply(archetype="quadruped", prompt="a red wolf, standing on four legs"))
     result = expand(adapter_for(server, tmp_path), description="a red wolf", kind="monster")
     assert result == {"archetype": "quadruped", "prompt": "a red wolf, standing on four legs",
-                      "negative_prompt": "extra limbs", "slot": None, "weapon_class": None, "flags": []}
+                      "negative_prompt": f"extra limbs, {CREATURE_NEGATIVE}", "slot": None, "weapon_class": None,
+                      "flags": []}
     (request,) = server.requests
     assert request["path"] == "/v1/chat/completions"
     body = request["body"]
@@ -141,6 +142,22 @@ def test_other_http_errors_still_fail(fake_qwen, tmp_path):
     with pytest.raises(LLMError, match="answered HTTP 400"):
         expand(adapter_for(server, tmp_path))
     assert len(server.requests) == 3
+
+
+@pytest.mark.parametrize("kind, archetype, held_items, front_view", [
+    ("hero", "biped", True, True),
+    ("monster", "quadruped", True, False),  # its rest pose is a side view
+    ("weapon", "biped", False, False),
+    ("gear", "biped", False, False),
+])
+def test_characters_are_empty_handed(fake_qwen, tmp_path, kind, archetype, held_items, front_view):
+    server = fake_qwen(reply(archetype=archetype, negative_prompt="extra limbs", slot="head", weapon_class="bow"))
+    result = expand(adapter_for(server, tmp_path), kind=kind)
+    assert (CREATURE_NEGATIVE in result["negative_prompt"]) is held_items
+    assert (BIPED_NEGATIVE in result["negative_prompt"]) is front_view
+    assert result["negative_prompt"].startswith("extra limbs")
+    system = server.requests[0]["body"]["messages"][0]["content"]
+    assert ("Empty-handed" in system) is held_items
 
 
 def test_invalid_reply_then_valid(fake_qwen, tmp_path):

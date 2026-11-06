@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, localUrl, type Kind, type Meta, type PerKind, type Profile, type ProfileInput } from "../api/client";
+import { api, localUrl, MAX_EXTRA_LODS, type Kind, type MeshQuality, type Meta, type PerKind, type Profile, type ProfileInput } from "../api/client";
 import { keys, useApiMutation, useLoras, useMeta, useProfile, useProjects } from "../api/queries";
-import { KIND_LABEL, label, options } from "../labels";
+import { KIND_LABEL, label, MESH_PRESETS, MESH_RESOLUTIONS, meshPreset, options } from "../labels";
 import {
   Badge,
   Box,
@@ -40,6 +40,7 @@ function toInput(source: Profile | Meta["profile_defaults"], name: string, proje
     loras: source.loras.map((l) => ({ ...l, weight: Math.round(l.weight * 100) / 100 })),
     camera_preset: source.camera_preset,
     delight: source.delight ?? true,
+    mesh: { ...source.mesh },
     candidates: source.candidates,
     clips: [...source.clips],
     biped_extra_clips: [...source.biped_extra_clips],
@@ -85,6 +86,86 @@ function PerKindFields({ title, hint, values, onChange, min, max }: { title: str
   );
 }
 
+/** The extra LOD levels as percentages of LOD0, with the hero triangle count each one gets. */
+function LodLevels({ ratios, lod0, onChange }: { ratios: number[]; lod0: number; onChange: (r: number[]) => void }) {
+  const set = (i: number, percent: number) => onChange(ratios.map((r, j) => (j === i ? percent / 100 : r)));
+  const add = () => onChange([...ratios, Math.max(0.01, Math.round((ratios.at(-1) ?? 1) * 50) / 100)]);
+  const descending = ratios.every((r, i) => r > 0 && r < 1 && (i === 0 || r < ratios[i - 1]));
+  return (
+    <Field
+      label="LOD levels"
+      group
+      hint={`LOD0 is the full budget. Each extra level is a share of LOD0, smallest last (up to ${MAX_EXTRA_LODS}). Triangle counts are for a hero.`}
+      error={descending ? undefined : "Each level must be between 1 and 99 % and smaller than the one above."}
+    >
+      {() => (
+        <Stack gap={2}>
+          <Row gap={3}>
+            <Box width={80}><Text small>LOD0</Text></Box>
+            <Box width={120}><Text small muted>100 %</Text></Box>
+            <Text small faint>{lod0.toLocaleString()} triangles</Text>
+          </Row>
+          {ratios.map((ratio, i) => (
+            <Row key={i} gap={3}>
+              <Box width={80}><Text small>LOD{i + 1}</Text></Box>
+              <Box width={120}>
+                <NumberInput label={`LOD${i + 1} percent`} value={Math.round(ratio * 1000) / 10} min={1} max={99} step={1} onChange={(n) => set(i, n)} />
+              </Box>
+              <Text small faint>≈ {Math.round(lod0 * ratio).toLocaleString()} triangles</Text>
+              <Button size="sm" variant="ghost" onClick={() => onChange(ratios.filter((_, j) => j !== i))}>Remove</Button>
+            </Row>
+          ))}
+          <Row>
+            <Button size="sm" disabled={ratios.length >= MAX_EXTRA_LODS} onClick={add}>Add LOD level</Button>
+          </Row>
+        </Stack>
+      )}
+    </Field>
+  );
+}
+
+function MeshQualityFields({ mesh, onChange }: { mesh: MeshQuality; onChange: (m: MeshQuality) => void }) {
+  const preset = meshPreset(mesh.steps, mesh.resolution);
+  return (
+    <Stack gap={4}>
+      <Grid cols={2}>
+        <Field label="Quality preset" hint={MESH_PRESETS.find((p) => p.value === preset)?.hint ?? "Your own steps and resolution."}>
+          {(id) => (
+            <Select
+              id={id}
+              value={preset}
+              onChange={(e) => {
+                const chosen = MESH_PRESETS.find((p) => p.value === e.target.value);
+                if (chosen) onChange({ ...mesh, steps: chosen.steps, resolution: chosen.resolution });
+              }}
+              options={[...MESH_PRESETS.map((p) => ({ value: p.value, label: p.label })), ...(preset === "custom" ? [{ value: "custom", label: "Custom" }] : [])]}
+            />
+          )}
+        </Field>
+        <Field label="Steps" hint="Diffusion steps (1–100). More is slower and more detailed.">
+          {(id) => <NumberInput id={id} value={mesh.steps} min={1} max={100} onChange={(n) => onChange({ ...mesh, steps: n })} />}
+        </Field>
+        <Field label="Surface resolution" hint="Finer surfaces show more detail but need more VRAM. Modly's Hunyuan3D Mini offers 256, 380 and 512.">
+          {(id) => (
+            <Select
+              id={id}
+              value={String(mesh.resolution)}
+              onChange={(e) => onChange({ ...mesh, resolution: Number(e.target.value) })}
+              options={[...new Set([...MESH_RESOLUTIONS, mesh.resolution])].sort((a, b) => a - b).map((r) => ({ value: String(r), label: String(r) }))}
+            />
+          )}
+        </Field>
+        <Field label="Guidance" hint="1–15. Higher follows the image more closely; too high can add noise.">
+          {(id) => <NumberInput id={id} value={mesh.guidance} min={1} max={15} step={0.5} onChange={(n) => onChange({ ...mesh, guidance: n })} />}
+        </Field>
+      </Grid>
+      <Field group label="Clean-up" hint="Image-to-3D models leave small blobs floating around the body. Pieces that touch the body, such as separate armour plates, are kept.">
+        {() => <Checkbox checked={mesh.remove_floaters} onChange={(on) => onChange({ ...mesh, remove_floaters: on })} label="Remove floating pieces" />}
+      </Field>
+    </Stack>
+  );
+}
+
 function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profile: Profile | null; meta: Meta }) {
   const navigate = useNavigate();
   const projects = useProjects();
@@ -125,8 +206,10 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
     ...Object.values(form.render.frame_size),
     ...Object.values(form.budgets.triangles),
     ...Object.values(form.budgets.texture),
+    form.mesh.steps,
+    form.mesh.guidance,
     ...form.loras.map((l) => l.weight),
-  ].every(Number.isFinite);
+  ].every(Number.isFinite) && form.budgets.lod_ratios.every((r, i, all) => r > 0 && r < 1 && (i === 0 || r < all[i - 1]));
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -265,10 +348,13 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
           </Stack>
         </Card>
 
-        <Card title="Mesh" subtitle="Used for the gate 2 mesh from Hunyuan3D.">
-          <Field group label="Lighting" hint="Hunyuan3D bakes light and shade into the texture. This evens out its brightness so the game's own lights do the shading. Turn it off and reject at gate 2 to compare.">
-            {() => <Checkbox checked={form.delight} onChange={(on) => set("delight", on)} label="Even out baked lighting" />}
-          </Field>
+        <Card title="Mesh quality" subtitle="The image-to-mesh run at gate 2 (Modly or Hunyuan3D). Reject at gate 2 to try new settings on the same image.">
+          <Stack gap={4}>
+            <MeshQualityFields mesh={form.mesh} onChange={(m) => set("mesh", m)} />
+            <Field group label="Lighting" hint="Image-to-3D models bake light and shade into the texture. This evens out its brightness so the game's own lights do the shading.">
+              {() => <Checkbox checked={form.delight} onChange={(on) => set("delight", on)} label="Even out baked lighting" />}
+            </Field>
+          </Stack>
         </Card>
 
         <Card title="Camera and sprite render" subtitle="Used for Godot sprite sheets.">
@@ -298,15 +384,11 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
           <Stack gap={4}>
             <PerKindFields title="Triangles" hint="LOD0 budget per kind." values={form.budgets.triangles} min={1} onChange={(v) => set("budgets", { ...form.budgets, triangles: v })} />
             <PerKindFields title="Texture size (px)" values={form.budgets.texture} min={1} onChange={(v) => set("budgets", { ...form.budgets, texture: v })} />
-            <Field label="Extra LOD ratios" hint="Comma-separated fractions of LOD0, e.g. 0.5, 0.2">
-              {(id) => (
-                <Input
-                  id={id}
-                  defaultValue={form.budgets.lod_ratios.join(", ")}
-                  onChange={(e) => set("budgets", { ...form.budgets, lod_ratios: list(e.target.value).map(Number).filter((n) => n > 0 && n < 1) })}
-                />
-              )}
-            </Field>
+            <LodLevels
+              ratios={form.budgets.lod_ratios}
+              lod0={form.budgets.triangles.hero}
+              onChange={(r) => set("budgets", { ...form.budgets, lod_ratios: r })}
+            />
           </Stack>
         </Card>
 

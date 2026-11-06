@@ -169,6 +169,24 @@ def test_relative_folders_work(tmp_path):
 
 
 @needs_blender
+@pytest.mark.parametrize("remove", [True, False])
+def test_floaters_are_removed_but_touching_plates_stay(tmp_path, remove):
+    body = asset_parts("hero", "biped")
+    plate = Part((0.0, 1.15, 0.15), (0.16, 0.16, 0.05), 0.4)  # an armour plate pressed onto the chest
+    rock = Part((0.75, 1.0, 0.2), (0.08, 0.07, 0.08), 0.3)  # a blob floating beside the arm
+    raw = write_raw(tmp_path / "raw.glb", [*body, plate, rock], 40000)
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    result = tools.cleanup_and_lods(raw_mesh=raw, kind="hero", triangles=6000, lod_ratios=[],
+                                    out_dir=tmp_path / "mesh", progress=lambda s, f: None, remove_floaters=remove)
+    removed = result["removed"]
+    assert removed["floater_pieces"] == (1 if remove else 0)
+    low, high = lod_bounds(result["glb"])["LOD0"]
+    width = high[0] - low[0]  # about 0.7 m for the body alone, about 1.2 m with the rock beside it
+    assert (width > 0.95) is (not remove)
+    assert high[2] - low[2] > 0.3  # the chest plate is still there in front of the torso
+
+
+@needs_blender
 def test_cleanup_hits_the_budget_scales_and_makes_lods(tmp_path):
     parts = asset_parts("hero", "biped")
     extras = {"color": [0.6, 0.3, 0.2], "parts": _parts_info(parts), "hints": {"kind": "hero"}}

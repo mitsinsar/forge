@@ -32,6 +32,21 @@ export interface Budgets {
   lod_ratios: number[];
 }
 
+/** The image-to-mesh run at gate 2. */
+export interface MeshQuality {
+  /** Diffusion steps: more is slower and more detailed. */
+  steps: number;
+  /** Octree resolution of the surface: 256 coarse, 380 medium, 512 fine. */
+  resolution: number;
+  /** How closely the shape follows the image. */
+  guidance: number;
+  /** Drop small pieces that float apart from the body. */
+  remove_floaters: boolean;
+}
+
+/** The most extra LOD levels a profile can hold (the backend's limit). */
+export const MAX_EXTRA_LODS = 8;
+
 export interface ProfileSettings {
   base_model: BaseModel;
   prompt_suffix: string;
@@ -40,6 +55,7 @@ export interface ProfileSettings {
   camera_preset: CameraPreset;
   /** Even out the light and shade Hunyuan3D bakes into the albedo. */
   delight: boolean;
+  mesh: MeshQuality;
   candidates: number;
   clips: string[];
   biped_extra_clips: string[];
@@ -176,7 +192,16 @@ export interface AssetOutputs {
     log?: string[];
     candidates: string[];
   };
-  mesh?: { glb: string; texture: string; triangle_budget: number; lods: Lod[]; delight?: boolean };
+  mesh?: {
+    glb: string;
+    texture: string;
+    triangle_budget: number;
+    lods: Lod[];
+    delight?: boolean;
+    quality?: Partial<MeshQuality>;
+    /** What the clean-up removed (missing on meshes made before it was recorded). */
+    removed?: { floater_pieces?: number; floater_faces?: number; debris_faces?: number } | null;
+  };
   rig?: {
     glb: string;
     clips: Clip[];
@@ -247,7 +272,7 @@ export interface AssetInput {
   weapon_class?: WeaponClass;
   profile_id?: string;
   /** Per-asset overrides of style profile fields. */
-  overrides?: { budgets?: { triangles?: Partial<PerKind> } };
+  overrides?: { budgets?: { triangles?: Partial<PerKind> }; mesh?: Partial<MeshQuality> };
 }
 
 export interface AssetFilters {

@@ -3,7 +3,7 @@
 import { lazy, Suspense, useState, type ComponentProps } from "react";
 import { api, assetFileUrl, localUrl, type Asset, type Gate, type Grip, type RejectInput, type Socket } from "../api/client";
 import { keys, useApiMutation, useArchetypes } from "../api/queries";
-import { isCharacter, label } from "../labels";
+import { isCharacter, label, MESH_PRESETS, meshPreset } from "../labels";
 import {
   Badge,
   Box,
@@ -289,6 +289,19 @@ export function Gate1({ asset }: { asset: Asset }) {
 
 // ---- gate 2: mesh ---------------------------------------------------------------
 
+/** "Triangle budget 8,000 · High (20 steps, 512) · 37 floating pieces removed" */
+function meshSummary(mesh: NonNullable<Asset["outputs"]["mesh"]>): string {
+  const parts = [`Triangle budget ${mesh.triangle_budget.toLocaleString()}`];
+  const q = mesh.quality;
+  if (q?.steps && q.resolution) {
+    const preset = MESH_PRESETS.find((p) => p.value === meshPreset(q.steps!, q.resolution!));
+    parts.push(`${preset ? `${preset.label} ` : ""}(${q.steps} steps, resolution ${q.resolution})`);
+  }
+  const floaters = mesh.removed?.floater_pieces;
+  if (floaters) parts.push(`${floaters} floating piece${floaters === 1 ? "" : "s"} removed`);
+  return parts.join(" · ");
+}
+
 export function Gate2({ asset }: { asset: Asset }) {
   const mesh = asset.outputs.mesh;
   const [lod, setLod] = useState(0);
@@ -297,7 +310,7 @@ export function Gate2({ asset }: { asset: Asset }) {
   return (
     <Card
       title="Gate 2 · Approve the mesh"
-      subtitle={mesh ? `Triangle budget ${mesh.triangle_budget.toLocaleString()}` : undefined}
+      subtitle={mesh ? meshSummary(mesh) : undefined}
       actions={
         asset.urls?.chosen_image && (
           <Box width={56}>

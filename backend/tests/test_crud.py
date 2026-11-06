@@ -6,7 +6,7 @@ import io
 
 from PIL import Image
 
-from conftest import make_project
+from conftest import make_project, wait_for
 
 
 def _png() -> bytes:
@@ -78,6 +78,38 @@ def test_profile_crud_and_reference_images(client, tmp_path):
     assert len(client.get("/api/profiles", params={"project_id": project["id"]}).json()) == 2
     assert client.delete(f"/api/profiles/{project['default_profile_id']}").status_code == 409
     assert client.delete(f"/api/profiles/{pid}").status_code == 204
+
+
+def test_profile_mesh_quality_and_lods(client, tmp_path):
+    project = make_project(client, "unity", tmp_path)
+    pid = project["default_profile_id"]
+    profile = client.get(f"/api/profiles/{pid}").json()
+    assert profile["mesh"] == {"steps": 20, "resolution": 512, "guidance": 5.5, "remove_floaters": True}
+
+    patched = client.patch(f"/api/profiles/{pid}", json={
+        "mesh": {"steps": 40, "remove_floaters": False},
+        "budgets": {"lod_ratios": [0.75, 0.5, 0.3, 0.15, 0.08]}}).json()
+    assert patched["mesh"] == {"steps": 40, "resolution": 512, "guidance": 5.5, "remove_floaters": False}
+    assert patched["budgets"]["lod_ratios"] == [0.75, 0.5, 0.3, 0.15, 0.08]
+    for bad in ({"mesh": {"steps": 0}}, {"mesh": {"resolution": 4096}}, {"mesh": {"guidance": 0.5}},
+                {"budgets": {"lod_ratios": [1.5]}}, {"budgets": {"lod_ratios": [0.5] * 9}}):
+        assert client.patch(f"/api/profiles/{pid}", json=bad).status_code == 422, bad
+
+    # A profile saved before the mesh settings existed shows them with their defaults.
+    db = client.app.state.pipeline.db
+    db._conn.execute("UPDATE profiles SET data = json_remove(data, '$.mesh') WHERE id = ?", (pid,))
+    assert "mesh" not in db.get("profiles", pid)
+    assert client.get(f"/api/profiles/{pid}").json()["mesh"]["resolution"] == 512
+    client.patch(f"/api/profiles/{pid}", json={"mesh": {"remove_floaters": False}})
+
+    # Per asset: the overrides reach the mesh stage.
+    asset = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "description": "a knight",
+                                             "overrides": {"mesh": {"steps": 8, "resolution": 256}}}).json()
+    asset = wait_for(client, asset["id"], "waiting", gate=1)
+    client.post(f"/api/assets/{asset['id']}/gates/1/approve", json={"candidate": 1})
+    mesh = wait_for(client, asset["id"], "waiting", gate=2)["outputs"]["mesh"]
+    assert mesh["quality"]["steps"] == 8 and mesh["quality"]["resolution"] == 256
+    assert mesh["quality"]["remove_floaters"] is False  # from the profile
 
 
 def test_loras_register_upload_and_base_model_match(client, tmp_path):

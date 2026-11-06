@@ -58,8 +58,20 @@ KIND_RULES = {
 - "archetype" is always "biped". "weapon_class" is one of: {classes}. "slot" is null.""",
     "creature": """This asset is a {kind}.
 - Pick the archetype whose body plan fits the description best{override_note}.
+- Empty-handed: no weapons, shields, staffs, wands, torches, bags or any held item, even when the
+  description mentions one (weapons and gear are made as separate assets). Hands open and relaxed.
+- Seen straight from the front, unless the archetype's rest pose names another view. Limbs apart from
+  the body and from each other, so every limb has a clear gap around it.
+- Compact, solid silhouette: no loose chains, floating particles, smoke, fire or effects around the body.
 - "slot" and "weapon_class" are null.""",
 }
+
+# Always added to the negative prompt of heroes, monsters and bosses: held items and loose
+# effects become junk geometry in the mesh, and side or three-quarter views reconstruct worse.
+CREATURE_NEGATIVE = ("weapon, sword, shield, staff, holding an object, props, particles, floating debris, "
+                     "smoke, aura")
+# Bipeds are reconstructed best from the front; other rest poses name their own view.
+BIPED_NEGATIVE = "three-quarter view, side view"
 
 
 def build_system_prompt(*, kind: str, archetypes: dict[str, dict], archetype_override: str | None,
@@ -206,10 +218,14 @@ class QwenLLM:
             weapon_class = weapon_class or (data.get("weapon_class") if data.get("weapon_class") in WEAPON_CLASSES
                                             else "one_handed")
         negative = data.get("negative_prompt")
+        negative = negative.strip() if isinstance(negative, str) else ""
+        if kind not in ("gear", "weapon"):
+            extra = (CREATURE_NEGATIVE, BIPED_NEGATIVE if archetype == "biped" else "")
+            negative = ", ".join(p for p in (negative, *extra) if p)
         return {
             "archetype": archetype,
             "prompt": data["prompt"].strip(),
-            "negative_prompt": negative.strip() if isinstance(negative, str) else "",
+            "negative_prompt": negative,
             "slot": slot if kind == "gear" else None,
             "weapon_class": weapon_class if kind == "weapon" else None,
             "flags": flags,

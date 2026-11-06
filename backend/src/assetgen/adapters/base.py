@@ -47,11 +47,13 @@ class MeshAdapter(Protocol):
     """Hunyuan3D 2.1: image to textured mesh."""
 
     def image_to_mesh(self, *, image: Path, texture_size: int, out_path: Path,
-                      progress: Progress, hints: dict, delight: bool = True) -> dict:
+                      progress: Progress, hints: dict, delight: bool = True, quality: dict | None = None) -> dict:
         """Removes the image's background, writes a textured GLB to
         ``out_path`` and its albedo texture beside it as texture.png at
         ``texture_size``. With ``delight`` the albedo's baked light and shade
-        are evened out. Returns ``{"glb": path, "texture": path}``."""
+        are evened out. ``quality`` is the profile's mesh settings (``steps``,
+        ``resolution``, ``guidance``); a tool uses those it supports.
+        Returns ``{"glb": path, "texture": path}``."""
 
 
 class RigAdapter(Protocol):
@@ -66,8 +68,8 @@ class BlenderAdapter(Protocol):
     """Headless Blender (``blender -b -P script.py``)."""
 
     def cleanup_and_lods(self, *, raw_mesh: Path, kind: str, triangles: int, lod_ratios: list[float],
-                         out_dir: Path, progress: Progress) -> dict:
-        """Cleans up, scales to the kind's standard size with the origin at the
+                         out_dir: Path, progress: Progress, remove_floaters: bool = True) -> dict:
+        """Cleans up (with ``remove_floaters``, also drops small pieces that do not touch the body), scales to the kind's standard size with the origin at the
         feet, decimates to the budget and makes the LODs (``lod_ratios`` of
         LOD0). Writes ``out_dir/mesh.glb`` with one node per level (``LOD0``,
         ``LOD1``...). Returns ``{"glb": path, "lods": [{"level", "ratio", "triangles"}]}``."""
