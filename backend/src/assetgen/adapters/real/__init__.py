@@ -13,6 +13,7 @@ from importlib import import_module
 # adapter name -> (module in this package, class name)
 REAL_ADAPTERS: dict[str, tuple[str, str]] = {
     "llm": ("qwen", "QwenLLM"),
+    "image": ("comfyui", "ComfyUIImage"),
     "blender": ("blender", "BlenderTools"),
 }
 

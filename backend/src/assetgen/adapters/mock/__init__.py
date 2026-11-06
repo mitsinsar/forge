@@ -104,7 +104,7 @@ class MockImage(MockBase):
         self.unload_count = 0
 
     def render_candidates(self, *, prompt, negative_prompt, base_model, loras, reference_images, count, seed,
-                          out_dir, progress: Progress, hints):
+                          out_dir, progress: Progress, hints, log=None):
         self.loaded = True
         out_dir.mkdir(parents=True, exist_ok=True)
         paths = []

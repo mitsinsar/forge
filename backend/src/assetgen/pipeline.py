@@ -328,13 +328,14 @@ class Pipeline:
         def scaled(step, fraction):
             progress(step, 0.1 + 0.9 * fraction)
 
+        stage_log: list[str] = []
         paths = self.adapters.image.render_candidates(
             prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
             reference_images=references, count=int(settings["candidates"]), seed=seed_of(asset["id"], attempt),
-            out_dir=directory, progress=scaled, hints=self._hints(asset))
+            out_dir=directory, progress=scaled, hints=self._hints(asset), log=stage_log.append)
         return {"expansion": expansion, "prompt": prompt, "negative_prompt": negative,
                 "base_model": settings["base_model"], "loras": loras, "attempt": attempt,
-                "candidates": [self._rel(asset["id"], p) for p in paths]}
+                "log": stage_log, "candidates": [self._rel(asset["id"], p) for p in paths]}
 
     def _profile_loras(self, settings: dict) -> list[dict]:
         result = []
