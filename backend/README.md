@@ -33,7 +33,7 @@ placeholders, so the whole API works end to end without a GPU:
 |---|---|
 | Qwen (LLM) | archetype, slot / weapon class and prompt from keyword rules; forces the archetype's rest pose; folds in reject notes |
 | ComfyUI (image) | N candidate PNGs (default 4) of a placeholder body, coloured after colour words in the description |
-| Hunyuan3D (mesh) | textured GLB built from ellipsoids in the picked candidate's colour |
+| Hunyuan3D (mesh) | textured GLB built from ellipsoids in the picked candidate's colour (real adapter: see below) |
 | Blender (real: clean-up, LODs, FBX) | clean-up to the triangle budget with LOD0/1/2 (100 / 50 / 20 %) and triangle counts; animated GLB with the clip set; sprite frames per clip and direction; a placeholder FBX |
 | UniRig (rig) | the archetype's template joints with a fit score |
 
@@ -41,6 +41,58 @@ The engine exports (Unity folder, Godot atlases / SpriteFrames / PaperDoll, Asep
 are real code and run the same with mock or real adapters. `GET /api/meta` reports each adapter's
 mode. Asking for a real adapter that is not built yet stops the server at start-up with a clear
 message.
+
+## Real adapters
+
+### Hunyuan3D 2.1 (mesh, gate 2)
+
+Set `[adapters] mesh = "real"` and `hunyuan3d_url` to the machine running Hunyuan3D's
+`api_server.py`. For each asset the adapter:
+
+1. cuts the picked candidate out of its plain background (a flood fill from the border, or
+   [rembg](https://github.com/danielgatis/rembg) when it is installed:
+   `uv pip install "rembg[gpu]"`) and saves it as `mesh/input_cutout.png`;
+2. sends it to `POST /send` with shape and texture on, and saves the job id in
+   `mesh/hunyuan3d_job.json`, so after a restart the same job is polled instead of a new one
+   being started;
+3. polls `GET /status/{uid}` (`processing` → `texturing` → `completed`) and keeps the GLB as
+   made in `mesh/hunyuan3d.glb`;
+4. scales its albedo to the profile's texture size, evens out the baked light and shade when the
+   profile's `delight` flag is on (the default; "Even out baked lighting" in the profile editor),
+   and writes `mesh/texture.png` and `mesh/raw.glb` with that texture inside.
+
+Errors name the cause: server not reachable, out of GPU memory, or no result within
+`hunyuan3d_timeout`. Hunyuan3D's server does not report a crashed job (it stays
+`processing`), so a crash shows up as the timeout; its console has the reason.
+With `blender = "real"` the mesh is cleaned up and decimated into its LODs as usual; with the
+mock Blender, gate 2 shows Hunyuan3D's mesh as made, as a single LOD0. The mock rig animates
+a placeholder body of the archetype until the real rig adapter exists.
+
+To compare the de-light pass, untick or tick it in the profile and reject the mesh at gate 2
+(a reject makes a new mesh with a new seed).
+
+**Starting the server on Windows** (the RTX 5090 machine, CUDA 12.4+, Python 3.10, Git):
+
+```powershell
+git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1
+cd Hunyuan3D-2.1
+py -3.10 -m venv .venv
+.venv\Scripts\activate
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt
+# Build the texture extensions, as the repo's README describes:
+cd hy3dpaint\custom_rasterizer; pip install -e . ; cd ..\..
+cd hy3dpaint\DifferentiableRenderer; python setup.py install ; cd ..\..
+# The upscaler the texture step uses:
+curl.exe -L -o hy3dpaint\ckpt\RealESRGAN_x4plus.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+python api_server.py --host 0.0.0.0 --port 8081 --model_path tencent/Hunyuan3D-2.1 --subfolder hunyuan3d-dit-v2-1
+```
+
+The first start downloads the models from Hugging Face. Add `--low_vram_mode` if jobs run out
+of GPU memory. `http://<machine>:8081/docs` lists the API and `/health` answers
+`{"status": "healthy"}`; the header of the web app shows the same check. Allow port 8081 in the
+Windows firewall when assetgen runs on another machine. Keep ComfyUI's models unloaded while
+it runs: assetgen unloads them before every mesh stage.
 
 ## Settings
 
@@ -59,6 +111,8 @@ comfyui_workflows_dir = ""     # API-format workflows per base model (empty: bac
 qwen_url = "http://127.0.0.1:11434/v1"
 qwen_model = "qwen3"
 hunyuan3d_url = "http://127.0.0.1:8081"
+hunyuan3d_timeout = 1800       # seconds one image-to-mesh job may take
+hunyuan3d_poll = 2             # seconds between status checks
 blender_path = "blender"
 unirig_path = "UniRig"
 python_path = "python"
@@ -174,7 +228,7 @@ All routes are under `/api`; `/docs` has every request and response field.
 | PATCH | `/api/projects/{id}` | Update a project |
 | DELETE | `/api/projects/{id}` | Delete a project (409 while it has assets) |
 | GET | `/api/profiles?project_id=` | List style profiles |
-| POST | `/api/profiles` | Create a profile: `name`, `project_id`, `base_model`, `prompt_suffix`, `negative_prompt`, `loras[]` (`id`, `weight`; only LoRAs of the same base model), `camera_preset`, `candidates`, `clips`, `biped_extra_clips`, `render` (`look`, `fps`, `supersample`, `palette_size`, `frame_size` per kind), `budgets` (`triangles` and `texture` per kind, `lod_ratios`). Missing fields take the defaults |
+| POST | `/api/profiles` | Create a profile: `name`, `project_id`, `base_model`, `prompt_suffix`, `negative_prompt`, `loras[]` (`id`, `weight`; only LoRAs of the same base model), `camera_preset`, `candidates`, `clips`, `biped_extra_clips`, `render` (`look`, `fps`, `supersample`, `palette_size`, `frame_size` per kind), `budgets` (`triangles` and `texture` per kind, `lod_ratios`), `delight` (even out the light baked into Hunyuan3D's albedo). Missing fields take the defaults |
 | GET | `/api/profiles/{id}` | Get a profile |
 | PATCH | `/api/profiles/{id}` | Update any profile fields (nested fields merge) |
 | DELETE | `/api/profiles/{id}` | Delete a profile (409 while it is a project's default) |
@@ -232,11 +286,12 @@ src/assetgen/
   schemas.py       request bodies
   pipeline.py      stages, gates and the job worker
   exporters.py     Unity folder, Godot sprites, zip
-  adapters/        base.py (interfaces), mock/ (placeholders), real/ (qwen.py, comfyui.py, blender.py)
+  adapters/        base.py (interfaces), mock/ (placeholders), real/ (qwen.py, comfyui.py, hunyuan3d.py, blender.py)
+  imaging.py       background removal, de-light pass, GLB albedo texture
   archetypes/<id>/archetype.json
   config.py  db.py  defaults.py  events.py
 blender_scripts/   bpy scripts run by the real Blender adapter
 workflows/         ComfyUI API-format workflows: sdxl.json, flux.json, qwen-image.json
-tests/             pytest: mock adapters, the real ones against fake Qwen and ComfyUI servers, and the
-                   Blender scripts when Blender is installed (skipped otherwise)
+tests/             pytest: mock adapters, the real ones against fake Qwen, ComfyUI and Hunyuan3D servers,
+                   and the Blender scripts when Blender is installed (skipped otherwise)
 ```

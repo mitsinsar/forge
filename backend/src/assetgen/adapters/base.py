@@ -54,9 +54,11 @@ class MeshAdapter(Protocol):
     mode: str
 
     def image_to_mesh(self, *, image: Path, texture_size: int, out_path: Path,
-                      progress: Progress, hints: dict) -> dict:
-        """Writes a textured GLB to ``out_path`` and its albedo texture beside
-        it. Returns ``{"glb": path, "texture": path}``."""
+                      progress: Progress, hints: dict, delight: bool = True) -> dict:
+        """Removes the image's background, writes a textured GLB to
+        ``out_path`` and its albedo texture beside it as texture.png at
+        ``texture_size``. With ``delight`` the albedo's baked light and shade
+        are evened out. Returns ``{"glb": path, "texture": path}``."""
 
 
 class RigAdapter(Protocol):

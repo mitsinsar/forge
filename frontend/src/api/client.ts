@@ -38,6 +38,8 @@ export interface ProfileSettings {
   negative_prompt: string;
   loras: LoraRef[];
   camera_preset: CameraPreset;
+  /** Even out the light and shade Hunyuan3D bakes into the albedo. */
+  delight: boolean;
   candidates: number;
   clips: string[];
   biped_extra_clips: string[];
@@ -175,7 +177,7 @@ export interface AssetOutputs {
     log?: string[];
     candidates: string[];
   };
-  mesh?: { glb: string; texture: string; triangle_budget: number; lods: Lod[] };
+  mesh?: { glb: string; texture: string; triangle_budget: number; lods: Lod[]; delight?: boolean };
   rig?: {
     glb: string;
     clips: Clip[];

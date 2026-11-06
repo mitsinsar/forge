@@ -69,10 +69,10 @@ def test_settings_from_env_and_real_adapter_refused(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "assetgen.toml").write_text('port = 9001\ncomfyui_url = "http://gpu:8188"\n[adapters]\nllm = "mock"\n')
     monkeypatch.setenv("ASSETGEN_DATA_DIR", str(tmp_path / "d"))
-    monkeypatch.setenv("ASSETGEN_ADAPTERS__MESH", "real")
+    monkeypatch.setenv("ASSETGEN_ADAPTERS__RIG", "real")
     settings = load_settings()
     assert settings.port == 9001 and settings.comfyui_url == "http://gpu:8188"
-    assert settings.data_dir == tmp_path / "d" and settings.adapters.mesh == "real"
+    assert settings.data_dir == tmp_path / "d" and settings.adapters.rig == "real"
     with pytest.raises(RealAdapterMissing):
         create_app(settings)
     monkeypatch.setenv("ASSETGEN_ADAPTERS__MESH", "fake")
