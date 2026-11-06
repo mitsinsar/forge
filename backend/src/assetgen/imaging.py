@@ -1,4 +1,4 @@
-"""Image and GLB-texture helpers shared by the mesh adapters.
+"""Image and GLB-texture helpers shared by the mesh and Blender adapters.
 
 * ``remove_background`` cuts the subject out of a preview candidate. The
   candidates are rendered on a plain neutral background, so a flood fill from
@@ -7,6 +7,9 @@
   (light from above, shade underneath), keeping the colours and fine detail.
 * ``read_glb`` / ``write_glb`` / ``albedo_image`` / ``replace_image`` read the
   albedo texture of a GLB and put a new one in its place.
+* ``finish_sprites`` turns Blender's supersampled sprite renders into the
+  final frames: smooth downscale for the HD look; nearest neighbour and one
+  shared palette for the pixel look.
 """
 
 from __future__ import annotations
@@ -243,3 +246,99 @@ def triangle_count(gltf: dict) -> int:
             elif "POSITION" in primitive.get("attributes", {}):
                 total += gltf["accessors"][primitive["attributes"]["POSITION"]]["count"] // 3
     return total
+
+
+# ---- sprite frames ----------------------------------------------------------
+
+PALETTE_SAMPLES = 250_000  # opaque pixels sampled over all frames to build the pixel palette
+ALPHA_CUT = 128  # pixel look: alpha at or above this is opaque, below is transparent
+
+
+def downscale_hd(image: Image.Image, size: int) -> Image.Image:
+    """Smooth (Lanczos) downscale; premultiplied so the transparent edge keeps no dark fringe."""
+    return image.convert("RGBa").resize((size, size), Image.Resampling.LANCZOS).convert("RGBA")
+
+
+def downscale_pixel(image: Image.Image, size: int) -> Image.Image:
+    """Nearest-neighbour downscale with hard (fully opaque or fully transparent) alpha."""
+    small = image.convert("RGBA").resize((size, size), Image.Resampling.NEAREST)
+    pixels = np.asarray(small).copy()
+    opaque = pixels[..., 3] >= ALPHA_CUT
+    pixels[..., 3] = np.where(opaque, 255, 0)
+    pixels[~opaque, :3] = 0
+    return Image.fromarray(pixels, "RGBA")
+
+
+def shared_palette(frames: list[Image.Image], colors: int, seed: int = 0) -> Image.Image | None:
+    """A ``colors``-entry palette (a "P" image) built from the opaque pixels of all
+    ``frames``, so every frame and clip uses the same colours; ``None`` when all are empty."""
+    opaque = [np.asarray(f)[..., :3][np.asarray(f)[..., 3] > 0] for f in frames]
+    pixels = np.concatenate(opaque) if opaque else np.zeros((0, 3), np.uint8)
+    if not len(pixels):
+        return None
+    if len(pixels) > PALETTE_SAMPLES:
+        pixels = pixels[np.random.default_rng(seed).choice(len(pixels), PALETTE_SAMPLES, replace=False)]
+    strip = Image.fromarray(pixels.reshape(1, -1, 3).astype(np.uint8), "RGB")
+    return strip.quantize(colors=colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+
+
+def apply_palette(frame: Image.Image, palette: Image.Image | None) -> Image.Image:
+    """Locks a hard-alpha frame's colours to ``palette`` (no dithering)."""
+    if palette is None:
+        return frame
+    alpha = frame.getchannel("A")
+    rgb = frame.convert("RGB").quantize(palette=palette, dither=Image.Dither.NONE).convert("RGB")
+    rgb.putalpha(alpha)
+    pixels = np.asarray(rgb).copy()
+    pixels[pixels[..., 3] == 0, :3] = 0
+    return Image.fromarray(pixels, "RGBA")
+
+
+def is_empty(image: Image.Image) -> bool:
+    return image.getchannel("A").getextrema()[1] == 0
+
+
+def finish_sprites(raw: dict[str, dict[str, list[Path]]], loops: dict[str, bool], out_dir: Path, *,
+                   frame_size: int, look: str, palette_size: int) -> dict[str, dict[str, list[Path]]]:
+    """Writes the final frames to ``out_dir/<direction>/<clip>/<n>.png`` and returns their paths.
+
+    ``raw`` holds the supersampled renders per direction and clip. Frames at
+    the end of a clip that does not loop and are fully transparent in every
+    direction (the death fading out, say) are dropped, keeping at least one."""
+    small: dict[str, dict[str, list[Image.Image]]] = {}
+    for direction, by_clip in raw.items():
+        small[direction] = {}
+        for clip, paths in by_clip.items():
+            frames = []
+            for path in paths:
+                with Image.open(path) as image:
+                    frames.append(downscale_pixel(image, frame_size) if look == "pixel"
+                                  else downscale_hd(image, frame_size))
+            small[direction][clip] = frames
+    for clip in {c for by_clip in small.values() for c in by_clip}:
+        if loops.get(clip, True):
+            continue
+        lists = [by_clip[clip] for by_clip in small.values() if clip in by_clip]
+        while min(len(f) for f in lists) > 1 and all(is_empty(f[-1]) for f in lists):
+            for frames in lists:
+                frames.pop()
+    if look == "pixel":
+        palette = shared_palette([f for by_clip in small.values() for fs in by_clip.values() for f in fs],
+                                 palette_size)
+        small = {d: {c: [apply_palette(f, palette) for f in fs] for c, fs in by_clip.items()}
+                 for d, by_clip in small.items()}
+    result: dict[str, dict[str, list[Path]]] = {}
+    for direction, by_clip in small.items():
+        result[direction] = {}
+        for clip, frames in by_clip.items():
+            folder = out_dir / direction / clip
+            folder.mkdir(parents=True, exist_ok=True)
+            for old in folder.glob("*.png"):
+                old.unlink()
+            paths = []
+            for index, frame in enumerate(frames):
+                path = folder / f"{index:03d}.png"
+                frame.save(path)
+                paths.append(path)
+            result[direction][clip] = paths
+    return result

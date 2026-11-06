@@ -1,18 +1,21 @@
-"""Headless Blender adapter: mesh clean-up with LODs (gate 2) and the Unity FBX.
+"""Headless Blender adapter: mesh clean-up with LODs (gate 2), the Godot sprite
+frames and the Unity FBX.
 
 The work happens in the scripts in ``backend/blender_scripts/``, run by
-``blender_runner``. Rigging and sprite rendering still use the mock until the
-rig ticket lands, so a run with the real Blender finishes end to end.
+``blender_runner``. Rigging still uses the mock until the rig ticket lands, so
+a run with the real Blender finishes end to end.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import struct
 from pathlib import Path
 
 from ...config import Settings
-from ...defaults import MODEL_SIZES
+from ...defaults import CAMERA_TILT, DIRECTION_YAW, MODEL_SIZES
+from ...imaging import finish_sprites
 from ..mock import MockBlender
 from ..mock.glb import read_glb_json
 from .blender_runner import run_script
@@ -65,8 +68,38 @@ class BlenderTools:
     def rig_and_animate(self, **kwargs):
         return self.mock.rig_and_animate(**kwargs)
 
-    def render_sprites(self, **kwargs):
-        return self.mock.render_sprites(**kwargs)
+    def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
+                       look, palette_size, out_dir, progress):
+        out_dir = Path(out_dir)
+        record = out_dir / "sprites.json"
+        settings = {"animated_glb": str(Path(animated_glb).resolve()), "clips": clips, "directions": directions,
+                    "camera_preset": camera_preset, "frame_size": int(frame_size), "supersample": int(supersample),
+                    "fps": int(fps), "look": look, "palette_size": int(palette_size)}
+        done = _read_record(record, settings)
+        if done is not None:  # already rendered with these settings (resume after a restart)
+            progress("Sprites rendered", 1.0)
+            return done
+
+        raw_dir = out_dir / "raw"
+        shutil.rmtree(raw_dir, ignore_errors=True)
+        result = self._run("render_sprites.py", {
+            "animated_glb": settings["animated_glb"], "out_dir": str(raw_dir.resolve()),
+            "clips": [{"name": c["name"], "duration": float(c["duration"])} for c in clips],
+            "directions": [{"name": d, "yaw": DIRECTION_YAW[d]} for d in directions],
+            "tilt": CAMERA_TILT[camera_preset], "size": int(frame_size) * int(supersample),
+            "frame_size": int(frame_size), "fps": int(fps), "outline": 1.0},
+            out_dir, lambda step, fraction: progress(step, 0.9 * fraction))
+        progress("Downscaling the frames", 0.92)
+        raw = {d: {c: [Path(p) for p in paths] for c, paths in by_clip.items()}
+               for d, by_clip in result["frames"].items()}
+        frames = finish_sprites(raw, {c["name"]: bool(c.get("loop", True)) for c in clips}, out_dir,
+                                frame_size=int(frame_size), look=look, palette_size=int(palette_size))
+        shutil.rmtree(raw_dir, ignore_errors=True)
+        record.write_text(json.dumps({"settings": settings, "frames": {
+            d: {c: [p.relative_to(out_dir).as_posix() for p in paths] for c, paths in by_clip.items()}
+            for d, by_clip in frames.items()}}, indent=2), encoding="utf-8")
+        progress("Sprites rendered", 1.0)
+        return frames
 
     def export_fbx(self, *, animated_glb, mesh_glb, lods, rig_type, out_path, progress):
         out_path = Path(out_path)
@@ -76,3 +109,18 @@ class BlenderTools:
             "lod_levels": [int(lod["level"]) for lod in lods if int(lod["level"]) > 0]},
             out_path.parent, progress)
         return out_path
+
+
+def _read_record(record: Path, settings: dict) -> dict[str, dict[str, list[Path]]] | None:
+    """The frames of an earlier render with the same settings, when all its files are still there."""
+    try:
+        data = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("settings") != settings:
+        return None
+    frames = {d: {c: [record.parent / p for p in paths] for c, paths in by_clip.items()}
+              for d, by_clip in data.get("frames", {}).items()}
+    if all(p.is_file() for by_clip in frames.values() for paths in by_clip.values() for p in paths):
+        return frames
+    return None

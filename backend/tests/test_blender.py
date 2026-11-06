@@ -8,6 +8,7 @@ install folders of macOS and Windows.
 from __future__ import annotations
 
 import glob
+import io
 import json
 import os
 import shutil
@@ -15,8 +16,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from assetgen.adapters import build_adapters
 from assetgen.adapters.mock import MockBlender, MockRig, _parts_info
@@ -27,6 +30,8 @@ from assetgen.adapters.real.blender_runner import SCRIPTS_DIR, BlenderError, run
 from assetgen.app import create_app
 from assetgen.archetypes import get_archetype
 from assetgen.config import load_settings
+from assetgen.defaults import CAMERA_DIRECTIONS
+from assetgen.imaging import finish_sprites
 from conftest import make_project, wait_for
 
 HELPERS = Path(__file__).parent / "blender"
@@ -129,7 +134,7 @@ def test_missing_blender_is_explained(tmp_path):
                    log_path=tmp_path / "l.log", progress=lambda s, f: None)
 
 
-def test_real_blender_is_registered_and_keeps_rig_and_sprites_on_the_mock(tmp_path):
+def test_real_blender_is_registered_and_keeps_the_rig_on_the_mock(tmp_path):
     adapters = build_adapters(load_settings(data_dir=tmp_path, adapters={"blender": "real"}))
     assert isinstance(adapters.blender, BlenderTools) and adapters.blender.mode == "real"
     assert isinstance(adapters.blender.mock, MockBlender)
@@ -312,3 +317,191 @@ def test_blender_failure_shows_on_the_asset(tmp_path, monkeypatch):
         asset = wait_for(client, asset_id, "failed", timeout=300)
     assert "Blender cleanup_lods exited with code 1" in asset["error"]
     assert "Last lines of blender_cleanup_lods.log" in asset["error"]
+
+
+# ---- sprite frames --------------------------------------------------------------
+
+
+def _raw_frame(path: Path, size: int, filled: bool, shade: int = 0) -> Path:
+    """A supersampled render: a soft-edged gradient disc on transparency, or nothing."""
+    pixels = np.zeros((size, size, 4), np.uint8)
+    if filled:
+        y, x = np.mgrid[0:size, 0:size]
+        distance = np.hypot(x - size / 2, y - size / 2) / (size * 0.4)
+        pixels[..., 0] = (x * 255 // size + shade) % 256
+        pixels[..., 1] = y * 255 // size
+        pixels[..., 2] = 90
+        pixels[..., 3] = np.clip((1.1 - distance) * 10 * 255, 0, 255).astype(np.uint8)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(pixels, "RGBA").save(path)
+    return path
+
+
+def _raw_set(tmp_path: Path, filled: dict[str, list[bool]], directions=("right", "down")) -> dict:
+    return {d: {clip: [_raw_frame(tmp_path / "raw" / d / clip / f"{i}.png", 64, f, shade=i * 40)
+                       for i, f in enumerate(flags)] for clip, flags in filled.items()} for d in directions}
+
+
+def test_pixel_frames_share_one_palette_and_have_hard_alpha(tmp_path):
+    raw = _raw_set(tmp_path, {"idle": [True] * 3, "walk": [True] * 4})
+    frames = finish_sprites(raw, {"idle": True, "walk": True}, tmp_path / "out", frame_size=32, look="pixel",
+                            palette_size=8)
+    colours = set()
+    for direction in ("right", "down"):
+        assert [len(frames[direction][c]) for c in ("idle", "walk")] == [3, 4]
+        for path in frames[direction]["idle"] + frames[direction]["walk"]:
+            assert path == tmp_path / "out" / direction / path.parent.name / path.name
+            pixels = np.asarray(Image.open(path))
+            assert pixels.shape == (32, 32, 4)
+            assert set(np.unique(pixels[..., 3])) <= {0, 255}
+            colours |= {tuple(p) for p in pixels[pixels[..., 3] == 255][:, :3]}
+    assert 2 <= len(colours) <= 8  # one shared palette over every frame and clip
+
+
+def test_pixel_downscale_is_nearest_neighbour(tmp_path):
+    blocks = np.indices((4, 4)).sum(axis=0) % 2 == 0  # a checkerboard of 2x2 blocks, red and blue
+    big = np.where(blocks.repeat(2, 0).repeat(2, 1)[..., None], [255, 0, 0, 255], [0, 0, 255, 255]).astype(np.uint8)
+    path = tmp_path / "raw" / "right" / "idle" / "0.png"
+    path.parent.mkdir(parents=True)
+    Image.fromarray(big, "RGBA").save(path)
+    frames = finish_sprites({"right": {"idle": [path]}}, {"idle": True}, tmp_path / "out", frame_size=4,
+                            look="pixel", palette_size=4)
+    small = np.asarray(Image.open(frames["right"]["idle"][0]))
+    expected = np.where(blocks[..., None], [255, 0, 0], [0, 0, 255])
+    assert (small[..., :3] == expected).all()  # every pixel is one source pixel, no blended purple
+
+
+def test_hd_frames_are_smoothly_downscaled(tmp_path):
+    raw = _raw_set(tmp_path, {"idle": [True]}, directions=("right",))
+    frames = finish_sprites(raw, {"idle": True}, tmp_path / "out", frame_size=32, look="hd", palette_size=8)
+    pixels = np.asarray(Image.open(frames["right"]["idle"][0]))
+    assert pixels.shape == (32, 32, 4) and pixels[0, 0, 3] == 0
+    assert len(set(np.unique(pixels[..., 3]))) > 2  # soft edge kept
+
+
+def test_empty_end_frames_of_non_looping_clips_are_trimmed(tmp_path):
+    raw = _raw_set(tmp_path, {"death": [True, True, False, False], "idle": [True, False]})
+    raw["down"]["death"][2] = _raw_frame(tmp_path / "raw" / "down" / "death" / "2b.png", 64, True)
+    frames = finish_sprites(raw, {"death": False, "idle": True}, tmp_path / "out", frame_size=16, look="hd",
+                            palette_size=8)
+    # frame 2 still shows something facing down, so both directions keep 3 frames
+    assert [len(frames[d]["death"]) for d in ("right", "down")] == [3, 3]
+    assert [len(frames[d]["idle"]) for d in ("right", "down")] == [2, 2]  # loops are never trimmed
+    raw = _raw_set(tmp_path / "b", {"death": [False, False]})
+    frames = finish_sprites(raw, {"death": False}, tmp_path / "b" / "out", frame_size=16, look="hd",
+                            palette_size=8)
+    assert len(frames["right"]["death"]) == 1
+
+
+def _animated_sample(tmp_path: Path, clips: list[str]) -> tuple[Path, list[dict]]:
+    """The mock rig's animated GLB of a small biped (as the rig stage writes it today)."""
+    parts = asset_parts("hero", "biped")
+    mesh = tmp_path / "mesh.glb"
+    builder = GlbBuilder(extras={"color": [0.6, 0.3, 0.2], "parts": _parts_info(parts),
+                                 "hints": {"kind": "hero", "archetype": "biped"}})
+    material = builder.add_material("albedo", (0.6, 0.3, 0.2))
+    builder.add_node("LOD0", builder.add_mesh("LOD0", build_mesh(parts, 1500), material))
+    builder.write(mesh)
+    biped = get_archetype("biped")
+    skeleton = MockRig(0).predict_skeleton(mesh=mesh, archetype=biped, out_dir=tmp_path / "rig",
+                                           progress=lambda s, f: None)
+    result = MockBlender(0).rig_and_animate(mesh_glb=mesh, skeleton=skeleton, archetype=biped, clips=clips,
+                                            attach=None, out_path=tmp_path / "rig" / "animated.glb",
+                                            progress=lambda s, f: None)
+    return result["glb"], result["clips"]
+
+
+def _feet_and_height(path: Path) -> tuple[int, int, int]:
+    """(lowest opaque row, opaque rows, centre column of the opaque pixels)."""
+    alpha = np.asarray(Image.open(path))[..., 3]
+    rows = np.flatnonzero(alpha.max(axis=1) > 0)
+    columns = np.flatnonzero(alpha.max(axis=0) > 0)
+    return int(rows[-1]), int(rows[-1] - rows[0] + 1), int((columns[0] + columns[-1]) // 2)
+
+
+@needs_blender
+def test_sprites_render_every_clip_and_direction_at_the_frame_size(tmp_path):
+    animated, clips = _animated_sample(tmp_path, ["idle", "walk", "death"])
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    seen, progress = progress_log()
+    fps, size = 8, 64
+    frames = tools.render_sprites(animated_glb=animated, clips=clips, directions=CAMERA_DIRECTIONS["three_quarter"],
+                                  camera_preset="three_quarter", frame_size=size, supersample=2, fps=fps,
+                                  look="hd", palette_size=32, out_dir=tmp_path / "sprites", progress=progress)
+    assert sorted(frames) == ["down_right", "up_right"]
+    for direction, by_clip in frames.items():
+        assert sorted(by_clip) == ["death", "idle", "walk"]
+        for clip in clips:
+            paths = by_clip[clip["name"]]
+            assert len(paths) == round(clip["duration"] * fps), (direction, clip)
+            for path in paths:
+                image = Image.open(path)
+                assert image.size == (size, size) and image.mode == "RGBA"
+                alpha = np.asarray(image)[..., 3]
+                assert alpha[0, 0] == 0 and alpha[-1, -1] == 0 and alpha[0, -1] == 0  # transparent background
+                assert alpha.max() == 255
+    assert seen[-1] == ("Sprites rendered", 1.0)
+    assert not (tmp_path / "sprites" / "raw").exists()
+
+    # one framing everywhere: the feet stand on the same row and the body keeps its height
+    standing = [_feet_and_height(frames[d][c][0]) for d in frames for c in ("idle", "walk")]
+    assert max(f for f, _, _ in standing) - min(f for f, _, _ in standing) <= 1
+    assert max(h for _, h, _ in standing) - min(h for _, h, _ in standing) <= 3
+    assert all(abs(x - size // 2) <= 3 for _, _, x in standing)  # centred over the feet, so flip_h mirrors
+
+    # rendered again with the same settings: the frames are reused, Blender is not started
+    log = tmp_path / "sprites" / "blender_render_sprites.log"
+    stamp = log.stat().st_mtime_ns
+    again = tools.render_sprites(animated_glb=animated, clips=clips, directions=CAMERA_DIRECTIONS["three_quarter"],
+                                 camera_preset="three_quarter", frame_size=size, supersample=2, fps=fps,
+                                 look="hd", palette_size=32, out_dir=tmp_path / "sprites", progress=progress)
+    assert again == frames and log.stat().st_mtime_ns == stamp
+
+
+@needs_blender
+def test_pixel_sprites_use_nearest_neighbour_and_the_palette_size(tmp_path):
+    animated, clips = _animated_sample(tmp_path, ["walk"])
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    frames = tools.render_sprites(animated_glb=animated, clips=clips, directions=CAMERA_DIRECTIONS["topdown_4"],
+                                  camera_preset="topdown_4", frame_size=48, supersample=3, fps=6, look="pixel",
+                                  palette_size=6, out_dir=tmp_path / "sprites", progress=lambda s, f: None)
+    assert sorted(frames) == ["down", "left", "right", "up"]
+    colours = set()
+    for by_clip in frames.values():
+        assert len(by_clip["walk"]) == 6
+        for path in by_clip["walk"]:
+            pixels = np.asarray(Image.open(path))
+            assert pixels.shape == (48, 48, 4)
+            assert set(np.unique(pixels[..., 3])) <= {0, 255}
+            colours |= {tuple(p) for p in pixels[pixels[..., 3] == 255][:, :3]}
+    assert 2 <= len(colours) <= 6
+
+
+@needs_blender
+def test_godot_run_with_real_blender_shows_sprites_at_gate_3(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    settings = load_settings(data_dir=tmp_path / "data", mock_step_delay=0.0, blender_path=BLENDER,
+                             adapters={"blender": "real"})
+    with TestClient(create_app(settings)) as client:
+        project = make_project(client, "godot", tmp_path / "GodotGame")
+        asset_id = client.post("/api/assets", json={
+            "project_id": project["id"], "kind": "monster", "name": "Moss Wolf",
+            "description": "a mossy forest wolf", "overrides": {
+                "camera_preset": "topdown_4", "clips": ["idle", "walk", "death"],
+                "render": {"fps": 6, "frame_size": {"monster": 48}}}}).json()["id"]
+        wait_for(client, asset_id, "waiting", gate=1)
+        client.post(f"/api/assets/{asset_id}/gates/1/approve", json={"candidate": 1})
+        wait_for(client, asset_id, "waiting", gate=2, timeout=300)
+        client.post(f"/api/assets/{asset_id}/gates/2/approve")
+        asset = wait_for(client, asset_id, "waiting", gate=3, timeout=300)
+        sprites = asset["outputs"]["rig"]["sprites"]
+        assert sprites["directions"] == ["down", "right", "up", "left"] and sprites["frame_size"] == 48
+        clips = {c["name"]: c for c in asset["outputs"]["rig"]["clips"]}
+        for direction in sprites["directions"]:
+            assert set(sprites["files"][direction]) == set(clips)
+            assert len(sprites["files"][direction]["walk"]) == round(clips["walk"]["duration"] * 6)
+        frame = client.get(f"/api/assets/{asset_id}/files/{sprites['files']['up']['walk'][0]}")
+        assert frame.status_code == 200 and Image.open(io.BytesIO(frame.content)).size == (48, 48)
+        client.post(f"/api/assets/{asset_id}/gates/3/approve")
+        done = wait_for(client, asset_id, "done", timeout=300)
+    assert any(f.endswith(".tres") for f in done["outputs"]["export"]["files"])

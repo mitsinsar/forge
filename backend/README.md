@@ -34,7 +34,7 @@ placeholders, so the whole API works end to end without a GPU:
 | Qwen (LLM) | archetype, slot / weapon class and prompt from keyword rules; forces the archetype's rest pose; folds in reject notes |
 | ComfyUI (image) | N candidate PNGs (default 4) of a placeholder body, coloured after colour words in the description |
 | Hunyuan3D (mesh) | textured GLB built from ellipsoids in the picked candidate's colour (real adapter: see below) |
-| Blender (real: clean-up, LODs, FBX) | clean-up to the triangle budget with LOD0/1/2 (100 / 50 / 20 %) and triangle counts; animated GLB with the clip set; sprite frames per clip and direction; a placeholder FBX |
+| Blender (real: clean-up, LODs, sprites, FBX) | clean-up to the triangle budget with LOD0/1/2 (100 / 50 / 20 %) and triangle counts; animated GLB with the clip set; sprite frames per clip and direction; a placeholder FBX |
 | UniRig (rig) | the archetype's template joints with a fit score |
 
 The engine exports (Unity folder, Godot atlases / SpriteFrames / PaperDoll, Aseprite JSON, zip)
@@ -176,10 +176,23 @@ scripts in `blender_scripts/` as `blender -b --factory-startup -P <script> -- <a
 - `export_fbx.py` (Unity export): mesh, armature and one take per clip, plus `<name>_LOD1`,
   `<name>_LOD2` beside `<name>_LOD0` (skinned like LOD0) for Unity's LOD Group; Y up, scale 1,
   no leaf bones, baked animation.
+- `render_sprites.py` (Godot, rig stage): Eevee on a transparent background with an
+  orthographic camera from each direction of the camera preset (`side`: right only, mirrored
+  with `flip_h`; `three_quarter`: down-right and up-right, tilted 30°; `topdown_4` and
+  `topdown_8`: 4 or 8 directions, tilted 50°). One framing holds the animation's full bounds over
+  every clip and direction, with the feet centred on the same row, so the character keeps its
+  size and ground line in every frame. Toon look: three flat light bands (Shader to RGB through a
+  constant ramp) times the albedo, and a one-pixel dark outline (inverted hull). Frames are
+  sampled at the profile's `fps` per clip and rendered at `frame_size × supersample`; the
+  backend then downscales them with Pillow: smooth (Lanczos) for the `hd` look, nearest
+  neighbour with hard alpha and one shared `palette_size` palette over all frames for `pixel`.
+  Fully transparent frames at the end of a clip that does not loop are dropped. A
+  `sprites.json` beside the frames lets a resumed or repeated render with the same settings
+  reuse them.
 
 Blender's output is kept as `blender_<script>.log` in the stage folder, its `PROGRESS` lines become
-the asset's progress, and a failure puts the log's last lines in the asset's error. Rigging and
-sprite rendering still use the mock until their real versions land.
+the asset's progress, and a failure puts the log's last lines in the asset's error. Rigging still uses the mock until
+its real version lands.
 
 ## Jobs and files
 

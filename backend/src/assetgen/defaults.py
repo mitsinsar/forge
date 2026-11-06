@@ -21,6 +21,11 @@ CAMERA_DIRECTIONS: dict[str, list[str]] = {
     "topdown_4": ["down", "right", "up", "left"],
     "topdown_8": ["down", "down_right", "right", "up_right", "up", "up_left", "left", "down_left"],
 }
+# Camera yaw per direction in degrees around the character (0 looks at its
+# face, 90 shows it facing screen right) and the camera's tilt per preset.
+DIRECTION_YAW: dict[str, float] = {"down": 0, "down_right": 45, "right": 90, "up_right": 135, "up": 180,
+                                   "up_left": 225, "left": 270, "down_left": 315}
+CAMERA_TILT: dict[str, float] = {"side": 0, "three_quarter": 30, "topdown_4": 50, "topdown_8": 50}
 CAMERA_MIRRORED: dict[str, dict[str, str]] = {
     "side": {"left": "right"},
     "three_quarter": {"down_left": "down_right", "up_left": "up_right"},
