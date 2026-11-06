@@ -154,7 +154,8 @@ def _check_loras(db: Database, profile: dict) -> None:
 
 
 def _profile_view(request: Request, profile: dict) -> dict:
-    view = dict(profile)
+    # Settings added since the profile was saved show with their defaults.
+    view = deep_merge(profile_defaults(), profile)
     view["reference_images"] = [
         {**r, "url": str(request.url_for("read_reference", profile_id=profile["id"], ref_id=r["id"]))}
         for r in profile.get("reference_images", [])

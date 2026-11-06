@@ -164,7 +164,7 @@ def _parts_info(parts: list[Part]) -> list[dict]:
 class FakeMesh(FakeBase):
     """Builds an ellipsoid body in the colour of the picked candidate."""
 
-    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True):
+    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True, quality=None):
         progress("Reconstructing shape", 0.1)
         self._wait()
         meta = {}
@@ -204,7 +204,7 @@ class FakeRig(FakeBase):
 
 
 class FakeBlender(FakeBase):
-    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress):
+    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress, remove_floaters=True):
         info = read_glb_json(raw_mesh).get("extras") or {}
         if "parts" not in info:  # a real mesh (Hunyuan3D): kept as made; the real Blender adapter decimates it
             return self._pass_through(raw_mesh, triangles, out_dir, progress)

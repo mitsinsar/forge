@@ -51,6 +51,21 @@ export const STAGE_LABEL: Record<Stage, string> = {
 
 export const isCharacter = (kind: Kind) => kind !== "gear" && kind !== "weapon";
 
+/** Mesh quality presets: diffusion steps and surface resolution of the image-to-mesh run. */
+export const MESH_PRESETS: { value: string; label: string; steps: number; resolution: number; hint: string }[] = [
+  { value: "fast", label: "Fast", steps: 5, resolution: 256, hint: "Rough shape, for trying ideas" },
+  { value: "balanced", label: "Balanced", steps: 10, resolution: 380, hint: "Good shape" },
+  { value: "high", label: "High", steps: 20, resolution: 512, hint: "Fine detail (the default)" },
+  { value: "max", label: "Maximum", steps: 40, resolution: 640, hint: "Finest detail, slowest; needs the most VRAM" },
+];
+
+export const MESH_RESOLUTIONS = [256, 320, 380, 448, 512, 640, 768];
+
+/** The preset matching these settings, or "custom". */
+export function meshPreset(steps: number, resolution: number): string {
+  return MESH_PRESETS.find((p) => p.steps === steps && p.resolution === resolution)?.value ?? "custom";
+}
+
 export function timeAgo(iso: string): string {
   const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (seconds < 60) return "just now";

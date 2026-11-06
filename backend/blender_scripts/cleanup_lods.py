@@ -4,10 +4,12 @@ budget and make the LODs.
 Arguments (args.json)::
 
     {"raw_mesh": "raw.glb", "out_glb": "mesh.glb", "triangles": 8000,
-     "lod_ratios": [0.5, 0.2], "height": 1.8, "fit": "height" | "longest"}
+     "lod_ratios": [0.5, 0.2], "height": 1.8, "fit": "height" | "longest",
+     "remove_floaters": true}
 
-Steps: import, join, merge by distance, remove loose parts and interior
-faces, fix normals, apply transforms, scale to ``height`` (along Z, or along
+Steps: import, join, merge by distance, remove loose parts, floaters (with
+``remove_floaters``: small pieces that do not touch the main body, which
+image-to-3D models leave around it) and interior faces, fix normals, apply transforms, scale to ``height`` (along Z, or along
 the longest side for ``fit = "longest"``), put the origin at the feet,
 decimate to ``triangles``, then copy and decimate the LODs to ``lod_ratios``
 of LOD0. The GLB holds one node per level, named ``LOD0``, ``LOD1``...
@@ -25,12 +27,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bmesh  # noqa: E402
 import bpy  # noqa: E402
 from mathutils import Matrix, Vector  # noqa: E402
+from mathutils.kdtree import KDTree  # noqa: E402
 
 from _common import empty_scene, import_gltf, progress, run, select_only, triangles  # noqa: E402
 
 # Islands smaller than both of these are floating debris and are removed.
 DEBRIS_FACE_SHARE = 0.005
 DEBRIS_SIZE_SHARE = 0.05
+# Floaters: pieces under this share of the faces whose nearest point is farther than
+# FLOATER_GAP_SHARE of the model's size from the main body. Pieces that touch the body
+# (separate armour plates, a sword in the hand) are kept.
+FLOATER_FACE_SHARE = 0.05
+FLOATER_GAP_SHARE = 0.01
+FLOATER_SAMPLES = 400  # vertices of a piece checked against the body
 
 
 def join_meshes(objects) -> bpy.types.Object:
@@ -81,7 +90,23 @@ def islands(bm) -> list[list]:
     return groups
 
 
-def clean(obj) -> dict:
+def body_tree(group) -> KDTree:
+    verts = {v for f in group for v in f.verts}
+    tree = KDTree(len(verts))
+    for i, v in enumerate(verts):
+        tree.insert(v.co, i)
+    tree.balance()
+    return tree
+
+
+def gap_to(tree: KDTree, group) -> float:
+    """The smallest distance from a sample of the piece's vertices to the body."""
+    verts = list({v for f in group for v in f.verts})
+    step = max(1, len(verts) // FLOATER_SAMPLES)
+    return min(tree.find(v.co)[2] for v in verts[::step])
+
+
+def clean(obj, remove_floaters: bool = True) -> dict:
     mesh = obj.data
     bm = bmesh.new()
     bm.from_mesh(mesh)
@@ -99,16 +124,21 @@ def clean(obj) -> dict:
     bm.faces.index_update()
     groups = islands(bm)
     total = len(bm.faces)
-    debris = []
+    debris, floaters, floater_pieces = [], [], 0
     if len(groups) > 1:
         largest = max(groups, key=len)
+        tree = body_tree(largest) if remove_floaters else None
         for group in groups:
             if group is largest:
                 continue
             points = [v.co for f in group for v in f.verts]
             if len(group) < total * DEBRIS_FACE_SHARE and diagonal(points) < size * DEBRIS_SIZE_SHARE:
                 debris.extend(group)
-    bmesh.ops.delete(bm, geom=debris, context="FACES")
+            elif tree is not None and len(group) < total * FLOATER_FACE_SHARE \
+                    and gap_to(tree, group) > size * FLOATER_GAP_SHARE:
+                floaters.extend(group)
+                floater_pieces += 1
+    bmesh.ops.delete(bm, geom=debris + floaters, context="FACES")
     bmesh.ops.triangulate(bm, faces=bm.faces[:])
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     bm.to_mesh(mesh)
@@ -134,7 +164,7 @@ def clean(obj) -> dict:
         poly.use_smooth = True
     mesh.update()
     return {"merged_vertices": merged, "loose_vertices": len(loose), "debris_faces": len(debris),
-            "interior_faces": interior}
+            "floater_faces": len(floaters), "floater_pieces": floater_pieces, "interior_faces": interior}
 
 
 def fit(obj, height: float, mode: str) -> float:
@@ -186,7 +216,7 @@ def main(args: dict) -> dict:
     raw_triangles = triangles(obj)
 
     progress(0.15, "Cleaning up the mesh")
-    removed = clean(obj)
+    removed = clean(obj, bool(args.get("remove_floaters", True)))
 
     progress(0.35, "Scaling and placing the origin")
     scale = fit(obj, float(args["height"]), args.get("fit", "height"))

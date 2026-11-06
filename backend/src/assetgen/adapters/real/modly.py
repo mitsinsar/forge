@@ -28,7 +28,7 @@ import zlib
 from pathlib import Path
 
 from ...config import Settings
-from .mesh_common import MeshError, finish_textured_glb, is_oom, write_atomic
+from .mesh_common import MeshError, finish_textured_glb, is_oom, quality_params, write_atomic
 
 RUN_FILE = "modly_run.json"
 DOWNLOAD_FILE = "modly.glb"
@@ -99,9 +99,9 @@ class ModlyMesh:
 
     # ---- the run --------------------------------------------------------------
 
-    def _submit(self, image: Path, hints: dict) -> str:
+    def _submit(self, image: Path, hints: dict, quality: dict) -> str:
         seed = zlib.crc32(f"{hints.get('asset_id', '')}:{hints.get('attempt', 1)}".encode()) % (2 ** 31)
-        params = {"enable_texture": True, "seed": seed, **self.extra_params}
+        params = {"enable_texture": True, "seed": seed, **self.extra_params, **quality_params(quality)}
         body, content_type = _multipart(
             {"model_id": self.model, "collection": COLLECTION, "params": json.dumps(params)},
             {"image": (Path(image).name, Path(image).read_bytes(), "image/png")})
@@ -164,7 +164,7 @@ class ModlyMesh:
 
     # ---- the adapter ------------------------------------------------------------
 
-    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True):
+    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True, quality=None):
         out_path = Path(out_path)
         directory = out_path.parent
         download = directory / DOWNLOAD_FILE
@@ -175,7 +175,7 @@ class ModlyMesh:
                 progress("Resuming the Modly run", 0.05)
             else:
                 progress("Sending the image to Modly", 0.02)
-                run = {"run_id": self._submit(Path(image), hints), "url": self.url, "model": self.model,
+                run = {"run_id": self._submit(Path(image), hints, quality or {}), "url": self.url, "model": self.model,
                        "sent_at": time.time()}
                 run_file.write_text(json.dumps(run), encoding="utf-8")
             workspace_path = self._wait(run, run_file, progress)

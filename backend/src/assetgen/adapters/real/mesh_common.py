@@ -26,6 +26,12 @@ def is_oom(text: str) -> bool:
     return any(word in lowered for word in OOM_WORDS)
 
 
+def quality_params(quality: dict) -> dict:
+    """The profile's mesh settings under the names Hunyuan3D models take (in Modly and in api_server.py)."""
+    names = {"steps": "num_inference_steps", "resolution": "octree_resolution", "guidance": "guidance_scale"}
+    return {names[k]: v for k, v in (quality or {}).items() if k in names and v is not None}
+
+
 def write_atomic(path: Path, data: bytes) -> None:
     tmp = path.with_name(path.name + ".part")
     tmp.write_bytes(data)

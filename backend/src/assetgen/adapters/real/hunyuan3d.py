@@ -27,7 +27,7 @@ from PIL import Image
 
 from ... import imaging
 from ...config import Settings
-from .mesh_common import MeshError, finish_textured_glb
+from .mesh_common import MeshError, finish_textured_glb, quality_params
 from .mesh_common import is_oom as _is_oom
 from .mesh_common import write_atomic as _write_atomic
 
@@ -75,7 +75,7 @@ class Hunyuan3DMesh:
 
     # ---- the job --------------------------------------------------------------
 
-    def _submit(self, cutout: Path, has_alpha: bool, hints: dict) -> str:
+    def _submit(self, cutout: Path, has_alpha: bool, hints: dict, quality: dict) -> str:
         seed = zlib.crc32(f"{hints.get('asset_id', '')}:{hints.get('attempt', 1)}".encode()) % (2 ** 32)
         body = {
             "image": base64.b64encode(cutout.read_bytes()).decode("ascii"),
@@ -83,6 +83,7 @@ class Hunyuan3DMesh:
             "remove_background": not has_alpha,
             "texture": True,
             "seed": seed,
+            **quality_params(quality),
         }
         answer = self._request("POST", "/send", body)
         uid = answer.get("uid")
@@ -131,7 +132,7 @@ class Hunyuan3DMesh:
 
     # ---- the adapter ------------------------------------------------------------
 
-    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True):
+    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True, quality=None):
         out_path = Path(out_path)
         directory = out_path.parent
         download = directory / DOWNLOAD_FILE
@@ -156,7 +157,8 @@ class Hunyuan3DMesh:
                 progress("Resuming the Hunyuan3D job", 0.1)
             else:
                 progress("Sending the image to Hunyuan3D", 0.05)
-                job = {"uid": self._submit(cutout, has_alpha, hints), "url": self.url, "sent_at": time.time()}
+                job = {"uid": self._submit(cutout, has_alpha, hints, quality or {}), "url": self.url,
+                       "sent_at": time.time()}
                 job_file.write_text(json.dumps(job), encoding="utf-8")
             glb = self._wait(job, job_file, progress)
             _write_atomic(download, glb)

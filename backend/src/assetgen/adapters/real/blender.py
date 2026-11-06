@@ -51,15 +51,16 @@ class BlenderTools:
         return run_script(self.blender, script, args, work_dir=out_dir,
                           log_path=out_dir / f"blender_{Path(script).stem}.log", progress=progress)
 
-    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress):
+    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress, remove_floaters=True):
         out_dir = Path(out_dir)
         glb = out_dir / "mesh.glb"
         size, fit = MODEL_SIZES.get(kind, MODEL_SIZES["hero"])
         result = self._run("cleanup_lods.py", {
             "raw_mesh": str(Path(raw_mesh).resolve()), "out_glb": str(glb.resolve()), "triangles": int(triangles),
-            "lod_ratios": [float(r) for r in lod_ratios], "height": size, "fit": fit}, out_dir, progress)
+            "lod_ratios": [float(r) for r in lod_ratios], "height": size, "fit": fit,
+            "remove_floaters": bool(remove_floaters)}, out_dir, progress)
         merge_glb_extras(Path(raw_mesh), glb, {"triangle_budget": int(triangles)})
-        return {"glb": glb, "lods": result["lods"]}
+        return {"glb": glb, "lods": result["lods"], "removed": result.get("removed")}
 
     def rig_and_animate(self, **kwargs):
         from .. import RIG_NOT_BUILT, RigNotBuilt  # the adapters package imports this module

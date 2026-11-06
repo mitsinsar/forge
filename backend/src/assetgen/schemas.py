@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+MAX_EXTRA_LODS = 8
 
 Engine = Literal["unity", "godot"]
 Kind = Literal["hero", "monster", "boss", "gear", "weapon"]
@@ -69,7 +71,15 @@ class PerKind(Strict):
 class Budgets(Strict):
     triangles: PerKind | None = None
     texture: PerKind | None = None
-    lod_ratios: list[float] | None = Field(None, min_length=0, max_length=4)
+    lod_ratios: list[Annotated[float, Field(gt=0, lt=1)]] | None = Field(
+        None, min_length=0, max_length=MAX_EXTRA_LODS, description="Extra LODs as fractions of LOD0, largest first.")
+
+
+class MeshQuality(Strict):
+    steps: int | None = Field(None, ge=1, le=100, description="Diffusion steps of the image-to-mesh model.")
+    resolution: int | None = Field(None, ge=128, le=1024, description="Octree (marching cubes) resolution.")
+    guidance: float | None = Field(None, ge=1, le=15, description="How closely the shape follows the image.")
+    remove_floaters: bool | None = Field(None, description="Drop small pieces that do not touch the body.")
 
 
 class ProfileSettings(Strict):
@@ -81,6 +91,7 @@ class ProfileSettings(Strict):
     loras: list[LoraRef] | None = None
     camera_preset: CameraPreset | None = None
     delight: bool | None = None
+    mesh: MeshQuality | None = None
     candidates: int | None = Field(None, ge=1, le=8)
     clips: list[str] | None = None
     biped_extra_clips: list[str] | None = None

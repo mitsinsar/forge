@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, type AssetInput, type Kind, type Slot, type WeaponClass } from "../api/client";
 import { keys, useApiMutation, useArchetypes, useMeta, useProfiles, useProjects } from "../api/queries";
-import { KIND_LABEL, isCharacter, label, options } from "../labels";
+import { KIND_LABEL, isCharacter, label, MESH_PRESETS, meshPreset, options } from "../labels";
 import {
   Button,
   Card,
@@ -51,6 +51,7 @@ export function NewAssetPage() {
   const [weaponClass, setWeaponClass] = useState<WeaponClass | "">("");
   const [profileChoice, setProfileId] = useState<string | null>(null);
   const [triangles, setTriangles] = useState("");
+  const [meshQuality, setMeshQuality] = useState("");
   const [start, setStart] = useState<Start>("describe");
   const [image, setImage] = useState<File | null>(null);
   const preview = usePreviewUrl(image);
@@ -68,6 +69,9 @@ export function NewAssetPage() {
   const profileTriangles = projectProfiles.find((p) => p.id === profileId)?.budgets.triangles[kind]
     ?? meta.data?.profile_defaults.budgets.triangles[kind];
   const triangleLimit = Number.parseInt(triangles, 10);
+  const profileMesh = projectProfiles.find((p) => p.id === profileId)?.mesh ?? meta.data?.profile_defaults.mesh;
+  const profilePreset = profileMesh ? meshPreset(profileMesh.steps, profileMesh.resolution) : "custom";
+  const chosenMesh = MESH_PRESETS.find((p) => p.value === meshQuality);
 
   if (projects.isPending || meta.isPending) return <Loading />;
   if (!projects.data?.length)
@@ -91,7 +95,13 @@ export function NewAssetPage() {
         slot: kind === "gear" ? slot : undefined,
         weapon_class: kind === "weapon" && weaponClass ? weaponClass : undefined,
         profile_id: profileId || undefined,
-        overrides: triangleLimit > 0 ? { budgets: { triangles: { [kind]: triangleLimit } } } : undefined,
+        overrides:
+          triangleLimit > 0 || chosenMesh
+            ? {
+                ...(triangleLimit > 0 ? { budgets: { triangles: { [kind]: triangleLimit } } } : {}),
+                ...(chosenMesh ? { mesh: { steps: chosenMesh.steps, resolution: chosenMesh.resolution } } : {}),
+              }
+            : undefined,
       },
       { onSuccess: (asset) => navigate(`/asset/${asset.id}`) },
     );
@@ -254,6 +264,20 @@ export function NewAssetPage() {
                     value={triangles}
                     onChange={(e) => setTriangles(e.target.value)}
                     placeholder={profileTriangles ? `${profileTriangles.toLocaleString()} (profile)` : undefined}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Mesh quality"
+                hint={chosenMesh ? `${chosenMesh.steps} steps, resolution ${chosenMesh.resolution}. ${chosenMesh.hint}.` : "Optional. Leave it on the style profile's setting, or pick one for this asset."}
+              >
+                {(id) => (
+                  <Select
+                    id={id}
+                    value={meshQuality}
+                    onChange={(e) => setMeshQuality(e.target.value)}
+                    placeholder={`Profile (${MESH_PRESETS.find((p) => p.value === profilePreset)?.label ?? "custom"})`}
+                    options={MESH_PRESETS.map((p) => ({ value: p.value, label: p.label }))}
                   />
                 )}
               </Field>
