@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import re
 import shutil
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Literal
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile,
                      WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse
+from PIL import Image
 
 from .archetypes import get_archetype, load_archetypes
 from .db import Database, new_id, now
@@ -355,6 +357,34 @@ def _default_name(description: str) -> str:
 
 @router.post("/assets", tags=["assets"], status_code=201, summary="Create an asset and queue its first stage")
 def create_asset(request: Request, body: AssetCreate):
+    return _create_asset(request, body)
+
+
+MAX_SOURCE_BYTES = 30 * 1024 * 1024
+
+
+@router.post("/assets/from-image", tags=["assets"], status_code=201,
+             summary="Create an asset from your own image (skips the generated previews)")
+async def create_asset_from_image(request: Request, file: UploadFile = File(..., description="PNG, JPEG or WebP"),
+                                  asset: str = Form(..., description="The same JSON as POST /assets")):
+    try:
+        body = AssetCreate.model_validate_json(asset)
+    except ValueError as exc:
+        raise HTTPException(422, f"asset: {exc}") from None
+    data = await file.read(MAX_SOURCE_BYTES + 1)
+    if len(data) > MAX_SOURCE_BYTES:
+        raise HTTPException(413, "the image is larger than 30 MB")
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            if opened.format not in ("PNG", "JPEG", "WEBP"):
+                raise HTTPException(422, "the image must be PNG, JPEG or WebP")
+            image = opened.convert("RGBA")
+    except (OSError, Image.DecompressionBombError):
+        raise HTTPException(422, "the file is not a readable image") from None
+    return _create_asset(request, body, source=image)
+
+
+def _create_asset(request: Request, body: AssetCreate, source: Image.Image | None = None) -> dict:
     pipeline = pipeline_of(request)
     db = pipeline.db
     project = _found(db.get("projects", body.project_id), "project")
@@ -382,7 +412,12 @@ def create_asset(request: Request, body: AssetCreate):
         "status": "queued", "stage": "prompt", "gate": None, "step": "Waiting for the worker", "progress": 0.0,
         "error": None, "notes": [], "attempts": {}, "approvals": {}, "chosen_candidate": None, "outputs": {},
         "training_candidate": False, "training_candidate_set": False, "queued_at": now(),
+        "source": "upload" if source is not None else "generated",
     })
+    if source is not None:
+        path = pipeline.source_image(asset["id"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source.save(path)
     pipeline.enqueue(asset["id"], "prompt")
     return asset_view(request, db.get("assets", asset["id"]))
 

@@ -168,10 +168,12 @@ export interface SpritePreview {
 
 export interface AssetOutputs {
   prompt?: {
+    /** "upload": the single candidate is the user's own image; no image model ran. */
+    source?: "upload";
     expansion: { archetype: string; prompt: string; negative_prompt: string; flags?: string[] };
     prompt: string;
     negative_prompt: string;
-    base_model: BaseModel;
+    base_model: BaseModel | null;
     attempt: number;
     /** Lines from the image stage: LoRAs used, reference images applied or skipped. */
     log?: string[];
@@ -211,6 +213,8 @@ export interface Asset {
   slot: Slot | null;
   weapon_class: WeaponClass | null;
   grip: Grip | null;
+  /** "upload" when made from the user's own image; missing on older assets. */
+  source?: "generated" | "upload";
   status: AssetStatus;
   stage: Stage;
   gate: Gate | null;
@@ -358,6 +362,12 @@ export const api = {
   assets: (filters: AssetFilters) => request<Asset[]>("GET", `/assets${query(filters)}`),
   asset: (id: string) => request<Asset>("GET", `/assets/${id}`),
   createAsset: (input: AssetInput) => request<Asset>("POST", "/assets", input),
+  createAssetFromImage: (input: AssetInput, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("asset", JSON.stringify(input));
+    return request<Asset>("POST", "/assets/from-image", form);
+  },
   deleteAsset: (id: string) => request<void>("DELETE", `/assets/${id}`),
   approve: (id: string, gate: Gate, candidate?: number) =>
     request<Asset>("POST", `/assets/${id}/gates/${gate}/approve`, candidate ? { candidate } : {}),
