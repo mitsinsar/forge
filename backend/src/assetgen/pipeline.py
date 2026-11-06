@@ -353,16 +353,17 @@ class Pipeline:
         shutil.copy2(chosen, source)
         raw = directory / "raw.glb"
         texture = directory / "texture.png"
+        delight = bool(settings.get("delight", True))
         if not (raw.is_file() and texture.is_file()):
             self.adapters.mesh.image_to_mesh(
                 image=source, texture_size=int(settings["budgets"]["texture"][asset["kind"]]), out_path=raw,
-                progress=lambda s, f: progress(s, 0.5 * f), hints=self._hints(asset))
+                progress=lambda s, f: progress(s, 0.5 * f), hints=self._hints(asset), delight=delight)
         triangles = int(settings["budgets"]["triangles"][asset["kind"]])
         result = self.adapters.blender.cleanup_and_lods(
             raw_mesh=raw, triangles=triangles, lod_ratios=list(settings["budgets"]["lod_ratios"]),
             out_dir=directory, progress=lambda s, f: progress(s, 0.5 + 0.5 * f))
         return {"glb": self._rel(asset["id"], result["glb"]), "texture": self._rel(asset["id"], texture),
-                "triangle_budget": triangles, "lods": result["lods"]}
+                "triangle_budget": triangles, "lods": result["lods"], "delight": delight}
 
     def _stage_rig(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)

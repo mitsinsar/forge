@@ -41,7 +41,7 @@ def _check(name: str, settings: Settings) -> tuple[bool, str]:
     if name == "image":
         return _url_check(settings.comfyui_url.rstrip("/") + "/system_stats")
     if name == "mesh":
-        return _url_check(settings.hunyuan3d_url)
+        return _url_check(settings.hunyuan3d_url.rstrip("/") + "/health")
     if name == "blender":
         return _path_check("Blender", settings.blender_path)
     unirig = _path_check("UniRig", settings.unirig_path)

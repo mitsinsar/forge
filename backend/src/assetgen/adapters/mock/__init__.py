@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, PngImagePlugin
 
+from ... import imaging
 from ...defaults import GEAR_SLOTS, LOOPING_CLIPS
 from ..base import Progress
 from .draw import Camera, draw_parts, font
@@ -166,7 +167,7 @@ def _parts_info(parts: list[Part]) -> list[dict]:
 class MockMesh(MockBase):
     """Builds an ellipsoid body in the colour of the picked candidate."""
 
-    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints):
+    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True):
         progress("Reconstructing shape", 0.1)
         self._wait()
         meta = {}
@@ -186,7 +187,8 @@ class MockMesh(MockBase):
         builder.write(out_path)
         texture = out_path.with_name("texture.png")
         with Image.open(image) as img:
-            img.convert("RGB").resize((texture_size, texture_size), Image.Resampling.LANCZOS).save(texture)
+            albedo = img.convert("RGB").resize((texture_size, texture_size), Image.Resampling.LANCZOS)
+        (imaging.delight(albedo) if delight else albedo).save(texture)
         progress("Mesh ready", 1.0)
         return {"glb": out_path, "texture": texture}
 
@@ -206,7 +208,9 @@ class MockRig(MockBase):
 
 class MockBlender(MockBase):
     def cleanup_and_lods(self, *, raw_mesh, triangles, lod_ratios, out_dir, progress):
-        info = read_glb_json(raw_mesh)["extras"]
+        info = read_glb_json(raw_mesh).get("extras") or {}
+        if "parts" not in info:  # a real mesh (Hunyuan3D): shown as made until real Blender decimates it
+            return self._pass_through(raw_mesh, triangles, out_dir, progress)
         parts, color = _parts_from(info["parts"]), tuple(info["color"])
         progress("Cleaning up mesh", 0.2)
         self._wait()
@@ -228,8 +232,26 @@ class MockBlender(MockBase):
         progress("LODs ready", 1.0)
         return {"glb": glb, "lods": lods}
 
+    def _pass_through(self, raw_mesh, triangles, out_dir, progress):
+        progress("Keeping the mesh as made (mock Blender)", 0.5)
+        gltf, binary = imaging.read_glb(raw_mesh)
+        color = (0.7, 0.7, 0.7)
+        albedo = imaging.albedo_image(gltf, binary)
+        if albedo is not None:
+            color = tuple(c / 255 for c in albedo.convert("RGB").resize((1, 1), Image.Resampling.BOX).getpixel((0, 0)))
+        count = imaging.triangle_count(gltf)
+        gltf["extras"] = {**(gltf.get("extras") or {}), "passthrough": True, "color": list(color),
+                          "triangle_budget": triangles}
+        glb = out_dir / "mesh.glb"
+        imaging.write_glb(glb, gltf, binary)
+        progress("Mesh kept", 1.0)
+        return {"glb": glb, "lods": [{"level": 0, "ratio": 1.0, "triangles": count}]}
+
     def rig_and_animate(self, *, mesh_glb, skeleton, archetype, clips, attach, out_path, progress):
-        info = read_glb_json(mesh_glb)["extras"]
+        info = read_glb_json(mesh_glb).get("extras") or {}
+        if "parts" not in info:  # a real mesh: the mock rig animates a placeholder body of the archetype
+            info = {**info, "parts": _parts_info(asset_parts("hero", archetype["id"])),
+                    "color": info.get("color", (0.7, 0.7, 0.7))}
         parts, color = _parts_from(info["parts"]), tuple(info["color"])
         if attach and attach.get("kind") == "weapon":
             parts = asset_parts("weapon", "biped", weapon_class=attach.get("weapon_class"),

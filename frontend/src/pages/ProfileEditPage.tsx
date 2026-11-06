@@ -39,6 +39,7 @@ function toInput(source: Profile | Meta["profile_defaults"], name: string, proje
     negative_prompt: source.negative_prompt,
     loras: source.loras.map((l) => ({ ...l, weight: Math.round(l.weight * 100) / 100 })),
     camera_preset: source.camera_preset,
+    delight: source.delight ?? true,
     candidates: source.candidates,
     clips: [...source.clips],
     biped_extra_clips: [...source.biped_extra_clips],
@@ -262,6 +263,12 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
             )}
             <ErrorNotice error={upload.error ?? removeRef.error} />
           </Stack>
+        </Card>
+
+        <Card title="Mesh" subtitle="Used for the gate 2 mesh from Hunyuan3D.">
+          <Field group label="Lighting" hint="Hunyuan3D bakes light and shade into the texture. This evens out its brightness so the game's own lights do the shading. Turn it off and reject at gate 2 to compare.">
+            {() => <Checkbox checked={form.delight} onChange={(on) => set("delight", on)} label="Even out baked lighting" />}
+          </Field>
         </Card>
 
         <Card title="Camera and sprite render" subtitle="Used for Godot sprite sheets.">

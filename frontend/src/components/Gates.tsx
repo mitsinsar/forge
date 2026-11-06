@@ -283,6 +283,7 @@ export function Gate2({ asset }: { asset: Asset }) {
         <Text small faint>
           Drag to orbit, scroll to zoom.
           {mesh && ` LODs at ${mesh.lods.map((l) => `${Math.round(l.ratio * 100)}%`).join(" / ")}.`}
+          {mesh?.delight !== undefined && (mesh.delight ? " Baked lighting evened out." : " Baked lighting kept as made.")}
         </Text>
         <GateBar gate={2} asset={asset} approveLabel="Approve mesh" />
       </Stack>

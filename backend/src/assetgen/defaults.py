@@ -50,6 +50,8 @@ PROFILE_DEFAULTS: dict = {
     "negative_prompt": "cropped, blurry, text, watermark, multiple characters, cast shadow",
     "loras": [],
     "camera_preset": "side",
+    # Even out the light and shade Hunyuan3D bakes into the albedo.
+    "delight": True,
     "candidates": 4,
     "clips": list(STANDARD_CLIPS),
     "biped_extra_clips": list(BIPED_EXTRA_CLIPS),

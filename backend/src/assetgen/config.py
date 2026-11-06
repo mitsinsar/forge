@@ -44,6 +44,8 @@ class Settings:
     qwen_url: str = "http://127.0.0.1:11434/v1"
     qwen_model: str = "qwen3"
     hunyuan3d_url: str = "http://127.0.0.1:8081"
+    hunyuan3d_timeout: float = 1800.0  # seconds one image-to-mesh job may take
+    hunyuan3d_poll: float = 2.0  # seconds between status checks
     blender_path: Path = Path("blender")
     unirig_path: Path = Path("UniRig")
     python_path: Path = Path("python")

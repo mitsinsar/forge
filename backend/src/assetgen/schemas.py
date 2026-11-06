@@ -80,6 +80,7 @@ class ProfileSettings(Strict):
     negative_prompt: str | None = None
     loras: list[LoraRef] | None = None
     camera_preset: CameraPreset | None = None
+    delight: bool | None = None
     candidates: int | None = Field(None, ge=1, le=8)
     clips: list[str] | None = None
     biped_extra_clips: list[str] | None = None
