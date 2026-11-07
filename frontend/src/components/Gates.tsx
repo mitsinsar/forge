@@ -33,6 +33,7 @@ import {
 import { SpritePlayer } from "../viewers/SpritePlayer";
 import { ModelViewer } from "./Viewer";
 import { CheckBadge, ChecksCard } from "./Checks";
+import { JointGuide } from "./JointGuide";
 import type { Vec3 } from "../viewers/ModelViewer";
 
 const isWeaponKind = (kind: string) => kind === "weapon";
@@ -535,6 +536,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
   const [editing, setEditing] = useState(false);
   const [moved, setMoved] = useState<Record<string, Vec3>>({});
   const [mirror, setMirror] = useState(true);
+  const [pickedJoint, setPickedJoint] = useState<string>();
   const movedCount = Object.keys(moved).length;
   const rerig = useApiMutation((joints: Record<string, Vec3>) => api.reject(asset.id, 3, { joints }), [
     keys.assets,
@@ -589,6 +591,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
                   moved={moved}
                   editJoints={editing}
                   onJointMove={moveJoint}
+                  onJointPick={setPickedJoint}
                 />
               )}
             </Stack>
@@ -669,6 +672,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
                 The model holds its rest pose. Click a joint, then drag the arrows. Orange joints are moved.
               </Text>
             )}
+            {editing && <JointGuide picked={pickedJoint} onPick={setPickedJoint} />}
             <Row>
               <Button
                 variant="primary"
