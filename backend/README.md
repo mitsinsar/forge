@@ -150,9 +150,12 @@ rejection (`joints`); they replace UniRig's targets for those joints, also when 
 add up over rejections (`joint_overrides` on the asset) and `{}` goes back to the detected joints.
 
 Each joint also reports its bone's direction (`axis`) and which way it faces (`front`: the side a
-knee cap or the chest is on). The editor draws `front` as a short green line from each joint, and
-**Twist** turns the picked joint about its own bone in 5° steps (mirrored: the other side turns the
-opposite way, so both knees turn out together). Twists are sent as `twists` (degrees by joint),
+knee cap or the chest is on). The editor draws `front` as an arrow from each joint (green when it
+points forward, amber when turned away; a faint white arrow shows forward for the picked joint),
+with handles and arrows a fixed size on screen at any zoom. **Move** drags the picked joint with
+arrows, **Twist** with a ring about its bone; the twist field turns it in 5° steps, **Face forward**
+and **Face all forward** turn joints to point forward (mirrored: the other side turns the opposite
+way, so both knees turn out together). Twists are sent as `twists` (degrees by joint),
 kept as `joint_twists` and applied after the joints are placed; `joints: {}` clears them too. The
 viewer's **Front / Left / Back / Right / Top** buttons look straight along an axis, **Flat**
 removes the perspective, and the editor has a wireframe switch.

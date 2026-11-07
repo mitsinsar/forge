@@ -555,6 +555,31 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
     return Object.fromEntries(Object.entries(twisted).map(([k, v]) => [k, v - (done[k] ?? 0)]));
   }, [twisted, rig?.joint_twists]);
   const [jointWireframe, setJointWireframe] = useState(false);
+  const [jointMode, setJointMode] = useState<"move" | "twist">("move");
+  const currentTwist = (name: string) => twisted[name] ?? rig?.joint_twists?.[name] ?? 0;
+  /** The twist that turns a joint's facing forward (Blender: -Y), square to its bone; null when the
+   *  bone itself points forward. Relative to the rig's result, which already has its twists. */
+  const forwardTwist = (name: string): number | null => {
+    const joint = rig?.joints?.[name];
+    if (!joint?.axis || !joint.front) return null;
+    const [a, f] = [joint.axis, joint.front];
+    const along = -a[1]; // forward (0, -1, 0) along the bone
+    const want = [0 - along * a[0], -1 - along * a[1], 0 - along * a[2]];
+    const size = Math.hypot(want[0], want[1], want[2]);
+    if (size < 0.3) return null;
+    const cross = [f[1] * want[2] - f[2] * want[1], f[2] * want[0] - f[0] * want[2], f[0] * want[1] - f[1] * want[0]];
+    const turn = Math.atan2(cross[0] * a[0] + cross[1] * a[1] + cross[2] * a[2], f[0] * want[0] + f[1] * want[1] + f[2] * want[2]);
+    return (rig?.joint_twists?.[name] ?? 0) + (turn * 180) / Math.PI;
+  };
+  const faceAllForward = () =>
+    setTwisted((current) => {
+      const next = { ...current };
+      for (const name of Object.keys(rig?.joints ?? {})) {
+        const wanted = forwardTwist(name);
+        if (wanted !== null && Math.abs(wanted - currentTwist(name)) >= 2) next[name] = Math.round(wanted);
+      }
+      return next;
+    });
   const movedCount = Object.keys(moved).length;
   const rerig = useApiMutation(
     // Only what changed is sent: an empty set of joints means "back to the detected joints".
@@ -618,6 +643,9 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
                   twists={shownTwists}
                   onJointMove={moveJoint}
                   onJointPick={setPickedJoint}
+                  pickedJoint={pickedJoint}
+                  jointMode={jointMode}
+                  onJointTwist={(name, degrees) => twistJoint(name, (rig?.joint_twists?.[name] ?? 0) + degrees)}
                   wireframe={editing && jointWireframe}
                 />
               )}
@@ -696,15 +724,36 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
               {editing && <Checkbox label="Wireframe" checked={jointWireframe} onChange={setJointWireframe} />}
             </Row>
             {editing && (
+              <Row>
+                <Tabs
+                  label="What dragging does"
+                  value={jointMode}
+                  onChange={setJointMode}
+                  items={[
+                    { value: "move", label: "Move" },
+                    { value: "twist", label: "Twist" },
+                  ]}
+                />
+                <Button size="sm" onClick={faceAllForward}>
+                  Face all forward
+                </Button>
+                <Text small muted>
+                  Each joint's arrow shows the way it faces; all of them should point forward, where the face looks.
+                  Green: it does. Amber: turned away. The faint white arrow is forward for the picked joint.
+                </Text>
+              </Row>
+            )}
+            {editing && (
               <Text small muted>
-                The model holds its rest pose. Click a joint, then drag the arrows. Orange joints are moved. Use
+                The model holds its rest pose. Click a joint, then drag its arrows (Move) or its ring (Twist). Orange
+                joints are moved. Use
                 Front, Left and Flat above the model to line joints up straight on.
               </Text>
             )}
             {editing && pickedJoint && rig?.joints?.[pickedJoint]?.axis && (
               <Row>
                 <Text small>Twist {pickedJoint.replace(/_/g, " ")}</Text>
-                <Button size="sm" onClick={() => twistJoint(pickedJoint, (twisted[pickedJoint] ?? rig?.joint_twists?.[pickedJoint] ?? 0) - 5)}>
+                <Button size="sm" onClick={() => twistJoint(pickedJoint, currentTwist(pickedJoint) - 5)}>
                   ⟲ 5°
                 </Button>
                 <Box width={90}>
@@ -712,14 +761,19 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
                     aria-label="Twist in degrees"
                     type="number"
                     step={5}
-                    value={twisted[pickedJoint] ?? rig?.joint_twists?.[pickedJoint] ?? 0}
+                    value={currentTwist(pickedJoint)}
                     onChange={(e) => twistJoint(pickedJoint, Number(e.target.value) || 0)}
                   />
                 </Box>
-                <Button size="sm" onClick={() => twistJoint(pickedJoint, (twisted[pickedJoint] ?? rig?.joint_twists?.[pickedJoint] ?? 0) + 5)}>
+                <Button size="sm" onClick={() => twistJoint(pickedJoint, currentTwist(pickedJoint) + 5)}>
                   ⟳ 5°
                 </Button>
-                <Text small muted>The green line shows which way the joint faces: a knee's should point forward.</Text>
+                {forwardTwist(pickedJoint) !== null && (
+                  <Button size="sm" onClick={() => twistJoint(pickedJoint, forwardTwist(pickedJoint)!)}>
+                    Face forward
+                  </Button>
+                )}
+                <Text small muted>Or switch to Twist and drag the ring around the joint.</Text>
               </Row>
             )}
             {editing && (

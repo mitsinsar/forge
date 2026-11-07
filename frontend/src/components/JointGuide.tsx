@@ -195,6 +195,10 @@ export function JointGuide({ picked, onPick }: { picked?: string; onPick: (name:
             the armour's surface.
           </Text>
           <Text small muted>
+            Every joint's arrow should point forward, where the face looks (green). An amber arrow is turned away:
+            use Face forward, or Twist and drag its ring. Top view shows the arrows best.
+          </Text>
+          <Text small muted>
             Turn the model and check from the side too: a dot can look right from the front and sit at the front or
             back of the limb.
           </Text>

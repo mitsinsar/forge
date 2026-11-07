@@ -28,6 +28,30 @@ const round = (n: number) => Math.round(n * 10000) / 10000 + 0;
 // Finger joints are left out of the editor: too small to drag, and rarely wrong.
 const FINGER = /^(index|middle|ring|pinky|thumb)_/;
 const FOV = 35;
+const UP = new THREE.Vector3(0, 1, 0);
+const COLOURS = {
+  normal: 0x5ad1ff,
+  moved: 0xff9a3c,
+  picked: 0xffffff,
+  facing: 0x5ee08a, // pointing forward
+  turned: 0xffb347, // turned away from forward
+  unknown: 0x9aa0b4, // a bone that points forward itself (a foot): no "forward" to compare with
+};
+const FACING_OK = THREE.MathUtils.degToRad(25);
+
+/** Where a joint on a bone along ``axis`` should face: the character's forward (+Z), made square
+ *  to the bone. Null when the bone itself points (nearly) forward. */
+function facingTarget(axis: THREE.Vector3): THREE.Vector3 | null {
+  const forward = new THREE.Vector3(0, 0, 1);
+  const square = forward.sub(axis.clone().multiplyScalar(forward.dot(axis)));
+  return square.length() < 0.3 ? null : square.normalize();
+}
+
+/** Degrees from ``from`` to ``to`` about ``axis`` (both square to it), signed by the right hand. */
+function signedAngle(from: THREE.Vector3, to: THREE.Vector3, axis: THREE.Vector3): number {
+  const cross = new THREE.Vector3().crossVectors(from, to);
+  return THREE.MathUtils.radToDeg(Math.atan2(cross.dot(axis), from.dot(to)));
+}
 const FLAT_FOV = 2;  // narrow enough that the perspective is gone, wide enough to keep orbiting
 
 // Camera directions. Characters face +Z, so their left side is at +X.
@@ -61,11 +85,17 @@ interface Props {
   /** Joints moved so far (they are shown where they were moved to). */
   moved?: Record<string, Vec3>;
   editJoints?: boolean;
-  /** Degrees each joint is turned about its bone, not yet re-rigged (its facing line turns). */
+  /** Degrees each joint is turned about its bone, not yet re-rigged (its facing arrow turns). */
   twists?: Record<string, number>;
+  /** What dragging the picked joint does: move it (arrows) or twist it about its bone (a ring). */
+  jointMode?: "move" | "twist";
   onJointMove?: (name: string, head: Vec3) => void;
+  /** Twist mode: degrees the picked joint is turned from the rig's result (dragging the ring). */
+  onJointTwist?: (name: string, degrees: number) => void;
   /** Called with the joint clicked in the editor (for the placement hint). */
   onJointPick?: (name: string) => void;
+  /** Select this joint in the editor (picked elsewhere, such as the guide's figure). */
+  pickedJoint?: string;
   /** More GLBs shown with the model and playing the same clip: items fitted on it (an outfit). Their
    *  copy of the body (meshes named `mannequin`) is hidden; one without the clip is hidden too. */
   extras?: string[];
@@ -81,8 +111,11 @@ export function ModelViewer({
   moved,
   editJoints,
   twists,
+  jointMode = "move",
   onJointMove,
+  onJointTwist,
   onJointPick,
+  pickedJoint,
   extras,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
@@ -95,14 +128,21 @@ export function ModelViewer({
     controls?: OrbitControls;
     canvas?: HTMLCanvasElement;
     radius?: number;
+    /** Run every frame before rendering (the joint editor keeps its handles a fixed size on screen). */
+    frameHook?: () => void;
     extras?: Map<string, { model: THREE.Object3D; mixer: THREE.AnimationMixer; clips: THREE.AnimationClip[] }>;
   }>({ model: null, mixer: null, clips: [] });
   const [extrasLoaded, setExtrasLoaded] = useState(0);
   const [flat, setFlat] = useState(false);
+  const [pickedName, setPickedName] = useState<string | null>(null);
   const onJointMoveRef = useRef(onJointMove);
   useEffect(() => {
     onJointMoveRef.current = onJointMove;
   }, [onJointMove]);
+  const onJointTwistRef = useRef(onJointTwist);
+  useEffect(() => {
+    onJointTwistRef.current = onJointTwist;
+  }, [onJointTwist]);
   const onJointPickRef = useRef(onJointPick);
   useEffect(() => {
     onJointPickRef.current = onJointPick;
@@ -171,6 +211,7 @@ export function ModelViewer({
       sceneRef.current.mixer?.update(delta);
       sceneRef.current.extras?.forEach((extra) => extra.mixer.update(delta));
       controls.update();
+      sceneRef.current.frameHook?.();
       renderer.render(scene, camera);
       frame = requestAnimationFrame(tick);
     };
@@ -349,52 +390,67 @@ export function ModelViewer({
     if (found) mixer.clipAction(found).reset().setLoop(THREE.LoopRepeat, Infinity).play();
   }, [clip, loaded, editJoints, extrasLoaded]);
 
-  // Joint editor: a handle per joint and a line per bone, drawn through the mesh; click a handle to
-  // move it with the arrows.
+  // Joint editor: a handle per joint, a line per bone and an arrow for the way each joint faces,
+  // drawn through the mesh at a fixed size on screen. Click a handle to pick it; drag the arrows to
+  // move it, or (twist mode) the ring to turn it about its bone.
   const handlesRef = useRef<{
     handles: Map<string, THREE.Mesh>;
-    facings: Map<string, THREE.Line>;
+    facings: Map<string, THREE.Group>;
+    ghost: THREE.Group;
+    gizmo: TransformControls;
+    picked: () => THREE.Mesh | null;
+    select: (name: string) => void;
     update: () => void;
   } | null>(null);
   useEffect(() => {
-    const { model, scene, camera, controls, canvas, radius } = sceneRef.current;
+    const { model, scene, camera, controls, canvas } = sceneRef.current;
     if (!editJoints || !joints || !model || !scene || !camera || !controls || !canvas) return;
     const overlay = new THREE.Group();
     overlay.renderOrder = 10;
     model.add(overlay);
     const names = Object.keys(joints).filter((n) => !FINGER.test(n));
-    const size = (radius ?? 1.8) * 0.012;
-    const sphere = new THREE.SphereGeometry(size, 12, 8);
-    const colours = { normal: 0x5ad1ff, moved: 0xff9a3c, picked: 0xffffff };
+    const sphere = new THREE.SphereGeometry(1, 16, 12);
     const handles = new Map<string, THREE.Mesh>();
-    // Which way each joint faces: a short line from the joint (a knee's line points where the
-    // knee cap is). It turns with the joint's twist.
-    const facings = new Map<string, THREE.Line>();
-    const facingMaterial = new THREE.LineBasicMaterial({ color: 0x7cf29c, depthTest: false, transparent: true });
-    for (const name of names) {
-      if (!joints[name].front) continue;
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-                                  facingMaterial);
-      line.renderOrder = 11;
-      overlay.add(line);
-      facings.set(name, line);
-    }
     for (const name of names) {
       const handle = new THREE.Mesh(
         sphere,
-        new THREE.MeshBasicMaterial({ color: colours.normal, depthTest: false, transparent: true }),
+        new THREE.MeshBasicMaterial({ color: COLOURS.normal, depthTest: false, transparent: true, opacity: 0.9 }),
       );
       handle.name = name;
       handle.renderOrder = 11;
       overlay.add(handle);
       handles.set(name, handle);
     }
+    // Facing arrows: where each joint faces (a knee's points where the knee cap is). They all should
+    // point forward, like the face: green when they do, amber when they are turned away.
+    const shaft = new THREE.CylinderGeometry(0.035, 0.035, 0.72, 8).translate(0, 0.36, 0);
+    const head = new THREE.ConeGeometry(0.12, 0.28, 12).translate(0, 0.86, 0);
+    const arrow = (colour: number, opacity: number) => {
+      const material = new THREE.MeshBasicMaterial({ color: colour, depthTest: false, transparent: true, opacity });
+      const group = new THREE.Group();
+      group.add(new THREE.Mesh(shaft, material), new THREE.Mesh(head, material));
+      group.children.forEach((c) => (c.renderOrder = 12));
+      group.userData.material = material;
+      return group;
+    };
+    const facings = new Map<string, THREE.Group>();
+    for (const name of names) {
+      if (!joints[name].front || !joints[name].axis) continue;
+      const group = arrow(COLOURS.facing, 0.95);
+      overlay.add(group);
+      facings.set(name, group);
+    }
+    // The picked joint's "forward": where its arrow should point.
+    const ghost = arrow(0xffffff, 0.35);
+    ghost.visible = false;
+    overlay.add(ghost);
+
     const bones = names.filter((n) => joints[n].parent && handles.has(joints[n].parent!));
     const lineGeometry = new THREE.BufferGeometry();
     lineGeometry.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(bones.length * 6), 3));
     const lines = new THREE.LineSegments(
       lineGeometry,
-      new THREE.LineBasicMaterial({ color: 0x5ad1ff, depthTest: false, transparent: true, opacity: 0.8 }),
+      new THREE.LineBasicMaterial({ color: COLOURS.normal, depthTest: false, transparent: true, opacity: 0.8 }),
     );
     lines.renderOrder = 10;
     overlay.add(lines);
@@ -408,76 +464,126 @@ export function ModelViewer({
       });
       position.needsUpdate = true;
     };
-    handlesRef.current = { handles, facings, update };
 
     const gizmo = new TransformControls(camera, canvas);
-    gizmo.setSize(0.6);
+    gizmo.setSize(0.8);
     const helper = gizmo.getHelper();
     scene.add(helper);
     let picked: THREE.Mesh | null = null;
     const paint = () =>
-      handles.forEach((h, name) => {
-        const moved = (h.userData.moved as boolean) ?? false;
-        (h.material as THREE.MeshBasicMaterial).color.setHex(h === picked ? colours.picked : moved ? colours.moved : colours.normal);
-        void name;
+      handles.forEach((h) => {
+        const colour = h === picked ? COLOURS.picked : h.userData.moved ? COLOURS.moved : COLOURS.normal;
+        (h.material as THREE.MeshBasicMaterial).color.setHex(colour);
       });
+    handlesRef.current = {
+      handles, facings, ghost, gizmo, picked: () => picked, update,
+      select: (name) => {
+        const handle = handles.get(name);
+        if (handle && handle !== picked) pick(handle, false);
+      },
+    };
+
+    // A fixed size on screen, whatever the zoom: handles 6 px, arrows 46 px long.
+    const world = new THREE.Vector3();
+    sceneRef.current.frameHook = () => {
+      const height = canvas.clientHeight || 1;
+      const perPixel = (distance: number) =>
+        (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / height;
+      handles.forEach((h) => {
+        h.getWorldPosition(world);
+        h.scale.setScalar((h === picked ? 8 : 6) * perPixel(world.distanceTo(camera.position)));
+      });
+      for (const group of [...facings.values(), ghost]) {
+        group.getWorldPosition(world);
+        group.scale.setScalar((group === ghost ? 54 : 46) * perPixel(world.distanceTo(camera.position)));
+      }
+    };
+
     gizmo.addEventListener("dragging-changed", (event) => {
       controls.enabled = !event.value;
     });
     gizmo.addEventListener("objectChange", () => {
       if (!picked) return;
+      if (gizmo.getMode() === "rotate") {
+        const joint = joints[picked.name];
+        if (!joint.axis || !joint.front) return;
+        const axis = toThree(joint.axis).normalize();
+        const now = new THREE.Vector3(0, 0, 1).applyQuaternion(picked.quaternion);
+        onJointTwistRef.current?.(picked.name, signedAngle(toThree(joint.front).normalize(), now, axis));
+        return;
+      }
       picked.userData.moved = true;
       update();
       paint();
       onJointMoveRef.current?.(picked.name, toBlender(picked.position));
     });
-    // Picks the handle nearest the click on screen (within 14 px): the handles are small.
+    // Picks the handle nearest the click on screen (within 16 px).
     const onPointerDown = (event: PointerEvent) => {
       if (gizmo.dragging || gizmo.axis) return;
       const box = canvas.getBoundingClientRect();
-      const world = new THREE.Vector3();
+      const at = new THREE.Vector3();
       let best: THREE.Mesh | null = null;
-      let bestDistance = 14;
+      let bestDistance = 16;
       handles.forEach((handle) => {
-        handle.getWorldPosition(world).project(camera);
-        const x = ((world.x + 1) / 2) * box.width + box.left;
-        const y = ((1 - world.y) / 2) * box.height + box.top;
+        handle.getWorldPosition(at).project(camera);
+        const x = ((at.x + 1) / 2) * box.width + box.left;
+        const y = ((1 - at.y) / 2) * box.height + box.top;
         const distance = Math.hypot(x - event.clientX, y - event.clientY);
         if (distance < bestDistance) {
           best = handle;
           bestDistance = distance;
         }
       });
-      if (best) {
-        picked = best;
-        gizmo.attach(picked);
-        canvas.dataset.pickedJoint = (best as THREE.Mesh).name;  // for checks and tests
-        paint();
-        onJointPickRef.current?.((best as THREE.Mesh).name);
-      }
+      if (best) pick(best, true);
     };
+    function pick(handle: THREE.Mesh, tell: boolean) {
+      picked = handle;
+      gizmo.attach(handle);
+      canvas!.dataset.pickedJoint = handle.name; // for checks and tests
+      paint();
+      if (tell) onJointPickRef.current?.(handle.name);
+      setPickedName(handle.name);
+    }
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.dataset.jointEditor = "on";
     return () => {
       canvas.removeEventListener("pointerdown", onPointerDown);
       delete canvas.dataset.jointEditor;
       delete canvas.dataset.pickedJoint;
+      sceneRef.current.frameHook = undefined;
       gizmo.detach();
       scene.remove(helper);
       gizmo.dispose();
       model.remove(overlay);
       sphere.dispose();
+      shaft.dispose();
+      head.dispose();
       lineGeometry.dispose();
-      facings.forEach((line) => line.geometry.dispose());
-      facingMaterial.dispose();
       handles.forEach((h) => (h.material as THREE.Material).dispose());
+      [...facings.values(), ghost].forEach((g) => (g.userData.material as THREE.Material).dispose());
       (lines.material as THREE.Material).dispose();
       controls.enabled = true;
       handlesRef.current = null;
+      setPickedName(null);
     };
   }, [editJoints, joints, loaded]);
 
-  // Handles follow the joints and the moves (a mirrored move, an undo).
+  useEffect(() => {
+    if (pickedJoint) handlesRef.current?.select(pickedJoint);
+  }, [pickedJoint, editJoints, loaded]);
+
+  // Move mode: arrows along the world axes. Twist mode: one ring about the picked joint's bone.
+  useEffect(() => {
+    const editor = handlesRef.current;
+    if (!editor) return;
+    const twist = jointMode === "twist";
+    editor.gizmo.setMode(twist ? "rotate" : "translate");
+    editor.gizmo.setSpace(twist ? "local" : "world");
+    editor.gizmo.showX = !twist;
+    editor.gizmo.showZ = !twist;
+  }, [jointMode, editJoints, loaded]);
+
+  // Handles follow the joints and the moves (a mirrored move, an undo); arrows the twists.
   useEffect(() => {
     const editor = handlesRef.current;
     if (!editor || !joints) return;
@@ -485,20 +591,38 @@ export function ModelViewer({
       const at = moved?.[name] ?? joints[name].head;
       handle.position.copy(toThree(at));
       handle.userData.moved = !!moved?.[name];
-      (handle.material as THREE.MeshBasicMaterial).color.setHex(moved?.[name] ? 0xff9a3c : 0x5ad1ff);
+      if (handle !== editor.picked()) {
+        (handle.material as THREE.MeshBasicMaterial).color.setHex(moved?.[name] ? COLOURS.moved : COLOURS.normal);
+      }
     });
-    const length = (sceneRef.current.radius ?? 1.8) * 0.06;
-    editor.facings.forEach((line, name) => {
+    const dragging = editor.gizmo.dragging;
+    editor.facings.forEach((group, name) => {
       const joint = joints[name];
-      const start = editor.handles.get(name)!.position;
-      const front = toThree(joint.front!).normalize();
-      const twist = twists?.[name] ?? 0;
-      if (twist && joint.axis) front.applyAxisAngle(toThree(joint.axis).normalize(), THREE.MathUtils.degToRad(twist));
-      line.geometry.setFromPoints([start.clone(), start.clone().add(front.multiplyScalar(length))]);
-      (line.material as THREE.LineBasicMaterial).color.setHex(0x7cf29c);
+      const handle = editor.handles.get(name)!;
+      const axis = toThree(joint.axis!).normalize();
+      const front = toThree(joint.front!).normalize().applyAxisAngle(axis, THREE.MathUtils.degToRad(twists?.[name] ?? 0));
+      group.position.copy(handle.position);
+      group.quaternion.setFromUnitVectors(UP, front);
+      const forward = facingTarget(axis);
+      const off = forward ? front.angleTo(forward) : 0;
+      (group.userData.material as THREE.MeshBasicMaterial).color.setHex(
+        !forward ? COLOURS.unknown : off < FACING_OK ? COLOURS.facing : COLOURS.turned,
+      );
+      // The handle's own frame (Y along the bone, Z the facing) is what the twist ring turns.
+      if (!(dragging && handle === editor.picked())) {
+        const side = new THREE.Vector3().crossVectors(axis, front).normalize();
+        handle.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, axis, front));
+      }
     });
+    const picked = pickedName ? joints[pickedName] : undefined;
+    const forward = picked?.axis ? facingTarget(toThree(picked.axis).normalize()) : null;
+    editor.ghost.visible = !!forward;
+    if (forward && pickedName) {
+      editor.ghost.position.copy(editor.handles.get(pickedName)!.position);
+      editor.ghost.quaternion.setFromUnitVectors(UP, forward);
+    }
     editor.update();
-  }, [joints, moved, twists, editJoints, loaded]);
+  }, [joints, moved, twists, editJoints, loaded, pickedName]);
 
   return (
     <div className="stage" ref={host}>
