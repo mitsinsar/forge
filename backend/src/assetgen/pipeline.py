@@ -683,6 +683,11 @@ class Pipeline:
                 "pose_check": self._pose_check(asset, paths)}
 
     @staticmethod
+    def _pair(asset: dict) -> bool:
+        """Gear made as a matching pair (gloves, boots, leg pieces): two objects and two mesh parts."""
+        return asset["kind"] == "gear" and asset.get("slot") in qc.PAIR_SLOTS
+
+    @staticmethod
     def _posed_biped(asset: dict) -> bool:
         """Biped characters (not gear or weapons, which are drawn alone) get the A-pose guide and check."""
         return asset["kind"] in ("hero", "monster", "boss") and asset.get("archetype") == "biped"
@@ -776,6 +781,7 @@ class Pipeline:
                 vision = None
             try:
                 found = qc.candidate_checks(Path(path), kind=asset["kind"], posed_biped=self._posed_biped(asset),
+                                            pair=self._pair(asset),
                                                  vision=vision)
             except OSError:
                 found = [qc.check("image", "Readable image", qc.FAIL, "The image could not be read")]
@@ -840,7 +846,7 @@ class Pipeline:
                 "removed": result.get("removed"), "stats": result.get("stats"),
                 "views": sorted(self._rel(asset["id"], p) for p in (directory / "views").glob("*.png")
                                 if p.stem in HUNYUAN_VIEW) if quality.get("multi_view") else None,
-                "checks": qc.mesh_checks(result.get("stats"), asset["kind"])}
+                "checks": qc.mesh_checks(result.get("stats"), asset["kind"], pair=self._pair(asset))}
 
     def _stage_rig(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)
