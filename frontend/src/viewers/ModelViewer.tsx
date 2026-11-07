@@ -13,6 +13,9 @@ export interface Joint {
   parent: string | null;
 }
 
+/** The light copy of one of the app's GLBs (JPEG textures) for viewing; the exports keep the full ones. */
+const preview = (url: string) => (url.includes("/api/assets/") ? `${url}${url.includes("?") ? "&" : "?"}preview=1` : url);
+
 // Blender (Z up, -Y front) to glTF/three (Y up, +Z front) and back.
 const toThree = ([x, y, z]: Vec3) => new THREE.Vector3(x, z, -y);
 const toBlender = (v: THREE.Vector3): Vec3 => [round(v.x), round(-v.z), round(v.y)];
@@ -115,7 +118,7 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
 
     let cancelled = false;
     new GLTFLoader().load(
-      url,
+      preview(url),
       (gltf) => {
         if (cancelled) return;
         const model = gltf.scene;
@@ -216,7 +219,7 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
     let cancelled = false;
     for (const extraUrl of wanted) {
       if (current.has(extraUrl)) continue;
-      new GLTFLoader().load(extraUrl, (gltf) => {
+      new GLTFLoader().load(preview(extraUrl), (gltf) => {
         if (cancelled || !sceneRef.current.extras) return;
         const extra = gltf.scene;
         extra.traverse((obj) => {

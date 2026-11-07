@@ -615,7 +615,7 @@ class Pipeline:
                       variant_of={"id": source_id, "name": source["name"], **colours})
         asset = self.db.insert("assets", record)
         shutil.copytree(self.asset_dir(source_id), self.asset_dir(asset["id"]),
-                        ignore=shutil.ignore_patterns("export", "sprites", "fits", "unirig", "*_thumb.jpg"))
+                        ignore=shutil.ignore_patterns("export", "sprites", "fits", "unirig", "*_thumb*.jpg", "*.preview.glb"))
         recolour = [self.asset_dir(asset["id"]) / rel for rel in (
             (outputs.get("mesh") or {}).get("texture"), (outputs.get("mesh") or {}).get("glb"),
             outputs["rig"].get("glb"), *((outputs.get("prompt") or {}).get("candidates") or [])) if rel]

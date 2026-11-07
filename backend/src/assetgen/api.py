@@ -21,7 +21,7 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
                        SPRITE_LOOKS, STAGES, WEAPON_ATTACKS, WEAPON_CLASSES, deep_merge, profile_defaults)
 from .exporters import safe_name
 from .pipeline import Conflict, Invalid, Pipeline
-from . import storage, watchdog
+from . import delivery, storage, watchdog
 from .tools import check_tools
 from .schemas import (AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
@@ -577,36 +577,35 @@ def download_asset(request: Request, asset_id: str):
 
 @router.get("/assets/{asset_id}/thumb", tags=["assets"],
             summary="A small JPEG of the asset's preview (the picked candidate, or the first) for galleries")
-def read_asset_thumb(request: Request, asset_id: str):
+def read_asset_thumb(request: Request, asset_id: str,
+                     candidate: int | None = Query(None, ge=1, description="This candidate (default: the picked one)"),
+                     size: int = Query(384, ge=64, le=1024)):
     pipeline = pipeline_of(request)
     asset = _found(pipeline.db.get("assets", asset_id), "asset")
     candidates = ((asset.get("outputs") or {}).get("prompt") or {}).get("candidates") or []
     if not candidates:
         raise HTTPException(404, "no preview yet")
-    chosen = asset.get("chosen_candidate") or 1
-    source = pipeline.asset_dir(asset_id) / candidates[min(chosen, len(candidates)) - 1]
+    number = candidate or asset.get("chosen_candidate") or 1
+    source = pipeline.asset_dir(asset_id) / candidates[min(number, len(candidates)) - 1]
     if not source.is_file():
         raise HTTPException(404, "no preview yet")
-    thumb = source.with_name(f"{source.stem}_thumb.jpg")
-    if not thumb.is_file() or thumb.stat().st_mtime < source.stat().st_mtime:
-        with Image.open(source) as image:
-            small = image.convert("RGB")
-            small.thumbnail((384, 384))
-            small.save(thumb, quality=85)
-    return FileResponse(thumb, media_type="image/jpeg")
+    return delivery.send(request, delivery.thumbnail(source, size), "image/jpeg")
 
 
 @router.get("/assets/{asset_id}/files/{path:path}", tags=["assets"],
             summary="Download a file the pipeline made (candidates, GLBs, sprites, export files)")
-def read_asset_file(request: Request, asset_id: str, path: str):
+def read_asset_file(request: Request, asset_id: str, path: str,
+                    preview: bool = Query(False, description="GLBs: a light copy with JPEG textures, for viewers")):
     pipeline = pipeline_of(request)
     _found(pipeline.db.get("assets", asset_id), "asset")
     root = pipeline.asset_dir(asset_id).resolve()
     target = (root / path).resolve()
     if not target.is_relative_to(root) or not target.is_file():
         raise HTTPException(404, "file not found")
+    if preview and target.suffix == ".glb":
+        target = delivery.preview_glb(target)
     media = "model/gltf-binary" if target.suffix == ".glb" else None
-    return FileResponse(target, media_type=media)
+    return delivery.send(request, target, media)
 
 
 # ---- item fits, side jobs and examples --------------------------------------
@@ -693,7 +692,7 @@ def read_example(request: Request, path: str):
     target = (root / path).resolve()
     if not target.is_relative_to(root) or not target.is_file():
         raise HTTPException(404, "file not found")
-    return FileResponse(target)
+    return delivery.send(request, target)
 
 
 # ---- outfits ----------------------------------------------------------------

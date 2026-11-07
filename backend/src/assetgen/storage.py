@@ -10,7 +10,7 @@ from .db import Database
 
 CATEGORIES = {
     "unirig_scratch": "UniRig's working files (point clouds, FBX files, unused retries); its result is kept",
-    "thumbnails": "Gallery thumbnails (made again when shown)",
+    "thumbnails": "Thumbnails and light preview models (made again when shown)",
     "orphans": "Files of assets that no longer exist",
     "stale_fits": "Items fitted on heroes that no longer exist",
     "old_examples": "Example sheets of deleted LoRAs and style profiles",
@@ -57,7 +57,7 @@ def _targets(data_dir: Path, db: Database) -> dict[str, list[Path]]:
                 found["orphans"].append(folder)
                 continue
             found["unirig_scratch"] += _unirig_scratch(folder)
-            found["thumbnails"] += list(folder.rglob("*_thumb.jpg"))
+            found["thumbnails"] += [*folder.rglob("*_thumb*.jpg"), *folder.rglob("*.preview.glb")]
             fits = folder / "fits"
             if fits.is_dir():
                 found["stale_fits"] += [f for f in fits.iterdir() if f.is_dir() and f.name not in ids]

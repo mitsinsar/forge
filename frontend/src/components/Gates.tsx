@@ -201,7 +201,7 @@ export function Gate1({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
             {candidates.map((url, i) => (
               <Thumb
                 key={url}
-                src={localUrl(url)}
+                src={`/api/assets/${asset.id}/thumb?candidate=${i + 1}&size=512`}
                 alt={`Candidate ${i + 1}`}
                 selected={picked === i + 1}
                 onClick={readOnly ? undefined : () => setPicked(i + 1)}
