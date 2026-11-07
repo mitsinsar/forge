@@ -27,7 +27,7 @@ from .db import Database, now
 from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
-from . import exporters, pose
+from . import exporters, grips, pose
 
 log = logging.getLogger("assetgen.pipeline")
 
@@ -180,7 +180,8 @@ class Pipeline:
         if grip is not None:
             if gate != 3 or asset["kind"] != "weapon":
                 raise Invalid("the grip can only be changed for weapons at gate 3")
-            changes["grip"] = {**DEFAULT_GRIPS[asset["weapon_class"]], **(asset.get("grip") or {}), **grip}
+            changes["grip"] = {**DEFAULT_GRIPS[asset["weapon_class"]], **(asset.get("grip") or {}), **grip,
+                               "source": "manual"}
         notes = list(asset.get("notes") or [])
         if note and note.strip():
             notes.append({"gate": gate, "stage": stage, "note": note.strip(), "at": now()})
@@ -431,14 +432,22 @@ class Pipeline:
         settings = self.asset_settings(asset)
         archetype = get_archetype(asset["archetype"])
         mesh = self.stage_dir(asset["id"], "mesh") / "mesh.glb"
-        skeleton = self.adapters.rig.predict_skeleton(
-            mesh=mesh, archetype=archetype, out_dir=directory, progress=lambda s, f: progress(s, 0.3 * f))
         clips = self.clips_for(asset, settings)
         attach = None
-        if asset["kind"] == "gear":
-            attach = {"kind": "gear", "slot": asset["slot"]}
-        elif asset["kind"] == "weapon":
-            attach = {"kind": "weapon", "weapon_class": asset["weapon_class"], "grip": asset["grip"]}
+        if asset["kind"] in ("gear", "weapon"):
+            # Fitted on the base body, which is the template itself: nothing to predict.
+            skeleton = {"joints": archetype["joints"], "fit_score": 1.0, "fallback": False}
+            if asset["kind"] == "gear":
+                attach = {"kind": "gear", "slot": asset["slot"]}
+            else:
+                grip = asset.get("grip") or dict(DEFAULT_GRIPS[asset["weapon_class"]])
+                manual = grip.get("source") == "manual"
+                attach = {"kind": "weapon", "weapon_class": asset["weapon_class"], "grip": grip,
+                          "socket": grip.get("socket") or DEFAULT_GRIPS[asset["weapon_class"]]["socket"],
+                          "grip_matrix": grips.to_blender(grip["position"], grip["rotation"]) if manual else None}
+        else:
+            skeleton = self.adapters.rig.predict_skeleton(
+                mesh=mesh, archetype=archetype, out_dir=directory, progress=lambda s, f: progress(s, 0.3 * f))
         project = self.db.get("projects", asset["project_id"]) or {}
         godot = project.get("engine") == "godot"
         result = self.adapters.blender.rig_and_animate(
@@ -450,11 +459,29 @@ class Pipeline:
                   "skeleton": {"joints": len(skeleton["joints"]), "fit_score": skeleton["fit_score"],
                                "fallback": skeleton["fallback"]},
                   "grip": asset.get("grip") if asset["kind"] == "weapon" else None}
+        if result.get("gear"):
+            output["gear"] = result["gear"]
+        if result.get("weapon"):
+            output["weapon"] = {k: v for k, v in result["weapon"].items() if not k.endswith("_matrix")}
+            output["grip"] = self._found_grip(asset, attach, result["weapon"])
         if godot:
             sprites = self._render_sprites(asset, settings, result["glb"], result["clips"],
                                            lambda s, f: progress(s, 0.7 + 0.3 * f))
             output["sprites"] = {k: v for k, v in sprites.items() if k != "frames"}  # paths stay out of the db
         return output
+
+    def _found_grip(self, asset: dict, attach: dict, found: dict) -> dict:
+        """The weapon's grip after the rig stage: the one given at gate 3, or the detected one (and,
+        for two-handed weapons, the second hand's on ``weapon_l``). Kept on the asset for the export."""
+        grip = dict(attach["grip"])
+        if grip.get("source") != "manual" and found.get("grip_matrix"):
+            grip.update(grips.to_unity(found["grip_matrix"]), socket=attach["socket"], source="auto")
+        if found.get("second_grip_matrix"):
+            grip["second"] = {"socket": "weapon_l", **grips.to_unity(found["second_grip_matrix"])}
+        else:
+            grip.pop("second", None)
+        self.db.update("assets", asset["id"], {"grip": grip})
+        return grip
 
     def _render_sprites(self, asset: dict, settings: dict, animated: Path, clips: list[dict], progress) -> dict:
         """Renders the sprite frames into the asset's sprites folder (files already there are kept).
@@ -521,7 +548,8 @@ class Pipeline:
         if engine == "unity":
             fbx = self.adapters.blender.export_fbx(
                 animated_glb=animated, mesh_glb=self.asset_dir(asset["id"]) / mesh["glb"], lods=mesh["lods"],
-                rig_type=rig["rig_type"], out_path=directory / "fbx" / f"{name}.fbx", progress=lambda s, f: progress(s, 0.6 * f))
+                rig_type=rig["rig_type"], out_path=directory / "fbx" / f"{name}.fbx", kind=asset["kind"],
+                progress=lambda s, f: progress(s, 0.6 * f))
             progress("Writing the Unity folder", 0.7)
             exporters.write_unity(out_dir=build, name=name, asset=asset, fbx=fbx,
                                   texture=self.asset_dir(asset["id"]) / mesh["texture"], lods=mesh["lods"],

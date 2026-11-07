@@ -51,6 +51,7 @@ SOURCES: dict[str, dict] = {
         "rig_type": "Humanoid",
         "sockets": {"weapon_r": "hand_r", "weapon_l": "hand_l"},
         "a_pose": True,
+        "base_body": True,
         "clips": {
             "idle": "Idle_Loop", "walk": "Walk_Loop", "run": "Jog_Fwd_Loop", "attack_1": "Sword_Attack",
             "attack_2": "Punch_Cross", "hit": "Hit_Chest", "death": "Death01", "cast": "Spell_Simple_Shoot",
@@ -281,13 +282,122 @@ def joint_bounds(arm, pad: float = 0.1) -> dict:
     return {"min": [round(v - pad * size, 5) for v in lo], "max": [round(v + pad * size, 5) for v in hi]}
 
 
+# The base body's slot regions: the bones whose vertices each gear slot covers (by each vertex's
+# strongest bone). "cape" is the back of the torso and thighs instead (see slot_groups).
+SLOT_BONES = {
+    "head": ("Head", "neck_01"),
+    "chest": ("spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r", "upperarm_l", "upperarm_r"),
+    "legs": ("pelvis", "thigh_l", "thigh_r", "calf_l", "calf_r"),
+    "hands": ("hand_l", "hand_r", "lowerarm_l", "lowerarm_r"),
+    "feet": ("foot_l", "foot_r", "ball_l", "ball_r"),
+}
+FINGERS = ("index", "middle", "ring", "pinky", "thumb")  # their vertices count as the hand's
+CAPE_BONES = ("spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r", "pelvis", "thigh_l", "thigh_r")
+
+
+def add_sockets(arm, sockets: dict) -> None:
+    """Weapon socket bones (not deforming) on the hands: the head in the palm, the bone pointing
+    out of the fist on the thumb side (where a held blade points), its Z axis along the fingers."""
+    if not sockets:
+        return
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="EDIT")
+    bones = arm.data.edit_bones
+    for socket, hand_name in sockets.items():
+        hand = bones[hand_name]
+        side = hand_name.rsplit("_", 1)[1]
+        middle, index, pinky = (bones[f"{f}_01_{side}"].head.copy() for f in ("middle", "index", "pinky"))
+        bone = bones.new(socket)
+        bone.head = hand.head.lerp(middle, 0.55)
+        bone.tail = bone.head + (index - pinky).normalized() * 0.1
+        bone.align_roll(middle - hand.head)
+        bone.parent = hand
+        bone.use_connect = False
+        bone.use_deform = False
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def make_base_body(arm, meshes):
+    """One mesh of the source body in the armature's current (A-)pose, its weights kept: copies
+    of the skinned meshes with the pose applied, joined. Bound to the armature again later, once
+    that pose is its rest."""
+    copies = []
+    for mesh in meshes:
+        copy = mesh.copy()
+        copy.data = mesh.data.copy()
+        bpy.context.scene.collection.objects.link(copy)
+        bpy.ops.object.select_all(action="DESELECT")
+        copy.select_set(True)
+        bpy.context.view_layer.objects.active = copy
+        for modifier in list(copy.modifiers):
+            if modifier.type == "ARMATURE":
+                bpy.ops.object.modifier_apply(modifier=modifier.name)
+            else:
+                copy.modifiers.remove(modifier)
+        world = copy.matrix_world.copy()
+        copy.parent = None
+        copy.matrix_world = world
+        copies.append(copy)
+    bpy.ops.object.select_all(action="DESELECT")
+    for copy in copies:
+        copy.select_set(True)
+    bpy.context.view_layer.objects.active = copies[0]
+    if len(copies) > 1:
+        bpy.ops.object.join()
+    body = bpy.context.view_layer.objects.active
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    body.name = body.data.name = "mannequin"
+    return body
+
+
+def slot_groups(body, joints: list) -> dict:
+    """Drops weights of bones the template doesn't keep and adds a ``slot_<slot>`` vertex group per
+    gear slot. Returns the vertex count of each slot."""
+    for group in list(body.vertex_groups):
+        if group.name not in joints:
+            body.vertex_groups.remove(group)
+    names = {g.index: g.name for g in body.vertex_groups}
+    centre_y = sum(v.co.y for v in body.data.vertices) / max(len(body.data.vertices), 1)
+    members = {slot: [] for slot in [*SLOT_BONES, "cape"]}
+    for vertex in body.data.vertices:
+        if not vertex.groups:
+            continue
+        strongest = names[max(vertex.groups, key=lambda g: g.weight).group]
+        if strongest.split("_")[0] in FINGERS:
+            strongest = "hand_" + strongest[-1]
+        for slot, bones in SLOT_BONES.items():
+            if strongest in bones:
+                members[slot].append(vertex.index)
+        if strongest in CAPE_BONES and vertex.co.y > centre_y:  # the back (the front faces -Y)
+            members["cape"].append(vertex.index)
+    for slot, indices in members.items():
+        group = body.vertex_groups.new(name=f"slot_{slot}")
+        group.add(indices, 1.0, "REPLACE")
+    return {slot: len(indices) for slot, indices in members.items()}
+
+
+def save_base_body(arm, body, path: Path) -> None:
+    """base_body.blend: the template armature (sockets included) and the mannequin skinned to it."""
+    body.parent = arm
+    body.modifiers.new("Armature", "ARMATURE").object = arm
+    for obj in list(bpy.data.objects):
+        if obj not in (arm, body):
+            bpy.data.objects.remove(obj, do_unlink=True)
+    if arm.animation_data:
+        arm.animation_data.action = None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bpy.ops.wm.save_as_mainfile(filepath=str(path), compress=True, copy=True)
+    bpy.data.objects.remove(body, do_unlink=True)
+
+
 def write_skeleton_json(arm, bounds: dict, path: Path) -> None:
     """skeleton.json: each joint's head, tail and parent in the template's rest pose, and the
     bounds of the mesh the template was made for (Blender axes: Z up, front towards -Y, metres).
     The rig stage scales the template to an asset by comparing these bounds with the asset's."""
     joints = {b.name: {"head": [round(v, 5) for v in arm.matrix_world @ b.head_local],
                        "tail": [round(v, 5) for v in arm.matrix_world @ b.tail_local],
-                       "parent": b.parent.name if b.parent else None} for b in arm.data.bones}
+                       "parent": b.parent.name if b.parent else None,
+                       **({"socket": True} if not b.use_deform else {})} for b in arm.data.bones}
     path.write_text(json.dumps({"axes": "blender: Z up, -Y front, metres", "mesh_bounds": bounds,
                                 "joints": joints}, indent=1) + "\n", encoding="utf-8")
 
@@ -343,16 +453,22 @@ def build_from_pack(arch_id: str, spec: dict, out: Path) -> dict:
     else:
         clear_pose(arm)
         bounds = mesh_bounds(meshes)
+    body = make_base_body(arm, meshes) if spec.get("base_body") else None  # in the template's pose
     for mesh in meshes:
         bpy.data.objects.remove(mesh, do_unlink=True)
     clear_pose(arm)
     keep_only_joints(arm, joints)
     if spec.get("a_pose"):
         apply_a_pose(arm)
+    add_sockets(arm, spec.get("sockets"))
     arm.name = arm.data.name = f"{arch_id}_template"
     write_skeleton_json(arm, bounds, out / "skeleton.json")
+    slots = None
+    if body is not None:
+        slots = slot_groups(body, joints)
+        save_base_body(arm, body, out / "base_body.blend")
     save_skeleton(arm, out / "skeleton.blend")
-    return {"joints": joints, "clips": record, "source": spec}
+    return {"joints": joints, "clips": record, "source": spec, "slots": slots}
 
 
 # ---- generated (spider, serpent) --------------------------------------------------
@@ -609,7 +725,8 @@ def main() -> None:
         (out / "LICENCES.md").write_text(licences(arch_id, spec, result["clips"]), encoding="utf-8")
         if out_root is None:
             update_archetype_json(arch_id, spec, result)
-        summary[arch_id] = {"joints": len(result["joints"]), "clips": len(result["clips"])}
+        summary[arch_id] = {"joints": len(result["joints"]), "clips": len(result["clips"]),
+                            "slots": result.get("slots")}
         print(f"BUILT {arch_id}: {summary[arch_id]['joints']} joints, {summary[arch_id]['clips']} clips", flush=True)
     progress(1.0, "Archetypes built")
     print("SUMMARY " + json.dumps(summary), flush=True)

@@ -3,7 +3,8 @@ frames and the Unity FBX.
 
 The work happens in the scripts in ``backend/blender_scripts/``, run by
 ``blender_runner``. ``rig_and_animate`` skins the mesh to the archetype's template
-skeleton and retargets its clips (gear and weapons wait for ticket #12).
+skeleton and retargets its clips; gear and weapons are fitted on the biped base body
+(``blender_scripts/attach.py``).
 """
 
 from __future__ import annotations
@@ -70,9 +71,6 @@ class BlenderTools:
         UniRig weights are used unless the fit fell back."""
         from ...archetypes import ARCHETYPES_DIR  # noqa: PLC0415 - keep this module's imports light
 
-        if attach:
-            raise BlenderError("Fitting gear and weapons on the base body is ticket #12; they can't be "
-                               "rigged yet.")
         out_path = Path(out_path)
         folder = ARCHETYPES_DIR / archetype["folder"]
         record = json.loads((folder / "clips.json").read_text(encoding="utf-8"))
@@ -80,6 +78,20 @@ class BlenderTools:
         if missing:
             raise BlenderError(f"The {archetype['id']} archetype has no clip for: {', '.join(missing)}. Rebuild "
                                "the templates with blender_scripts/build_archetypes.py.")
+        clip_args = [{"name": c, "file": str((folder / "clips" / f"{c}.glb").resolve()),
+                      "loop": bool(record.get(c, {}).get("loop"))} for c in clips]
+        if attach:
+            body = folder / "base_body.blend"
+            if not body.is_file():
+                raise BlenderError(f"{body} is missing; rebuild the biped template with "
+                                   "blender_scripts/build_archetypes.py.")
+            result = self._run("rig_animate.py", {
+                "mesh_glb": str(Path(mesh_glb).resolve()), "base_body_blend": str(body.resolve()),
+                "template_object": f"{archetype['id']}_template", "clips": clip_args, "attach": attach,
+                "out_glb": str(out_path.resolve()), "mask_json": str((out_path.parent / "body_mask.json").resolve())},
+                out_path.parent, progress)
+            return {"glb": out_path, "clips": result["clips"],
+                    **{k: result[k] for k in ("gear", "weapon") if k in result}}
         use_unirig = bool(skeleton.get("unirig_file")) and not skeleton.get("fallback")
         result = self._run("rig_animate.py", {
             "mesh_glb": str(Path(mesh_glb).resolve()),
@@ -87,12 +99,11 @@ class BlenderTools:
             "template_object": f"{archetype['id']}_template",
             "template_json": str((folder / "skeleton.json").resolve()),
             "fit_axis": "z" if archetype["id"] in UPRIGHT else "longest",
-            "clips": [{"name": c, "file": str((folder / "clips" / f"{c}.glb").resolve()),
-                       "loop": bool(record.get(c, {}).get("loop"))} for c in clips],
+            "clips": clip_args,
             "unirig_glb": skeleton.get("unirig_file") if use_unirig else None,
             "mapping": skeleton.get("mapping") if use_unirig else None,
             "targets": skeleton.get("targets") if use_unirig else None,
-            "out_glb": str(out_path.resolve()), "attach": attach}, out_path.parent, progress)
+            "out_glb": str(out_path.resolve())}, out_path.parent, progress)
         return {"glb": out_path, "clips": result["clips"], "skinning": result["skinning"]}
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
@@ -128,9 +139,10 @@ class BlenderTools:
         progress("Sprites rendered", 1.0)
         return frames
 
-    def export_fbx(self, *, animated_glb, mesh_glb, lods, rig_type, out_path, progress):
+    def export_fbx(self, *, animated_glb, mesh_glb, lods, rig_type, out_path, progress, kind="hero"):
         out_path = Path(out_path)
         self._run("export_fbx.py", {
+            "rigid": kind == "weapon",
             "animated_glb": str(Path(animated_glb).resolve()), "mesh_glb": str(Path(mesh_glb).resolve()),
             "out_fbx": str(out_path.resolve()), "name": out_path.stem,
             "lod_levels": [int(lod["level"]) for lod in lods if int(lod["level"]) > 0]},

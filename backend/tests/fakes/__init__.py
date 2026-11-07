@@ -319,7 +319,7 @@ class FakeBlender(FakeBase):
         progress("Sprites rendered", 1.0)
         return result
 
-    def export_fbx(self, *, animated_glb, mesh_glb, lods, rig_type, out_path, progress):
+    def export_fbx(self, *, animated_glb, mesh_glb, lods, rig_type, out_path, progress, kind="hero"):
         progress("Exporting FBX", 0.5)
         self._wait()
         gltf = read_glb_json(animated_glb)

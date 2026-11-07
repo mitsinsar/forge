@@ -77,8 +77,10 @@ class BlenderAdapter(Protocol):
     def rig_and_animate(self, *, mesh_glb: Path, skeleton: dict, archetype: dict, clips: list[str],
                         attach: dict | None, out_path: Path, progress: Progress) -> dict:
         """Skins the mesh to the fitted template skeleton and retargets the
-        clips. ``attach`` places gear or a weapon on the mannequin. Returns
-        ``{"glb": path, "clips": [{"name", "duration", "loop"}]}``."""
+        clips. ``attach`` fits gear or a weapon on the base body instead
+        (``{"kind": "gear", "slot"}`` or ``{"kind": "weapon", "weapon_class", "socket", "grip",
+        "grip_matrix"}``). Returns ``{"glb": path, "clips": [{"name", "duration", "loop"}]}``, plus
+        ``"gear"`` (fit and mask) or ``"weapon"`` (``grip_matrix``, ``second_grip_matrix``...)."""
 
     def render_sprites(self, *, animated_glb: Path, clips: list[dict], directions: list[str],
                        camera_preset: str, frame_size: int, supersample: int, fps: int, look: str,
@@ -88,10 +90,10 @@ class BlenderAdapter(Protocol):
         ``{direction: {clip: [frame paths]}}``."""
 
     def export_fbx(self, *, animated_glb: Path, mesh_glb: Path, lods: list[dict], rig_type: str,
-                   out_path: Path, progress: Progress) -> Path:
+                   out_path: Path, progress: Progress, kind: str = "hero") -> Path:
         """Exports mesh, skeleton and clips from ``animated_glb`` and the lower
         LODs from ``mesh_glb`` to one FBX for Unity (``<name>_LOD<n>`` meshes,
-        one take per clip)."""
+        one take per clip). Weapons (``kind``) are written rigid, without the armature."""
 
 
 class Adapters:

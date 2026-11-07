@@ -238,7 +238,7 @@ def match(template: dict, predicted: dict, asset_bounds: tuple[np.ndarray, np.nd
     ``mapping`` from each predicted joint to the template joint nearest its place (used for its
     skin weights), and a ``fit_score``: the share of template limbs found, less a penalty for
     each long predicted limb that matches nothing (wings on a biped)."""
-    t_names = list(template["joints"])
+    t_names = [n for n, j in template["joints"].items() if not j.get("socket")]  # sockets hold props
     t_parent = {n: template["joints"][n]["parent"] for n in t_names}
     t_raw = {n: np.array(template["joints"][n]["head"], float) for n in t_names}
     t_lo, t_hi = np.array(template["mesh_bounds"]["min"], float), np.array(template["mesh_bounds"]["max"], float)

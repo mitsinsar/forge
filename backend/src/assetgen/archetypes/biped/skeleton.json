@@ -351,6 +351,20 @@
    ],
    "parent": "thumb_02_l"
   },
+  "weapon_l": {
+   "head": [
+    0.62613,
+    0.06254,
+    1.00688
+   ],
+   "tail": [
+    0.63761,
+    -0.03604,
+    0.99463
+   ],
+   "parent": "hand_l",
+   "socket": true
+  },
   "clavicle_r": {
    "head": [
     -0.0188,
@@ -597,6 +611,20 @@
     0.90191
    ],
    "parent": "thumb_02_r"
+  },
+  "weapon_r": {
+   "head": [
+    -0.62613,
+    0.06254,
+    1.00688
+   ],
+   "tail": [
+    -0.63761,
+    -0.03604,
+    0.99463
+   ],
+   "parent": "hand_r",
+   "socket": true
   },
   "thigh_l": {
    "head": [
