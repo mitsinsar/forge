@@ -105,3 +105,41 @@ def test_a_batch_makes_varied_assets(client, tmp_path):
     assert len({a["batch_id"] for a in batch}) == 1
     listed = client.get(f"/api/assets?batch_id={batch[0]['batch_id']}").json()
     assert sorted(a["id"] for a in listed) == sorted(a["id"] for a in batch)
+
+
+def test_a_stage_whose_tool_died_restarts_it_and_runs_again(client, tmp_path, monkeypatch):
+    from assetgen import watchdog
+    pipeline = client.app.state.pipeline
+    pipeline.settings.restart = {"mesh": {"command": ["start-hunyuan"], "port": 8081}}
+    restarts = []
+    monkeypatch.setattr(watchdog, "restart_tool", lambda settings, tool: restarts.append(tool) or "restarted")
+    mesh = pipeline.adapters.mesh
+    original = mesh.image_to_mesh
+    calls = []
+
+    def flaky(**kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("Could not reach Hunyuan3D at http://127.0.0.1:8081 (connection refused)")
+        return original(**kwargs)
+
+    monkeypatch.setattr(mesh, "image_to_mesh", flaky)
+    project = make_project(client, "unity", tmp_path / "g")
+    asset = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "archetype": "biped",
+                                             "description": "a rogue"}).json()
+    wait_for(client, asset["id"], "waiting", gate=1)
+    client.post(f"/api/assets/{asset['id']}/gates/1/approve", json={"candidate": 1})
+    done = wait_for(client, asset["id"], "waiting", gate=2)
+    assert restarts == ["mesh"] and len(calls) == 2 and done["auto_restarts"] == {"mesh": 1}
+
+
+def test_storage_report_and_clean(client, settings, tmp_path):
+    orphan = settings.assets_dir / "gone123"
+    orphan.mkdir(parents=True)
+    (orphan / "big.bin").write_bytes(b"x" * 5000)
+    report = client.get("/api/storage").json()
+    orphans = next(c for c in report["categories"] if c["id"] == "orphans")
+    assert orphans["items"] == 1 and orphans["bytes"] == 5000
+    cleaned = client.post("/api/storage/clean", json={"categories": ["orphans"]}).json()
+    assert cleaned["freed_bytes"] == 5000 and not orphan.exists()
+    assert client.post("/api/tools/mesh/restart").status_code == 422  # no restart command set

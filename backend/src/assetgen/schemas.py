@@ -163,6 +163,10 @@ class VariantCreate(Strict):
     tint_strength: float = Field(0.0, ge=0, le=1)
 
 
+class CleanRequest(Strict):
+    categories: list[Literal["unirig_scratch", "thumbnails", "orphans", "stale_fits", "old_examples"]]
+
+
 class Toggle(Strict):
     value: bool
 

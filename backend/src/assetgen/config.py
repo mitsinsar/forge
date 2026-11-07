@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 ADAPTER_NAMES = ("llm", "image", "mesh", "rig", "blender")
@@ -57,6 +57,8 @@ class Settings:
     unirig_timeout: float = 900.0  # seconds one UniRig step may take (the first run downloads its checkpoints)
     unirig_tries: int = 3  # UniRig runs (other seeds) when the skeleton fits badly; the best is kept
     auto_retries: int = 2  # rounds of redrawing gate 1 candidates that fail their checks
+    # How to restart a tool that crashed: {tool: {command, cwd, port}} (see watchdog.py).
+    restart: dict = field(default_factory=dict)
     python_path: Path = Path("python")
     # The built web app (npm run build in frontend/), served at / when it exists.
     frontend_dir: Path = Path(__file__).resolve().parents[3] / "frontend" / "dist"
@@ -75,6 +77,8 @@ class Settings:
 
 
 def _coerce(value, current):
+    if isinstance(current, dict):
+        return dict(value) if isinstance(value, dict) else current
     if isinstance(current, bool):
         return str(value).lower() in ("1", "true", "yes", "on")
     if isinstance(current, int) and not isinstance(current, bool):

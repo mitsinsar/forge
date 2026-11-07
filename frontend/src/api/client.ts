@@ -68,6 +68,14 @@ export interface ToolStatus {
   name: string;
   ok: boolean;
   detail: string;
+  /** assetgen.toml says how to restart it. */
+  restartable?: boolean;
+}
+
+export interface StorageReport {
+  total_bytes: number;
+  freed_bytes?: number;
+  categories: { id: string; label: string; items: number; bytes: number }[];
 }
 
 export interface Meta {
@@ -449,6 +457,9 @@ export function assetFileUrl(assetId: string, relPath: string): string {
 export const api = {
   meta: () => request<Meta>("GET", "/meta"),
   tools: () => request<ToolStatus[]>("GET", "/tools"),
+  restartTool: (tool: string) => request<{ tool: string; result: string }>("POST", `/tools/${tool}/restart`),
+  storage: () => request<StorageReport>("GET", "/storage"),
+  cleanStorage: (categories: string[]) => request<StorageReport>("POST", "/storage/clean", { categories }),
   archetypes: () => request<Archetype[]>("GET", "/archetypes"),
 
   projects: () => request<Project[]>("GET", "/projects"),

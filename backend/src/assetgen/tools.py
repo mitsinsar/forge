@@ -58,5 +58,6 @@ def check_tools(settings: Settings) -> list[dict]:
     for name in ADAPTER_NAMES:
         ok, detail = results[name]
         label = "Modly" if name == "mesh" and settings.mesh_tool == "modly" else TOOL_NAMES[name]
-        report.append({"tool": name, "name": label, "ok": ok, "detail": detail})
+        restart = bool(((settings.restart or {}).get(name) or {}).get("command"))
+        report.append({"restartable": restart, "tool": name, "name": label, "ok": ok, "detail": detail})
     return report

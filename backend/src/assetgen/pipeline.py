@@ -29,7 +29,7 @@ from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import checks as qc
-from . import exporters, grips, pose, variants
+from . import exporters, grips, pose, variants, watchdog
 
 log = logging.getLogger("assetgen.pipeline")
 
@@ -287,6 +287,27 @@ class Pipeline:
             else:
                 await self.run_job(record["id"])
 
+    async def _restart_and_retry(self, asset_id: str, stage: str, exc: Exception) -> bool:
+        """A stage that failed because its tool did not answer or ran out of memory: restart the tool
+        (when assetgen.toml says how) and queue the stage again, once per stage."""
+        tool = watchdog.STAGE_TOOL.get(stage)
+        if not tool or not watchdog.TOOL_TROUBLE.search(str(exc)) or not watchdog.restartable(self.settings, tool):
+            return False
+        asset = self.db.get("assets", asset_id)
+        tried = dict(asset.get("auto_restarts") or {})
+        if tried.get(stage):
+            return False
+        tried[stage] = 1
+        self.update(asset_id, status="running", step=f"Restarting {tool} after: {str(exc)[:120]}", auto_restarts=tried)
+        try:
+            what = await asyncio.to_thread(watchdog.restart_tool, self.settings, tool)
+        except Exception as again:  # noqa: BLE001 - the stage fails as before, with both reasons
+            log.warning("restarting %s failed: %s", tool, again)
+            return False
+        log.info("%s %s; running %s of %s again", tool, what, stage, asset_id)
+        self.enqueue(asset_id, stage, step=f"{tool} {what}; running {stage} again")
+        return True
+
     # ---- side jobs: item fits and example renders ---------------------------------
 
     def queue_job(self, kind: str, target_id: str, params: dict | None = None) -> dict:
@@ -428,6 +449,8 @@ class Pipeline:
                 shutil.rmtree(self.asset_dir(asset_id), ignore_errors=True)
                 return
             log.exception("stage %s of %s failed", stage, asset_id)
+            if await self._restart_and_retry(asset_id, stage, exc):
+                return
             self.update(asset_id, status="failed", step=f"{stage} failed", error=f"{exc}",
                         error_detail=traceback.format_exc(limit=5))
             return

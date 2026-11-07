@@ -1,7 +1,8 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLiveUpdates } from "./api/live";
-import { useTools } from "./api/queries";
+import { api } from "./api/client";
+import { keys, useApiMutation, useTools } from "./api/queries";
 import { Badge, EmptyState, LinkButton } from "./ui/kit";
 import { AssetsPage } from "./pages/AssetsPage";
 import { NewAssetPage } from "./pages/NewAssetPage";
@@ -23,16 +24,25 @@ const NAV = [
 /** One badge per external tool: green when it answers, red when it does not (or is not built yet). */
 function ToolHealth() {
   const tools = useTools();
+  const restart = useApiMutation((tool: string) => api.restartTool(tool), [keys.tools]);
   return (
     <>
-      {(tools.data ?? []).map((t) => (
-        <span key={t.tool} title={t.detail}>
-          <Badge tone={t.ok ? "success" : "danger"} dot>
+      {(tools.data ?? []).map((t) => {
+        const badge = (
+          <Badge tone={t.ok ? "success" : "danger"} dot pulse={restart.isPending && restart.variables === t.tool}>
             {t.name}
-            {t.ok ? "" : t.detail.includes("not built yet") ? " not built" : " unreachable"}
+            {t.ok ? "" : restart.isPending && restart.variables === t.tool ? " restarting…" : t.detail.includes("not built yet") ? " not built" : " unreachable"}
           </Badge>
-        </span>
-      ))}
+        );
+        return !t.ok && t.restartable ? (
+          <button key={t.tool} type="button" className="badge-button" title={`${t.detail}. Click to restart it.`}
+                  disabled={restart.isPending} onClick={() => restart.mutate(t.tool)}>
+            {badge}
+          </button>
+        ) : (
+          <span key={t.tool} title={t.detail}>{badge}</span>
+        );
+      })}
     </>
   );
 }

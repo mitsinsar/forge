@@ -21,8 +21,9 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
                        SPRITE_LOOKS, STAGES, WEAPON_ATTACKS, WEAPON_CLASSES, deep_merge, profile_defaults)
 from .exporters import safe_name
 from .pipeline import Conflict, Invalid, Pipeline
+from . import storage, watchdog
 from .tools import check_tools
-from .schemas import (AssetCreate, BatchCreate, Kind, Approve, ExamplesRequest, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
+from .schemas import (AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
                       TrainingCandidate)
 
@@ -115,6 +116,30 @@ def create_project(body: ProjectCreate, db: Database = Depends(db_of)):
         profile = _new_profile(db, "Default", project["id"], {})
         project = db.update("projects", project["id"], {"default_profile_id": profile["id"]})
     return project
+
+
+@router.post("/tools/{tool}/restart", tags=["tools"],
+             summary="Restart a tool (ComfyUI, Hunyuan3D...) with its command from assetgen.toml, and wait for it")
+async def restart_tool(request: Request, tool: str):
+    settings = pipeline_of(request).settings
+    if not watchdog.restartable(settings, tool):
+        raise HTTPException(422, f"no restart command for {tool}: add [restart.{tool}] to assetgen.toml")
+    try:
+        return {"tool": tool, "result": await asyncio.to_thread(watchdog.restart_tool, settings, tool)}
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/storage", tags=["tools"], summary="Disk use of the data folder, and what can be cleaned")
+def storage_report(request: Request):
+    pipeline = pipeline_of(request)
+    return storage.report(pipeline.settings.data_dir, pipeline.db)
+
+
+@router.post("/storage/clean", tags=["tools"], summary="Delete the chosen cleanable categories")
+def storage_clean(request: Request, body: CleanRequest):
+    pipeline = pipeline_of(request)
+    return storage.clean(pipeline.settings.data_dir, pipeline.db, body.categories)
 
 
 @router.get("/projects/{project_id}/wearers", tags=["projects"],
