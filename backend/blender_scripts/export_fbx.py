@@ -3,7 +3,10 @@
 Arguments (args.json)::
 
     {"animated_glb": "animated.glb", "mesh_glb": "mesh.glb", "out_fbx": "Name.fbx",
-     "name": "Name", "lod_levels": [1, 2]}
+     "name": "Name", "lod_levels": [1, 2], "rigid": false}
+
+``rigid`` (weapons): the item is written alone in its own model space, without the armature,
+the preview mannequin or clips (the weapon is parented to a socket bone in the preview).
 
 The animated mesh becomes ``<name>_LOD0``; the gate-2 meshes ``LOD1``,
 ``LOD2``... become ``<name>_LOD1``... beside it under the same parent, which
@@ -12,7 +15,7 @@ the other levels get its weights and the same armature. Every clip is an NLA
 strip of its own, so each is written as its own take (animation clip).
 
 FBX settings for Unity: Y up, -Z forward, scale 1 (``FBX_SCALE_ALL``), no
-leaf bones, deform bones only, baked animation.
+leaf bones, every bone (the weapon sockets don't deform but must be there), baked animation.
 
 Result: ``{"meshes": [{"name", "triangles", "skinned"}], "clips": [names]}``.
 """
@@ -58,6 +61,22 @@ def drop_extras(objects) -> None:
     shapes = {bone.custom_shape for obj in objects if obj.type == "ARMATURE" for bone in obj.pose.bones}
     for obj in [o for o in objects if o in shapes or (o.type == "MESH" and PREVIEW_ONLY.match(o.name))]:
         bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def make_rigid(objects) -> None:
+    """Puts the meshes back in their own model space and removes the armatures."""
+    for obj in objects:
+        if alive(obj) and obj.type == "MESH":
+            obj.parent = None
+            obj.matrix_world.identity()
+            for modifier in list(obj.modifiers):
+                if modifier.type == "ARMATURE":
+                    obj.modifiers.remove(modifier)
+    for obj in objects:
+        if alive(obj) and obj.type == "ARMATURE":
+            bpy.data.objects.remove(obj, do_unlink=True)
+    for action in list(bpy.data.actions):
+        bpy.data.actions.remove(action)
 
 
 def lod0_from(objects, name: str):
@@ -149,6 +168,10 @@ def main(args: dict) -> dict:
     progress(0.05, "Importing the animated mesh")
     empty_scene()
     animated = import_gltf(args["animated_glb"])
+    if args.get("rigid"):
+        drop_extras(animated)
+        make_rigid(animated)
+        animated = [obj for obj in animated if alive(obj)]
     lod0 = lod0_from(animated, name)
 
     progress(0.3, "Adding the LODs")
@@ -164,7 +187,7 @@ def main(args: dict) -> dict:
         filepath=str(out), use_selection=False, object_types={"EMPTY", "ARMATURE", "MESH"},
         global_scale=1.0, apply_unit_scale=True, apply_scale_options="FBX_SCALE_ALL",
         axis_forward="-Z", axis_up="Y", use_mesh_modifiers=True, mesh_smooth_type="FACE",
-        add_leaf_bones=False, primary_bone_axis="Y", secondary_bone_axis="X", use_armature_deform_only=True,
+        add_leaf_bones=False, primary_bone_axis="Y", secondary_bone_axis="X", use_armature_deform_only=False,
         bake_anim=True, bake_anim_use_all_bones=True, bake_anim_use_nla_strips=True,
         bake_anim_use_all_actions=False, bake_anim_force_startend_keying=True, bake_anim_step=1.0,
         bake_anim_simplify_factor=0.0, path_mode="AUTO")

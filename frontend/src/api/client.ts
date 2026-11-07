@@ -168,6 +168,10 @@ export interface Grip {
   socket?: Socket;
   position?: [number, number, number];
   rotation?: [number, number, number];
+  /** "auto": found on the weapon's thin end at gate 3; "manual": set in the grip fields. */
+  source?: "auto" | "manual";
+  /** Two-handed weapons: where the other hand holds it. */
+  second?: { socket: Socket; position: [number, number, number]; rotation: [number, number, number] };
 }
 
 export interface SpritePreview {
@@ -212,6 +216,10 @@ export interface AssetOutputs {
     skeleton: { joints: number; fit_score: number; fallback: boolean };
     grip: Grip | null;
     sprites?: SpritePreview;
+    /** Gear: how it was fitted on the base body. */
+    gear?: { slot: string; scale: number; inside_before: number; inside_after: number; masked_faces: number };
+    /** Weapons: what the grip detection measured. */
+    weapon?: { length: number; handle_end: "low" | "high" | "middle"; manual: boolean };
   };
   export?: {
     engine: Engine;

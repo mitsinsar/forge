@@ -226,6 +226,16 @@ def add_outline(meshes, thickness: float) -> None:
         modifier.material_offset_rim = len(obj.data.materials) - 1
 
 
+def holdout_material():
+    material = bpy.data.materials.new("Holdout")
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    material.node_tree.links.new(nodes.new("ShaderNodeHoldout").outputs[0], output.inputs["Surface"])
+    return material
+
+
 def set_up_render(scene, size: int) -> None:
     scene.render.engine = "BLENDER_EEVEE" if "BLENDER_EEVEE" in _engines() else "BLENDER_EEVEE_NEXT"
     scene.render.resolution_x = scene.render.resolution_y = size
@@ -293,15 +303,22 @@ def main(args: dict) -> dict:
     camera.data.clip_start, camera.data.clip_end = 0.01, distance * 2
 
     progress(0.05, "Setting up the toon look")
-    for material in {slot.material for obj in meshes for slot in obj.material_slots if slot.material}:
+    # The mannequin wearing gear or holding a weapon is not drawn, but still hides what is behind
+    # it, so the item's layer composites over the character's own body layer.
+    hidden = [obj for obj in meshes if obj.name.lower().startswith("mannequin")]
+    shown = [obj for obj in meshes if obj not in hidden]
+    for obj in hidden:
+        obj.data.materials.clear()
+        obj.data.materials.append(holdout_material())
+    for material in {slot.material for obj in shown for slot in obj.material_slots if slot.material}:
         toon_material(material)
-    for obj in meshes:
+    for obj in shown:
         if not obj.data.materials:
             obj.data.materials.append(bpy.data.materials.new("Plain"))
             toon_material(obj.data.materials[0])
     outline_px = float(args.get("outline", 1.0))
     if outline_px > 0:
-        add_outline(meshes, span / int(args["frame_size"]) * outline_px)
+        add_outline(shown, span / int(args["frame_size"]) * outline_px)
     set_up_render(scene, size)
     add_light(camera)
 

@@ -172,7 +172,7 @@ def proxy_automatic_weights(mesh, arm) -> None:
 
 def nearest_bone_weights(mesh, arm, only_unweighted: bool) -> int:
     """Gives each (unweighted) vertex fully to the bone whose segment is nearest."""
-    segments = [(b.name, b.head_local.copy(), b.tail_local.copy()) for b in arm.data.bones]
+    segments = [(b.name, b.head_local.copy(), b.tail_local.copy()) for b in arm.data.bones if b.use_deform]
     groups = {name: (mesh.vertex_groups.get(name) or mesh.vertex_groups.new(name=name)) for name, _, _ in segments}
     fixed = 0
     for vertex in mesh.data.vertices:
@@ -531,8 +531,9 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fit
 
 
 def main(args: dict) -> dict:
-    if args.get("attach"):
-        raise RuntimeError("Fitting gear and weapons on the base body is ticket #12; they can't be rigged yet.")
+    if args.get("attach"):  # gear or a weapon on the base body
+        import attach  # noqa: PLC0415 - it imports this module
+        return attach.main(args)
     progress(0.02, "Loading the mesh and the template skeleton")
     empty_scene()
     scene = bpy.context.scene

@@ -378,7 +378,10 @@ export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
 
 // ---- gate 3: rig and animation ------------------------------------------------
 
-function GripFields({ grip, onChange }: { grip: Required<Grip>; onChange: (grip: Required<Grip>) => void }) {
+/** The grip fields the user edits at gate 3. */
+type GripEdit = Required<Pick<Grip, "socket" | "position" | "rotation">>;
+
+function GripFields({ grip, onChange }: { grip: GripEdit; onChange: (grip: GripEdit) => void }) {
   const axis = (key: "position" | "rotation", i: number, value: string) => {
     const next = [...grip[key]] as [number, number, number];
     next[i] = Number(value) || 0;
@@ -430,7 +433,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
   const directions = sprites ? [...sprites.directions, ...Object.keys(sprites.mirrored)] : [];
   const [direction, setDirection] = useState<string>(directions[0] ?? "");
   const round = (v: [number, number, number]) => v.map((n) => Math.round(n * 10000) / 10000) as [number, number, number];
-  const startGrip: Required<Grip> = {
+  const startGrip: GripEdit = {
     socket: rig?.grip?.socket ?? asset.grip?.socket ?? "weapon_r",
     position: round(rig?.grip?.position ?? asset.grip?.position ?? [0, 0, 0]),
     rotation: round(rig?.grip?.rotation ?? asset.grip?.rotation ?? [0, 0, 0]),
@@ -524,9 +527,35 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
         <Card
           title="Grip"
           subtitle="Where the weapon sits in the hand. Change it and reject to re-rig with the new grip."
-          actions={gripChanged && <Badge tone="accent">Changed</Badge>}
+          actions={
+            gripChanged ? (
+              <Badge tone="accent">Changed</Badge>
+            ) : rig?.grip?.source === "manual" ? (
+              <Badge>Set by you</Badge>
+            ) : rig?.grip?.source === "auto" ? (
+              <Badge tone="success">Found on the handle</Badge>
+            ) : undefined
+          }
         >
-          <GripFields grip={grip} onChange={setGrip} />
+          <Stack gap={3}>
+            <GripFields grip={grip} onChange={setGrip} />
+            {rig?.grip?.second && (
+              <Text small muted>
+                Two-handed: the other hand holds it on {rig.grip.second.socket}, 12 cm towards the blade.
+              </Text>
+            )}
+          </Stack>
+        </Card>
+      )}
+      {rig?.gear && !readOnly && (
+        <Card title="Fit on the base body" subtitle={`Shown on the mannequin playing ${rig.preview_clips.join(" and ")}.`}>
+          <DefList
+            items={[
+              ["Slot", label(rig.gear.slot)],
+              ["Body faces hidden under it", rig.gear.masked_faces],
+              ["Points pushed out of the body", rig.gear.inside_before],
+            ]}
+          />
         </Card>
       )}
     </Stack>

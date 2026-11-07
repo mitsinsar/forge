@@ -33,6 +33,8 @@ from fakes.glb import GlbBuilder, build_mesh, read_glb_json
 from fakes.shapes import Part, asset_parts
 
 HELPERS = Path(__file__).parent / "blender"
+TEMPLATE_JOINTS = json.loads((Path(__file__).parents[1] / "src" / "assetgen" / "archetypes" / "biped"
+                              / "skeleton.json").read_text(encoding="utf-8"))["joints"]
 
 
 def find_blender() -> str | None:
@@ -278,13 +280,101 @@ def test_rig_and_animate_retargets_the_template_clips(tmp_path, arch_id):
     assert 0.1 < record["scale"] < 3.0  # the source packs come in their own sizes (the wolf is 5.5 m long)
 
 
-@needs_blender
-def test_gear_and_weapons_wait_for_ticket_12(tmp_path):
+def _accessor(gltf: dict, binary: bytes, index: int) -> np.ndarray:
+    accessor = gltf["accessors"][index]
+    view = gltf["bufferViews"][accessor["bufferView"]]
+    width = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[accessor["type"]]
+    dtype = {5126: np.float32, 5121: np.uint8, 5123: np.uint16, 5125: np.uint32}[accessor["componentType"]]
+    data = np.frombuffer(binary, dtype=dtype, count=accessor["count"] * width,
+                         offset=view.get("byteOffset", 0) + accessor.get("byteOffset", 0))
+    return data.reshape(accessor["count"], width)
+
+
+def _attach(tmp_path: Path, mesh: Path, attach: dict, clips=("walk", "attack_1")) -> tuple[dict, dict, bytes]:
+    from assetgen.imaging import read_glb
     tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
-    with pytest.raises(BlenderError, match="ticket #12"):
-        tools.rig_and_animate(mesh_glb=tmp_path / "m.glb", skeleton={}, archetype=get_archetype("biped"),
-                              clips=["idle"], attach={"kind": "gear", "slot": "head"},
-                              out_path=tmp_path / "rig" / "animated.glb", progress=lambda s, f: None)
+    biped = get_archetype("biped")
+    result = tools.rig_and_animate(mesh_glb=mesh, skeleton={"joints": biped["joints"]}, archetype=biped,
+                                   clips=list(clips), attach=attach, out_path=tmp_path / "rig" / "animated.glb",
+                                   progress=lambda s, f: None)
+    gltf, binary = read_glb(result["glb"])
+    assert sorted(a["name"] for a in gltf["animations"]) == sorted(clips)
+    return result, gltf, binary
+
+
+@needs_blender
+def test_a_box_helmet_lands_on_the_head_with_the_bodys_weights(tmp_path):
+    from test_unirig import box_glb
+    mesh = tmp_path / "helmet.glb"
+    mesh.write_bytes(box_glb([-0.5, -0.5, 0.4], [0.5, 0.5, 1.4], extra_lod=False))  # a 1 m box anywhere
+    result, gltf, binary = _attach(tmp_path, mesh, {"kind": "gear", "slot": "head"})
+
+    assert result["gear"]["inside_after"] == 0  # nothing of it inside the body at rest
+    assert result["gear"]["masked_faces"] > 50
+    mask = json.loads((tmp_path / "rig" / "body_mask.json").read_text())
+    assert mask["slot"] == "head" and len(mask["faces"]) == result["gear"]["masked_faces"]
+
+    names = [n.get("name") for n in gltf["nodes"]]
+    gear = gltf["nodes"][names.index("gear")]
+    primitive = gltf["meshes"][gear["mesh"]]["primitives"][0]
+    position = gltf["accessors"][primitive["attributes"]["POSITION"]]
+    head = TEMPLATE_JOINTS["Head"]["head"]  # Blender axes; the GLB is Y up
+    centre = [(a + b) / 2 for a, b in zip(position["min"], position["max"])]
+    assert abs(centre[0] - head[0]) < 0.05 and abs(centre[2] + head[1]) < 0.08
+    assert position["min"][1] < head[2] + 0.05 < position["max"][1]  # around the head, not floating
+    joints = gltf["skins"][gear["skin"]]["joints"]
+    used = {names[joints[j]] for j in np.unique(_accessor(gltf, binary, primitive["attributes"]["JOINTS_0"])[
+        _accessor(gltf, binary, primitive["attributes"]["WEIGHTS_0"]) > 0.01])}
+    assert used == {"Head"}
+    assert "mannequin" in names  # the base body plays the clips with it
+
+
+@needs_blender
+def test_a_stick_weapons_grip_is_at_its_thin_end(tmp_path):
+    mesh = tmp_path / "stick.glb"
+    builder = GlbBuilder()
+    material = builder.add_material("albedo", (0.5, 0.5, 0.5))
+    parts = [Part((0, 0.11, 0), (0.015, 0.11, 0.015), 1),  # the handle, 22 cm (glTF: Y up)
+             Part((0, 0.62, 0), (0.05, 0.40, 0.008), 3)]  # a wide, flat blade above it
+    builder.add_node("LOD0", builder.add_mesh("LOD0", build_mesh(parts, 4000), material))
+    builder.write(mesh)
+    result, gltf, _ = _attach(tmp_path, mesh, {"kind": "weapon", "weapon_class": "one_handed",
+                                               "socket": "weapon_r", "grip_matrix": None},
+                              clips=("walk", "attack_slash"))
+
+    weapon = result["weapon"]
+    frame = np.array(weapon["grip_matrix"])
+    assert weapon["handle_end"] == "low" and not weapon["manual"]
+    assert 0.03 < frame[2, 3] < 0.2 and abs(frame[0, 3]) < 0.02  # in the handle (Blender: Z up)
+    assert frame[2, 1] > 0.95  # +Y of the grip points up the blade
+    names = [n.get("name") for n in gltf["nodes"]]
+    socket = gltf["nodes"][names.index("weapon_r")]
+    assert names.index("weapon") in socket.get("children", [])  # held by the socket bone, not skinned
+    assert "skin" not in gltf["nodes"][names.index("weapon")]
+
+    # Unity gets the weapon alone and rigid, in its own model space.
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    tools.export_fbx(animated_glb=result["glb"], mesh_glb=mesh, lods=[{"level": 0}], rig_type="Humanoid",
+                     out_path=tmp_path / "export" / "Stick.fbx", progress=lambda s, f: None, kind="weapon")
+    record = json.loads((tmp_path / "export" / "export_fbx.result.json").read_text())
+    assert [m["name"] for m in record["meshes"]] == ["Stick_LOD0"] and not record["meshes"][0]["skinned"]
+    assert record["clips"] == []
+
+
+@needs_blender
+def test_a_grip_given_at_gate_3_replaces_the_detected_one(tmp_path):
+    mesh = tmp_path / "stick.glb"
+    builder = GlbBuilder()
+    material = builder.add_material("albedo", (0.5, 0.5, 0.5))
+    builder.add_node("LOD0", builder.add_mesh("LOD0", build_mesh([Part((0, 0.5, 0), (0.02, 0.5, 0.02), 1)], 2000),
+                                              material))
+    builder.write(mesh)
+    given = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0.7], [0, 0, 0, 1]]
+    result, _, _ = _attach(tmp_path, mesh, {"kind": "weapon", "weapon_class": "two_handed", "socket": "weapon_r",
+                                            "grip_matrix": given}, clips=("walk",))
+    assert result["weapon"]["manual"] and np.allclose(result["weapon"]["grip_matrix"], given)
+    second = np.array(result["weapon"]["second_grip_matrix"])
+    assert np.allclose(second[:3, 3], [0, 0.12, 0.7])  # the second hand 12 cm towards the blade (+Y)
 
 
 @needs_blender

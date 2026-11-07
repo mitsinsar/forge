@@ -140,12 +140,47 @@ to the budget.
 3. The first textured run downloads the paint weights; after that a textured mesh takes about
    4 minutes, a shape-only one about 15 seconds.
 
+### Gear and weapons (rig stage, gate 3)
+
+Gear and weapons are rigged on the biped base body (`blender_scripts/attach.py`, called by
+`rig_animate.py`); the preview GLB has the mannequin, the item and the armature playing walk and an
+attack.
+
+* **Gear**: the item is scaled and moved onto its slot region by their bounds: centred over the
+  region's width and depth (head, chest, cape: the cape against the back, from the shoulders), the
+  legs' height, each foot (bottom on the ground) or each forearm and hand (turned along it). A pair
+  is split into its two pieces; a single glove or boot is mirrored for the other side. A Shrinkwrap
+  (outside mode, 8 mm offset) pushes out whatever is still inside the body, so nothing clips at
+  rest. The body's weights are copied onto it (Data Transfer, nearest face); a helmet follows the
+  head bone alone. The body faces it covers (a ray along the face's normal meets the item within
+  6 cm) are the mask: written to `rig/body_mask.json` and left out of the preview body. Gate 3
+  shows the counts (`outputs.rig.gear`).
+* **Weapons**: rigid, never skinned, parented to the socket bone. The grip is found on the longest
+  axis: the handle is the thinner end, and the grip sits in the middle of its thin run (bows: the
+  middle, on `weapon_l`; staffs: 45 % up). Its frame has +Y towards the blade and +Z across the
+  blade's width, and sits on the socket bone's frame. Two-handed weapons get a second grip for
+  `weapon_l`, 12 cm towards the blade. The found grip is stored on the asset (`grip`, with
+  `"source": "auto"`, in Unity's terms: see `src/assetgen/grips.py`); a grip typed in gate 3's grip
+  fields is sent with the rejection, marked `"source": "manual"` and used as it is on the rerun.
+* **Exports**: the Unity FBX leaves out the mannequin, so gear is a skinned mesh on the shared
+  skeleton; a weapon is written rigid in its own model space, without armature or clips, and its
+  grip goes to `asset.json`. The Godot render keeps the mannequin as a holdout: invisible, but it
+  still hides what is behind it, so the slot's or weapon's layer composites over the body layer in
+  `PaperDoll`.
+
 ### Archetype templates (the rig stage's skeletons and clips)
 
 Each archetype folder in `src/assetgen/archetypes/<id>/` holds:
 
 - `skeleton.blend`: the template armature alone, in the archetype's rest pose (the biped's is the
-  A-pose the prompts ask for), with the joint names listed in `archetype.json`;
+  A-pose the prompts ask for), with the joint names listed in `archetype.json`. The biped's also
+  has the weapon sockets `weapon_r` and `weapon_l`: bones on the hands that don't deform (head in
+  the palm, pointing out of the fist on the thumb side, Z along the fingers), marked
+  `"socket": true` in `skeleton.json`;
+- `base_body.blend` (biped only): the template armature and the source pack's mannequin (object
+  `mannequin`) skinned to it in the same A-pose, with a `slot_<slot>` vertex group per gear slot
+  (by each vertex's strongest bone: head and neck; torso and upper arms; pelvis and legs; forearms,
+  hands and fingers; feet; and the back of the torso and thighs for the cape). Gear is fitted on it;
 - `clips/<clip>.glb`: one in-place animation per clip, named after the clip, on the source armature
   (kept as a glTF skin by a one-triangle proxy mesh, so importers rebuild it as a skeleton);
 - `clips.json` (source clip, duration, loop, stand-ins) and `LICENCES.md`.
@@ -174,7 +209,7 @@ then run (all archetypes, or only those named; `--out DIR` writes elsewhere):
 & "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe" -b --factory-startup -P blender_scripts/build_archetypes.py -- [biped quadruped ...]
 ```
 
-It rewrites the templates, `clips.json`, `LICENCES.md` and the `joints`, `clips`, `sockets` and
+It rewrites the templates (and the biped's `base_body.blend`), `clips.json`, `LICENCES.md` and the `joints`, `clips`, `sockets` and
 source fields of `archetype.json`. Which source clip feeds each of our clips is the `SOURCES`
 table at the top of the script; swapping a pack (Truebones, Mixamo) means changing that table.
 
@@ -198,7 +233,7 @@ mesh. The rig stage works like this:
 4. Each clip in `archetypes/<id>/clips/` is retargeted with world-space Copy Transforms and baked;
    the GLB has one named animation per clip.
 
-Gear and weapons are not fitted yet (ticket #12). On the RTX 5090 machine UniRig is installed at `C:\tools\UniRig`
+Gear and weapons skip UniRig: they are fitted on the base body (see "Gear and weapons" below). On the RTX 5090 machine UniRig is installed at `C:\tools\UniRig`
 (commit `6793c66`) with its own Python 3.11 environment, the paths `unirig_path` and
 `python_path` in `assetgen.toml` point at:
 
@@ -391,7 +426,8 @@ Exports go into the project's folder:
 
 * **Unity** — `<path>/Assets/Generated/<kind>/<Name>/`: `<Name>.fbx` (mesh, skeleton, clips,
   LODs), `Textures/<Name>_Albedo.png` (+ `.meta`) and `asset.json` for the editor import script
-  (rig type, LODs, clips, slot, bones and hidden body parts for gear, socket and grip for weapons).
+  (rig type, LODs, clips, slot, bones and hidden body parts for gear, socket and grip for weapons,
+  and the second hand's grip for two-handed ones).
   The first export also puts the import script into the project (see below), which makes
   `<Name>.prefab`, `Materials/<Name>.mat` and `<Name>.controller` beside them in Unity.
 * **Godot** — `<path>/generated/<kind>/<Name>/` (`res://generated/<kind>/<Name>/`): one atlas PNG
