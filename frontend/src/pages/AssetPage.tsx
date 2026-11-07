@@ -14,6 +14,7 @@ import {
   ErrorNotice,
   LinkButton,
   Loading,
+  Notice,
   PageHeader,
   Row,
   Stack,
@@ -24,7 +25,14 @@ import {
 
 const STAGES: Stage[] = ["prompt", "mesh", "rig", "export"];
 
-function steps(asset: Asset) {
+/** A stage whose finished output can be shown again from the step bar. */
+function viewable(asset: Asset, stage: Stage): boolean {
+  const current = STAGES.indexOf(asset.stage);
+  const finished = asset.status === "done" || STAGES.indexOf(stage) < current;
+  return finished && stage !== "export" && !!asset.outputs[stage];
+}
+
+function steps(asset: Asset, viewing: Stage | null, setViewing: (stage: Stage | null) => void) {
   const current = STAGES.indexOf(asset.stage);
   return STAGES.map((stage, i) => {
     let state: StepState = i < current ? "done" : i === current ? "current" : "todo";
@@ -38,8 +46,31 @@ function steps(asset: Asset) {
       else if (asset.status === "running") sub = `${Math.round(asset.progress * 100)}%`;
       else sub = "Queued";
     }
-    return { label: STAGE_LABEL[stage], sub, state };
+    const isCurrent = i === current && asset.status !== "done";
+    const onClick = viewable(asset, stage)
+      ? () => setViewing(viewing === stage ? null : stage)
+      : isCurrent && viewing
+        ? () => setViewing(null)
+        : undefined;
+    return { label: STAGE_LABEL[stage], sub, state, onClick, selected: viewing ? viewing === stage : isCurrent };
   });
+}
+
+/** A finished step, shown again read-only. */
+function PastStep({ asset, stage, godot, onBack }: { asset: Asset; stage: Stage; godot: boolean; onBack: () => void }) {
+  return (
+    <Stack gap={4}>
+      <Notice title={`Looking back at ${STAGE_LABEL[stage].toLowerCase()}`}>
+        <Row justify="between">
+          <Text small>This step is finished; nothing here can be changed.</Text>
+          <Button size="sm" onClick={onBack}>Back to the current step</Button>
+        </Row>
+      </Notice>
+      {stage === "prompt" && <Gate1 asset={asset} readOnly />}
+      {stage === "mesh" && <Gate2 asset={asset} readOnly />}
+      {stage === "rig" && <Gate3 asset={asset} godot={godot} readOnly />}
+    </Stack>
+  );
 }
 
 function Working({ asset }: { asset: Asset }) {
@@ -64,6 +95,7 @@ export function AssetPage() {
   const projects = useProjects();
   const profiles = useProfiles();
   const [deleting, setDeleting] = useState(false);
+  const [viewing, setViewing] = useState<Stage | null>(null);
   const remove = useApiMutation(() => api.deleteAsset(id), [keys.assets]);
 
   if (asset.isPending) return <Loading />;
@@ -81,10 +113,14 @@ export function AssetPage() {
   const profile = profiles.data?.find((p) => p.id === a.profile_id);
   const viewKey = `${a.status}:${a.gate}:${JSON.stringify(a.attempts)}`;
 
+  const godot = project?.engine === "godot";
+  const shown = viewing && viewable(a, viewing) ? viewing : null;
+
   let body;
-  if (a.status === "waiting" && a.gate === 1) body = <Gate1 key={viewKey} asset={a} />;
+  if (shown) body = <PastStep key={`past:${shown}:${viewKey}`} asset={a} stage={shown} godot={godot} onBack={() => setViewing(null)} />;
+  else if (a.status === "waiting" && a.gate === 1) body = <Gate1 key={viewKey} asset={a} />;
   else if (a.status === "waiting" && a.gate === 2) body = <Gate2 key={viewKey} asset={a} />;
-  else if (a.status === "waiting" && a.gate === 3) body = <Gate3 key={viewKey} asset={a} godot={project?.engine === "godot"} />;
+  else if (a.status === "waiting" && a.gate === 3) body = <Gate3 key={viewKey} asset={a} godot={godot} />;
   else if (a.status === "done") body = <DoneView asset={a} />;
   else if (a.status === "failed") body = <FailedView asset={a} />;
   else body = <Working asset={a} />;
@@ -109,7 +145,7 @@ export function AssetPage() {
           </Button>
         }
       />
-      <Stepper steps={steps(a)} />
+      <Stepper steps={steps(a, shown, setViewing)} />
       <ErrorNotice error={asset.error} />
       {body}
       <AssetDetails asset={a} projectName={project?.name} profileName={profile?.name} />

@@ -510,21 +510,38 @@ export function Loading() {
 
 export type StepState = "done" | "current" | "failed" | "todo";
 
-export function Stepper({ steps }: { steps: { label: string; sub?: string; state: StepState }[] }) {
+/** A row of steps. A step with ``onClick`` is a button (to show that step again); ``selected`` marks the one on screen. */
+export function Stepper({
+  steps,
+}: {
+  steps: { label: string; sub?: string; state: StepState; onClick?: () => void; selected?: boolean }[];
+}) {
   return (
     <ol className="stepper" style={{ listStyle: "none", margin: 0 }}>
-      {steps.map((step, i) => (
-        <li key={step.label} className="row gap-2" style={{ flex: i < steps.length - 1 ? "1 1 auto" : "0 0 auto" }}>
-          <span className={cx("stepper__step", `stepper__step--${step.state}`)}>
+      {steps.map((step, i) => {
+        const className = cx("stepper__step", `stepper__step--${step.state}`, step.selected && "stepper__step--selected");
+        const content = (
+          <>
             <span className="stepper__num">{step.state === "done" ? "✓" : step.state === "failed" ? "!" : i + 1}</span>
             <span className="stack">
               <span>{step.label}</span>
               {step.sub && <span className="stepper__sub">{step.sub}</span>}
             </span>
-          </span>
-          {i < steps.length - 1 && <span className="stepper__line" />}
-        </li>
-      ))}
+          </>
+        );
+        return (
+          <li key={step.label} className="row gap-2" style={{ flex: i < steps.length - 1 ? "1 1 auto" : "0 0 auto" }}>
+            {step.onClick ? (
+              <button type="button" className={cx(className, "stepper__step--button")} aria-pressed={!!step.selected} onClick={step.onClick}>
+                {content}
+              </button>
+            ) : (
+              <span className={className}>{content}</span>
+            )}
+            {i < steps.length - 1 && <span className="stepper__line" />}
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -577,7 +594,7 @@ export function Thumb({
       {label && <span className="thumb__label">{label}</span>}
     </>
   );
-  if (!onClick) return <div className="thumb thumb--static">{content}</div>;
+  if (!onClick) return <div className={cx("thumb thumb--static", selected && "thumb--selected")}>{content}</div>;
   return (
     <button type="button" className="thumb" aria-pressed={!!selected} onClick={onClick}>
       {content}

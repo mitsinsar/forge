@@ -5,3 +5,6 @@ __pycache__/
 data/
 assetgen.toml
 unity-samples-data/
+# Downloaded animation packs (sources of the archetype templates); the built templates are committed.
+src/assetgen/archetypes/*/source/
+src/assetgen/archetypes/_quaternius/
