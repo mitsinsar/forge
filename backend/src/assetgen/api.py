@@ -115,6 +115,14 @@ def create_project(body: ProjectCreate, db: Database = Depends(db_of)):
     return project
 
 
+@router.get("/projects/{project_id}/wearers", tags=["projects"],
+            summary="The project's rigged biped heroes, which gear and weapons can be fitted on")
+def project_wearers(request: Request, project_id: str):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("projects", project_id), "project")
+    return [{"id": a["id"], "name": a["name"], "height": a.get("height")} for a in pipeline.wearers(project_id)]
+
+
 @router.get("/projects/{project_id}", tags=["projects"], summary="Get a project")
 def read_project(project_id: str, db: Database = Depends(db_of)):
     return _found(db.get("projects", project_id), "project")
@@ -400,6 +408,8 @@ def _create_asset(request: Request, body: AssetCreate, source: Image.Image | Non
         raise HTTPException(422, "slot is only for gear")
     if body.weapon_class and body.kind != "weapon":
         raise HTTPException(422, "weapon_class is only for weapons")
+    if body.height is not None and body.kind in ("gear", "weapon"):
+        raise HTTPException(422, "height is only for characters; gear and weapons fit their wearer")
     overrides = body.overrides.model_dump(exclude_none=True) if body.overrides else {}
     if overrides.get("loras"):
         base = deep_merge(pipeline.asset_settings({"profile_id": profile_id}), overrides)
@@ -408,7 +418,8 @@ def _create_asset(request: Request, body: AssetCreate, source: Image.Image | Non
         "project_id": project["id"], "profile_id": profile_id, "kind": body.kind,
         "name": (body.name or "").strip() or _default_name(body.description), "description": body.description,
         "archetype_override": body.archetype, "archetype": body.archetype, "slot": body.slot,
-        "weapon_class": body.weapon_class, "grip": None, "overrides": overrides,
+        "weapon_class": body.weapon_class, "grip": None, "overrides": overrides, "height": body.height,
+        "wearer_id": None,
         "status": "queued", "stage": "prompt", "gate": None, "step": "Waiting for the worker", "progress": 0.0,
         "error": None, "notes": [], "attempts": {}, "approvals": {}, "chosen_candidate": None, "outputs": {},
         "training_candidate": False, "training_candidate_set": False, "queued_at": now(),
@@ -452,7 +463,10 @@ def reject_gate(request: Request, asset_id: str, gate: int, body: Reject | None 
     pipeline = pipeline_of(request)
     body = body or Reject()
     grip = body.grip.model_dump(exclude_none=True) if body.grip else None
-    asset = _run(lambda: pipeline.reject(asset_id, gate, body.note, body.archetype, grip))
+    if body.joints and any(len(p) != 3 for p in body.joints.values()):
+        raise HTTPException(422, "each joint needs three coordinates")
+    asset = _run(lambda: pipeline.reject(asset_id, gate, body.note, body.archetype, grip, body.joints,
+                                         height=body.height, wearer=body.wearer))
     return asset_view(request, asset)
 
 

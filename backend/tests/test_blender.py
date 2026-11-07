@@ -659,3 +659,52 @@ def test_godot_run_with_real_blender_shows_sprites_at_gate_3(tmp_path, monkeypat
         client.post(f"/api/assets/{asset_id}/gates/3/approve")
         done = wait_for(client, asset_id, "done", timeout=300)
     assert any(f.endswith(".tres") for f in done["outputs"]["export"]["files"])
+
+
+@needs_blender
+def test_gear_and_a_weapon_fit_a_shorter_wearer(tmp_path):
+    """A 1.4 m hero rigged for real, then a box helmet and a stick weapon fitted on it."""
+    from test_unirig import box_glb
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    raw = write_raw(tmp_path / "raw.glb", asset_parts("hero", "biped"), 6000)
+    mesh = tools.cleanup_and_lods(raw_mesh=raw, kind="hero", triangles=3000, lod_ratios=[0.5],
+                                  out_dir=tmp_path / "mesh", progress=lambda s, f: None, height=1.4)
+    clips = ["walk", "attack_1", "attack_slash"]
+    hero = tools.rig_and_animate(mesh_glb=mesh["glb"], skeleton={"fallback": True}, archetype=get_archetype("biped"),
+                                 clips=clips, attach=None, out_path=tmp_path / "hero" / "animated.glb",
+                                 progress=lambda s, f: None)
+    blend = tmp_path / "hero" / "rigged.blend"
+    assert blend.is_file() and hero["joints"]["Head"]["head"][2] < 1.4  # a 1.4 m body, head below 1.4 m
+    wearer = {"id": "hero", "name": "Short hero", "blend": str(blend), "clips": hero["clips"]}
+
+    helmet = tmp_path / "helmet.glb"
+    helmet.write_bytes(box_glb([-0.5, -0.5, 0.4], [0.5, 0.5, 1.4], extra_lod=False))
+    tools2 = BlenderTools(load_settings(data_dir=tmp_path / "h", blender_path=BLENDER))
+    fitted = tools2.rig_and_animate(mesh_glb=helmet, skeleton={}, archetype=get_archetype("biped"),
+                                    clips=["walk", "attack_1"], attach={"kind": "gear", "slot": "head", "wearer": wearer},
+                                    out_path=tmp_path / "h" / "rig" / "animated.glb", progress=lambda s, f: None)
+    assert fitted["gear"]["inside_after"] == 0
+    gltf = read_glb_json(fitted["glb"])
+    names = [n.get("name") for n in gltf["nodes"]]
+    gear = gltf["meshes"][gltf["nodes"][names.index("gear")]["mesh"]]["primitives"][0]
+    top = gltf["accessors"][gear["attributes"]["POSITION"]]["max"][1]
+    head = hero["joints"]["Head"]["head"][2]
+    assert head < top < 1.4 + 0.1  # on this hero's head, not the 1.8 m mannequin's
+    assert sorted(a["name"] for a in gltf["animations"]) == ["attack_1", "walk"]  # the wearer's own clips
+
+    stick = tmp_path / "stick.glb"
+    builder = GlbBuilder()
+    material = builder.add_material("albedo", (0.5, 0.5, 0.5))
+    builder.add_node("LOD0", builder.add_mesh("LOD0", build_mesh(
+        [Part((0, 0.11, 0), (0.015, 0.11, 0.015), 1), Part((0, 0.62, 0), (0.05, 0.40, 0.008), 3)], 3000), material))
+    builder.write(stick)
+    tools3 = BlenderTools(load_settings(data_dir=tmp_path / "w", blender_path=BLENDER))
+    held = tools3.rig_and_animate(mesh_glb=stick, skeleton={}, archetype=get_archetype("biped"),
+                                  clips=["walk", "attack_slash"],
+                                  attach={"kind": "weapon", "weapon_class": "one_handed", "socket": "weapon_r",
+                                          "grip_matrix": None, "wearer": wearer},
+                                  out_path=tmp_path / "w" / "rig" / "animated.glb", progress=lambda s, f: None)
+    gltf = read_glb_json(held["glb"])
+    names = [n.get("name") for n in gltf["nodes"]]
+    assert names.index("weapon") in gltf["nodes"][names.index("weapon_r")].get("children", [])
+    assert held["weapon"]["handle_end"] == "low"

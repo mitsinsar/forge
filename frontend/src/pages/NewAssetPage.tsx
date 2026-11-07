@@ -49,6 +49,7 @@ export function NewAssetPage() {
   const [archetype, setArchetype] = useState("");
   const [slot, setSlot] = useState<Slot>("chest");
   const [weaponClass, setWeaponClass] = useState<WeaponClass | "">("");
+  const [height, setHeight] = useState("");
   const [profileChoice, setProfileId] = useState<string | null>(null);
   const [triangles, setTriangles] = useState("");
   const [meshQuality, setMeshQuality] = useState("");
@@ -94,6 +95,7 @@ export function NewAssetPage() {
         archetype: isCharacter(kind) && archetype ? archetype : undefined,
         slot: kind === "gear" ? slot : undefined,
         weapon_class: kind === "weapon" && weaponClass ? weaponClass : undefined,
+        height: isCharacter(kind) && Number(height) > 0 ? Number(height) : undefined,
         profile_id: profileId || undefined,
         overrides:
           triangleLimit > 0 || chosenMesh
@@ -218,6 +220,22 @@ export function NewAssetPage() {
               ) : (
                 <Field label="Archetype" hint="Gear and weapons are always made on the biped mannequin.">
                   {(id) => <Input id={id} value="Biped" disabled readOnly />}
+                </Field>
+              )}
+              {isCharacter(kind) && (
+                <Field label="Height (m)" hint="Optional. Feet to top of the head; heroes default to 1.8 m, monsters 1.5 m, bosses 2.7 m.">
+                  {(id) => (
+                    <Input
+                      id={id}
+                      type="number"
+                      min={0.3}
+                      max={10}
+                      step={0.05}
+                      value={height}
+                      onChange={(e) => setHeight(e.target.value)}
+                      placeholder={kind === "boss" ? "2.7" : kind === "monster" ? "1.5" : "1.8"}
+                    />
+                  )}
                 </Field>
               )}
               {kind === "gear" && (

@@ -172,7 +172,8 @@ class Pipeline:
         return self.enqueue(asset_id, next_stage)
 
     def reject(self, asset_id: str, gate: int, note: str | None = None, archetype: str | None = None,
-               grip: dict | None = None) -> dict:
+               grip: dict | None = None, joints: dict | None = None, height: float | None = None,
+               wearer: str | None = None) -> dict:
         asset = self._require(asset_id)
         self._require_gate(asset, gate)
         stage = STAGE_OF_GATE[gate]
@@ -190,6 +191,26 @@ class Pipeline:
                 raise Invalid("the grip can only be changed for weapons at gate 3")
             changes["grip"] = {**DEFAULT_GRIPS[asset["weapon_class"]], **(asset.get("grip") or {}), **grip,
                                "source": "manual"}
+        if height is not None:
+            if gate != 2 or asset["kind"] in ("gear", "weapon"):
+                raise Invalid("the height can only be changed for characters at gate 2")
+            changes["height"] = float(height)
+        if wearer is not None:
+            if gate != 3 or asset["kind"] not in ("gear", "weapon"):
+                raise Invalid("the wearer can only be changed for gear and weapons at gate 3")
+            if wearer and wearer not in {w["id"] for w in self.wearers(asset["project_id"])}:
+                raise Invalid("the wearer must be a rigged biped hero of the same project")
+            changes["wearer_id"] = wearer or None
+        if joints is not None:
+            if gate != 3 or asset["kind"] in ("gear", "weapon"):
+                raise Invalid("joints can only be moved for characters at gate 3")
+            known = set(get_archetype(asset["archetype"])["joints"])
+            unknown = sorted(set(joints) - known)
+            if unknown:
+                raise Invalid(f"unknown joints for the {asset['archetype']} skeleton: {', '.join(unknown)}")
+            # Moved joints add up over rejections; an empty set goes back to the detected ones.
+            changes["joint_overrides"] = ({**(asset.get("joint_overrides") or {}),
+                                           **{k: [float(v) for v in p] for k, p in joints.items()}} if joints else {})
         notes = list(asset.get("notes") or [])
         if note and note.strip():
             notes.append({"gate": gate, "stage": stage, "note": note.strip(), "at": now()})
@@ -431,7 +452,7 @@ class Pipeline:
         result = self.adapters.blender.cleanup_and_lods(
             raw_mesh=raw, kind=asset["kind"], triangles=triangles, lod_ratios=list(settings["budgets"]["lod_ratios"]),
             out_dir=directory, progress=lambda s, f: progress(s, 0.5 + 0.5 * f),
-            remove_floaters=bool(quality.get("remove_floaters", True)))
+            remove_floaters=bool(quality.get("remove_floaters", True)), height=asset.get("height"))
         return {"glb": self._rel(asset["id"], result["glb"]), "texture": self._rel(asset["id"], texture),
                 "triangle_budget": triangles, "lods": result["lods"], "delight": delight, "quality": quality,
                 "removed": result.get("removed")}
@@ -456,6 +477,10 @@ class Pipeline:
         else:
             skeleton = self.adapters.rig.predict_skeleton(
                 mesh=mesh, archetype=archetype, out_dir=directory, progress=lambda s, f: progress(s, 0.3 * f))
+            skeleton = {**skeleton, "overrides": dict(asset.get("joint_overrides") or {})}
+        wearer = self._wearer(asset) if attach else None
+        if wearer:
+            attach["wearer"] = wearer
         project = self.db.get("projects", asset["project_id"]) or {}
         godot = project.get("engine") == "godot"
         result = self.adapters.blender.rig_and_animate(
@@ -467,6 +492,11 @@ class Pipeline:
                   "skeleton": {"joints": len(skeleton["joints"]), "fit_score": skeleton["fit_score"],
                                "fallback": skeleton["fallback"]},
                   "grip": asset.get("grip") if asset["kind"] == "weapon" else None}
+        if attach:
+            output["wearer"] = {"id": wearer["id"], "name": wearer["name"]} if wearer else None
+        if result.get("joints"):
+            output["joints"] = result["joints"]
+            output["joint_overrides"] = sorted(asset.get("joint_overrides") or {})
         if result.get("gear"):
             output["gear"] = result["gear"]
         if result.get("weapon"):
@@ -477,6 +507,23 @@ class Pipeline:
                                            lambda s, f: progress(s, 0.7 + 0.3 * f))
             output["sprites"] = {k: v for k, v in sprites.items() if k != "frames"}  # paths stay out of the db
         return output
+
+    def wearers(self, project_id: str) -> list[dict]:
+        """The project's characters gear and weapons can be fitted on: biped heroes with a rig."""
+        return [a for a in self.db.list("assets", project_id=project_id)
+                if a["kind"] == "hero" and a.get("archetype") == "biped" and (a.get("outputs") or {}).get("rig")
+                and (self.asset_dir(a["id"]) / "rig" / "rigged.blend").is_file()]
+
+    def _wearer(self, asset: dict) -> dict | None:
+        """The rigged hero gear or a weapon is fitted on (None: the base mannequin)."""
+        if not asset.get("wearer_id"):
+            return None
+        wearer = self.db.get("assets", asset["wearer_id"])
+        blend = self.asset_dir(asset["wearer_id"]) / "rig" / "rigged.blend"
+        if wearer is None or not (wearer.get("outputs") or {}).get("rig") or not blend.is_file():
+            raise RuntimeError("the wearer is gone or no longer rigged; pick another wearer at gate 3, or re-rig it")
+        return {"id": wearer["id"], "name": wearer["name"], "blend": str(blend.resolve()),
+                "clips": wearer["outputs"]["rig"]["clips"]}
 
     def _found_grip(self, asset: dict, attach: dict, found: dict) -> dict:
         """The weapon's grip after the rig stage: the one given at gate 3, or the detected one (and,

@@ -205,7 +205,9 @@ class FakeRig(FakeBase):
 
 
 class FakeBlender(FakeBase):
-    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress, remove_floaters=True):
+    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress, remove_floaters=True,
+                         height=None):
+        self.last_height = height
         info = read_glb_json(raw_mesh).get("extras") or {}
         if "parts" not in info:  # a real mesh (Hunyuan3D): kept as made; the real Blender adapter decimates it
             return self._pass_through(raw_mesh, triangles, out_dir, progress)
@@ -246,6 +248,7 @@ class FakeBlender(FakeBase):
         return {"glb": glb, "lods": [{"level": 0, "ratio": 1.0, "triangles": count}]}
 
     def rig_and_animate(self, *, mesh_glb, skeleton, archetype, clips, attach, out_path, progress):
+        self.last_attach = attach
         info = read_glb_json(mesh_glb).get("extras") or {}
         if "parts" not in info:  # a real mesh: the fake rig animates a placeholder body of the archetype
             info = {**info, "parts": _parts_info(asset_parts("hero", archetype["id"])),
@@ -282,7 +285,14 @@ class FakeBlender(FakeBase):
         self._wait()
         glb = builder.write(out_path)
         progress("Animated preview ready", 1.0)
-        return {"glb": glb, "clips": clip_info}
+        result = {"glb": glb, "clips": clip_info}
+        if not attach:  # the template's joints, with the ones moved at gate 3 in place
+            from assetgen.archetypes import ARCHETYPES_DIR  # noqa: PLC0415
+            template = json.loads((ARCHETYPES_DIR / archetype["folder"] / "skeleton.json").read_text(encoding="utf-8"))
+            moved = skeleton.get("overrides") or {}
+            result["joints"] = {n: {"head": moved.get(n, j["head"]), "parent": j["parent"]}
+                                for n, j in template["joints"].items() if not j.get("socket")}
+        return result
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
                        look, palette_size, out_dir, progress, framing=None):

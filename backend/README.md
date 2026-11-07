@@ -140,6 +140,21 @@ to the budget.
 3. The first textured run downloads the paint weights; after that a textured mesh takes about
    4 minutes, a shape-only one about 15 seconds.
 
+### Joint editor (gate 3, characters)
+
+The rig stage reports every deforming joint's rest position and parent (`outputs.rig.joints`, in
+the mesh's space with Blender axes). Gate 3's **Joints** card holds the model in its rest pose and
+draws the skeleton over it (fingers left out); a click picks the nearest joint and its arrows move
+it, optionally mirrored to the other side. **Re-rig with these joints** sends them with a gate 3
+rejection (`joints`); they replace UniRig's targets for those joints, also when its fit fell back,
+add up over rejections (`joint_overrides` on the asset) and `{}` goes back to the detected joints.
+
+### Character height
+
+Characters are scaled to their kind's height in the clean-up (hero 1.8 m, monster 1.5 m, boss
+2.7 m) unless the asset has its own `height` (in metres, set when creating it or changed at gate 2,
+which reruns only the clean-up). The template skeleton is scaled to the mesh, so any height rigs.
+
 ### Gear and weapons (rig stage, gate 3)
 
 Gear and weapons are rigged on the biped base body (`blender_scripts/attach.py`, called by
@@ -162,6 +177,12 @@ attack.
   `weapon_l`, 12 cm towards the blade. The found grip is stored on the asset (`grip`, with
   `"source": "auto"`, in Unity's terms: see `src/assetgen/grips.py`); a grip typed in gate 3's grip
   fields is sent with the rejection, marked `"source": "manual"` and used as it is on the rerun.
+* **Wearer**: gear and weapons are fitted on the base mannequin, or on a rigged biped hero of the
+  project picked in gate 3's **Wearer** card (`wearer` in the rejection; `GET
+  /api/projects/{id}/wearers` lists them). The rig stage of every character keeps its exact scene
+  as `rig/rigged.blend` (armature, skinned mesh, baked clips); fitting on a wearer loads it, works out
+  its slot regions the same way, and plays its own clips instead of retargeting. So the item
+  matches that hero's height and build. Heroes rigged before this need a re-rig to be listed.
 * **Exports**: the Unity FBX leaves out the mannequin, so gear is a skinned mesh on the shared
   skeleton; a weapon is written rigid in its own model space, without armature or clips, and its
   grip goes to `asset.json`. The Godot render keeps the mannequin as a holdout: invisible, but it

@@ -196,3 +196,78 @@ def test_paper_doll_assets_share_clips_and_framing(client, settings, tmp_path):
     assert not attacks & set(pipeline.clips_for(wolf, profile))
     assert pipeline.paper_doll(hero) and pipeline.paper_doll(helmet) and not pipeline.paper_doll(wolf)
     assert PAPER_DOLL_FRAMING["span"] > 1.8 * 2  # a 1.8 m body with a 1 m weapon swung out
+
+
+def test_joints_moved_at_gate_3_are_used_and_can_be_reset(client, settings, tmp_path):
+    project = make_project(client, "unity", tmp_path / "g")
+    asset = wait_for(client, _new(client, project, archetype="biped")["id"], "waiting", gate=1)
+    client.post(f"/api/assets/{asset['id']}/gates/1/approve", json={"candidate": 1})
+    wait_for(client, asset["id"], "waiting", gate=2)
+    client.post(f"/api/assets/{asset['id']}/gates/2/approve", json={})
+    rigged = wait_for(client, asset["id"], "waiting", gate=3)
+    joints = rigged["outputs"]["rig"]["joints"]
+    assert "calf_l" in joints and joints["calf_l"]["parent"] == "thigh_l" and "weapon_r" not in joints
+
+    moved = [0.1, 0.0, 0.55]
+    response = client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"joints": {"calf_l": moved}})
+    assert response.status_code == 200, response.text
+    again = wait_for(client, asset["id"], "waiting", gate=3)
+    assert again["outputs"]["rig"]["joints"]["calf_l"]["head"] == moved
+    assert again["outputs"]["rig"]["joint_overrides"] == ["calf_l"]
+
+    bad = client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"joints": {"tail_07": [0, 0, 0]}})
+    assert bad.status_code in (409, 422) and "tail_07" in bad.text
+    client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"joints": {}})
+    reset = wait_for(client, asset["id"], "waiting", gate=3)
+    assert reset["outputs"]["rig"]["joint_overrides"] == []
+    assert reset["outputs"]["rig"]["joints"]["calf_l"]["head"] != moved
+
+
+def _to_gate(client, asset_id: str, gate: int) -> dict:
+    asset = wait_for(client, asset_id, "waiting", gate=1)
+    if gate > 1:
+        client.post(f"/api/assets/{asset_id}/gates/1/approve", json={"candidate": 1})
+        asset = wait_for(client, asset_id, "waiting", gate=2)
+    if gate > 2:
+        client.post(f"/api/assets/{asset_id}/gates/2/approve", json={})
+        asset = wait_for(client, asset_id, "waiting", gate=3)
+    return asset
+
+
+def test_a_character_height_is_used_by_the_cleanup_and_can_change_at_gate_2(client, settings, tmp_path):
+    project = make_project(client, "unity", tmp_path / "g")
+    asset = _to_gate(client, _new(client, project, archetype="biped", height=1.3)["id"], 2)
+    blender = client.app.state.pipeline.adapters.blender
+    assert asset["height"] == 1.3 and blender.last_height == 1.3
+    client.post(f"/api/assets/{asset['id']}/gates/2/reject", json={"height": 1.5})
+    again = wait_for(client, asset["id"], "waiting", gate=2)
+    assert again["height"] == 1.5 and blender.last_height == 1.5
+    refused = client.post(f"/api/assets/{asset['id']}/gates/2/reject", json={"wearer": ""})
+    assert refused.status_code in (409, 422)
+    gear = client.post("/api/assets", json={"project_id": project["id"], "kind": "gear", "slot": "head",
+                                            "description": "a helm", "height": 1.0})
+    assert gear.status_code == 422
+
+
+def test_gear_is_refitted_on_a_chosen_wearer(client, settings, tmp_path):
+    project = make_project(client, "unity", tmp_path / "g")
+    hero = _to_gate(client, _new(client, project, archetype="biped", name="Elf")["id"], 3)
+    assert client.get(f"/api/projects/{project['id']}/wearers").json() == []  # the fake rig keeps no scene
+    (Path(settings.data_dir) / "assets" / hero["id"] / "rig" / "rigged.blend").write_bytes(b"blend")
+    assert [w["name"] for w in client.get(f"/api/projects/{project['id']}/wearers").json()] == ["Elf"]
+
+    helm = _to_gate(client, _new(client, project, kind="gear", slot="head", description="a helm")["id"], 3)
+    assert helm["outputs"]["rig"]["wearer"] is None
+    response = client.post(f"/api/assets/{helm['id']}/gates/3/reject", json={"wearer": hero["id"]})
+    assert response.status_code == 200, response.text
+    again = wait_for(client, helm["id"], "waiting", gate=3)
+    assert again["wearer_id"] == hero["id"] and again["outputs"]["rig"]["wearer"]["name"] == "Elf"
+    attach = client.app.state.pipeline.adapters.blender.last_attach
+    assert attach["wearer"]["blend"].endswith("rigged.blend")
+    assert {c["name"] for c in attach["wearer"]["clips"]} >= {"walk", "attack_1"}
+
+    client.post(f"/api/assets/{helm['id']}/gates/3/reject", json={"wearer": ""})
+    back = wait_for(client, helm["id"], "waiting", gate=3)
+    assert back["wearer_id"] is None and back["outputs"]["rig"]["wearer"] is None
+    bad = client.post(f"/api/assets/{helm['id']}/gates/3/reject", json={"wearer": helm["id"]})
+    assert bad.status_code in (409, 422)

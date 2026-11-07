@@ -1,6 +1,7 @@
 // The three approval gates of an asset, plus its done and failed views.
 
 import { lazy, Suspense, useState, type ComponentProps } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api, assetFileUrl, localUrl, type Asset, type Gate, type Grip, type RejectInput, type Socket } from "../api/client";
 import { keys, useApiMutation, useArchetypes } from "../api/queries";
 import { isCharacter, label, MESH_PRESETS, meshPreset } from "../labels";
@@ -30,6 +31,9 @@ import {
   Thumb,
 } from "../ui/kit";
 import { SpritePlayer } from "../viewers/SpritePlayer";
+import type { Vec3 } from "../viewers/ModelViewer";
+
+const isWeaponKind = (kind: string) => kind === "weapon";
 
 // three.js is large; load the 3D viewer only when a gate shows it.
 const LazyModelViewer = lazy(() => import("../viewers/ModelViewer").then((m) => ({ default: m.ModelViewer })));
@@ -370,6 +374,7 @@ export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
           {mesh && ` LODs at ${mesh.lods.map((l) => `${Math.round(l.ratio * 100)}%`).join(" / ")}.`}
           {mesh?.delight !== undefined && (mesh.delight ? " Baked lighting evened out." : " Baked lighting kept as made.")}
         </Text>
+        {!readOnly && isCharacter(asset.kind) && <HeightRow asset={asset} />}
         {!readOnly && <GateBar gate={2} asset={asset} approveLabel="Approve mesh" />}
       </Stack>
     </Card>
@@ -377,6 +382,79 @@ export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
 }
 
 // ---- gate 3: rig and animation ------------------------------------------------
+
+/** Gate 2: rescale a character to another height (reruns only the clean-up, not Hunyuan3D). */
+function HeightRow({ asset }: { asset: Asset }) {
+  const standard = asset.kind === "boss" ? 2.7 : asset.kind === "monster" ? 1.5 : 1.8;
+  const [height, setHeight] = useState(String(asset.height ?? standard));
+  const rescale = useApiMutation((value: number) => api.reject(asset.id, 2, { height: value }), [
+    keys.assets,
+    keys.asset(asset.id),
+  ]);
+  const value = Number(height);
+  const changed = value > 0 && value !== (asset.height ?? standard);
+  return (
+    <Stack gap={2}>
+      <Row>
+        <Box width={160}>
+          <Field label="Height (m)" hint="Feet to the top of the head.">
+            {(id) => (
+              <Input id={id} type="number" min={0.3} max={10} step={0.05} value={height}
+                     onChange={(e) => setHeight(e.target.value)} />
+            )}
+          </Field>
+        </Box>
+        <Button disabled={!changed} busy={rescale.isPending} onClick={() => rescale.mutate(value)}>
+          Rescale
+        </Button>
+      </Row>
+      {rescale.error && <ErrorNotice error={rescale.error} />}
+    </Stack>
+  );
+}
+
+/** Gate 3, gear and weapons: the hero they are fitted on (or the base mannequin). */
+function WearerCard({ asset }: { asset: Asset }) {
+  const rig = asset.outputs.rig;
+  const wearers = useQuery({ queryKey: ["wearers", asset.project_id], queryFn: () => api.wearers(asset.project_id) });
+  const current = rig?.wearer?.id ?? "";
+  const [choice, setChoice] = useState(current);
+  const refit = useApiMutation((wearer: string) => api.reject(asset.id, 3, { wearer }), [
+    keys.assets,
+    keys.asset(asset.id),
+  ]);
+  return (
+    <Card
+      title="Wearer"
+      subtitle="The body it is fitted on. Fit it on the hero who will wear it, so it matches that hero's size and build."
+      actions={<Badge>{rig?.wearer?.name ?? "Base mannequin"}</Badge>}
+    >
+      <Stack gap={3}>
+        <Row>
+          <Box minWidth={240}>
+            <Select
+              aria-label="Wearer"
+              name="wearer"
+              value={choice}
+              onChange={(e) => setChoice(e.target.value)}
+              options={[
+                { value: "", label: "Base mannequin (1.8 m)" },
+                ...(wearers.data ?? []).map((w) => ({ value: w.id, label: w.height ? `${w.name} (${w.height} m)` : w.name })),
+              ]}
+            />
+          </Box>
+          <Button variant="primary" disabled={choice === current} busy={refit.isPending} onClick={() => refit.mutate(choice)}>
+            Refit on this wearer
+          </Button>
+        </Row>
+        {wearers.data && wearers.data.length === 0 && (
+          <Text small muted>No rigged biped heroes in this project yet. Heroes rigged before this version need a re-rig to be listed.</Text>
+        )}
+        {refit.error && <ErrorNotice error={refit.error} />}
+      </Stack>
+    </Card>
+  );
+}
 
 /** The grip fields the user edits at gate 3. */
 type GripEdit = Required<Pick<Grip, "socket" | "position" | "rotation">>;
@@ -441,6 +519,25 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
   const [grip, setGrip] = useState(startGrip);
   const gripChanged = JSON.stringify(grip) !== JSON.stringify(startGrip);
 
+  // Joint editor (characters): joints dragged in the viewer, sent with a re-rig.
+  const [editing, setEditing] = useState(false);
+  const [moved, setMoved] = useState<Record<string, Vec3>>({});
+  const [mirror, setMirror] = useState(true);
+  const movedCount = Object.keys(moved).length;
+  const rerig = useApiMutation((joints: Record<string, Vec3>) => api.reject(asset.id, 3, { joints }), [
+    keys.assets,
+    keys.asset(asset.id),
+  ]);
+  const moveJoint = (name: string, head: Vec3) =>
+    setMoved((current) => {
+      const next = { ...current, [name]: head };
+      const side = name.match(/_(l|r)$/)?.[1];
+      const twin = side && name.slice(0, -1) + (side === "l" ? "r" : "l");
+      if (mirror && twin && rig?.joints?.[twin]) next[twin] = [-head[0], head[1], head[2]];
+      return next;
+    });
+  const canEditJoints = !readOnly && !!rig?.joints && asset.kind !== "gear" && !isWeaponKind(asset.kind);
+
   const clip = clipChoice ?? rig?.preview_clips.find((c) => clips.includes(c)) ?? clips[0] ?? "";
   const sourceDirection = sprites?.mirrored[direction] ?? direction;
   const frames = sprites?.files[sourceDirection]?.[clip] ?? [];
@@ -471,7 +568,17 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
           <Grid cols={sprites ? 2 : 1}>
             <Stack gap={2}>
               {sprites && <SectionTitle>3D</SectionTitle>}
-              {url && <ModelViewer url={url} clip={clip} onClips={setClips} />}
+              {url && (
+                <ModelViewer
+                  url={url}
+                  clip={clip}
+                  onClips={setClips}
+                  joints={rig?.joints}
+                  moved={moved}
+                  editJoints={editing}
+                  onJointMove={moveJoint}
+                />
+              )}
             </Stack>
             {sprites && (
               <Stack gap={2}>
@@ -523,6 +630,54 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
           )}
         </Stack>
       </Card>
+      {canEditJoints && (
+        <Card
+          title="Joints"
+          subtitle="If an elbow, knee or hip bends in the wrong place, move that joint and re-rig."
+          actions={
+            movedCount > 0 ? (
+              <Badge tone="accent">{movedCount} moved</Badge>
+            ) : rig?.joint_overrides?.length ? (
+              <Badge>{rig.joint_overrides.length} set by you</Badge>
+            ) : undefined
+          }
+        >
+          <Stack gap={3}>
+            <Row>
+              <Button variant={editing ? "primary" : "secondary"} onClick={() => setEditing(!editing)}>
+                {editing ? "Stop editing" : "Adjust joints"}
+              </Button>
+              {editing && (
+                <Checkbox label="Move left and right together" checked={mirror} onChange={setMirror} />
+              )}
+            </Row>
+            {editing && (
+              <Text small muted>
+                The model holds its rest pose. Click a joint, then drag the arrows. Orange joints are moved.
+              </Text>
+            )}
+            <Row>
+              <Button
+                variant="primary"
+                disabled={movedCount === 0}
+                busy={rerig.isPending}
+                onClick={() => rerig.mutate(moved, { onSuccess: () => setMoved({}) })}
+              >
+                Re-rig with these joints
+              </Button>
+              <Button variant="ghost" disabled={movedCount === 0} onClick={() => setMoved({})}>
+                Undo moves
+              </Button>
+              {!!rig?.joint_overrides?.length && (
+                <Button variant="ghost" busy={rerig.isPending} onClick={() => rerig.mutate({})}>
+                  Back to the detected joints
+                </Button>
+              )}
+            </Row>
+            {rerig.error && <ErrorNotice error={rerig.error} />}
+          </Stack>
+        </Card>
+      )}
       {isWeapon && !readOnly && (
         <Card
           title="Grip"
@@ -547,6 +702,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
           </Stack>
         </Card>
       )}
+      {!readOnly && rig && (asset.kind === "gear" || isWeapon) && <WearerCard asset={asset} />}
       {rig?.gear && !readOnly && (
         <Card title="Fit on the base body" subtitle={`Shown on the mannequin playing ${rig.preview_clips.join(" and ")}.`}>
           <DefList
