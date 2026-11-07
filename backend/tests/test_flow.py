@@ -149,7 +149,7 @@ def test_unity_gear_lists_the_biped_bones(client, tmp_path):
     run_to_done(client, helmet["id"])
     sidecar = json.loads((game / "Assets" / "Generated" / "gear" / "Iron_Helm" / "asset.json").read_text())
     assert sidecar["gear"]["slot"] == "head" and sidecar["gear"]["skinned"] is True
-    assert "mixamorig:Hips" in sidecar["gear"]["bones"] and sidecar["gear"]["hide_body"] == ["head_top"]
+    assert "pelvis" in sidecar["gear"]["bones"] and sidecar["gear"]["hide_body"] == ["head_top"]
 
 
 def test_reexport_keeps_what_unity_made(client, tmp_path):

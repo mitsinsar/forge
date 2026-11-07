@@ -1,0 +1,58 @@
+{
+  "idle": {
+    "source": "Idle",
+    "stand_in": false,
+    "loop": true,
+    "in_place_drift_removed_m": 0.009,
+    "duration": 3.3333,
+    "frames": 101
+  },
+  "walk": {
+    "source": "Walk",
+    "stand_in": false,
+    "loop": true,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.0667,
+    "frames": 33
+  },
+  "run": {
+    "source": "Gallop",
+    "stand_in": false,
+    "loop": true,
+    "in_place_drift_removed_m": 0.028,
+    "duration": 0.5667,
+    "frames": 18
+  },
+  "attack_1": {
+    "source": "Attack",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.31,
+    "duration": 1.3333,
+    "frames": 41
+  },
+  "attack_2": {
+    "source": "Gallop_Jump",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.028,
+    "duration": 0.9333,
+    "frames": 29
+  },
+  "hit": {
+    "source": "Idle_HitReact1",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.024,
+    "duration": 0.6667,
+    "frames": 21
+  },
+  "death": {
+    "source": "Death",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.202,
+    "duration": 1.0667,
+    "frames": 33
+  }
+}

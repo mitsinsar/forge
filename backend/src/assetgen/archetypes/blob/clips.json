@@ -1,0 +1,58 @@
+{
+  "idle": {
+    "source": "Idle",
+    "stand_in": false,
+    "loop": true,
+    "in_place_drift_removed_m": 0.008,
+    "duration": 2.0,
+    "frames": 61
+  },
+  "walk": {
+    "source": "Walk",
+    "stand_in": false,
+    "loop": true,
+    "in_place_drift_removed_m": 0.032,
+    "duration": 0.4333,
+    "frames": 14
+  },
+  "run": {
+    "source": "Jump",
+    "stand_in": true,
+    "loop": true,
+    "in_place_drift_removed_m": 0.074,
+    "duration": 0.4333,
+    "frames": 14
+  },
+  "attack_1": {
+    "source": "Bite_Front",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.364,
+    "duration": 0.4,
+    "frames": 13
+  },
+  "attack_2": {
+    "source": "Jump",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 0.4333,
+    "frames": 14
+  },
+  "hit": {
+    "source": "HitRecieve",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.029,
+    "duration": 0.3,
+    "frames": 10
+  },
+  "death": {
+    "source": "Death",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.075,
+    "duration": 0.3667,
+    "frames": 12
+  }
+}
