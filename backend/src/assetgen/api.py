@@ -320,6 +320,7 @@ def register_lora(body: LoraRegister, db: Database = Depends(db_of)):
 async def upload_lora(request: Request, file: UploadFile = File(...), name: str = Form(""),
                       base_model: str = Form(...), tags: str = Form("", description="Comma-separated"),
                       licence: str = Form(""), commercial_use: bool = Form(False), source_url: str = Form(""),
+                      trigger: str = Form("", description="Words the LoRA was trained on, added to its prompts"),
                       db: Database = Depends(db_of)):
     if base_model not in BASE_MODELS:
         raise HTTPException(422, f"base_model must be one of {', '.join(BASE_MODELS)}")
@@ -334,7 +335,8 @@ async def upload_lora(request: Request, file: UploadFile = File(...), name: str 
         shutil.copyfileobj(file.file, out)
     record = {"id": lora_id, "name": name or original.stem, "path": str(target.resolve()),
               "base_model": base_model, "tags": [t.strip() for t in tags.split(",") if t.strip()],
-              "licence": licence, "commercial_use": commercial_use, "source_url": source_url, "uploaded": True}
+              "licence": licence, "commercial_use": commercial_use, "source_url": source_url,
+              "trigger": trigger.strip(), "uploaded": True}
     return _lora_view(db.insert("loras", record))
 
 
