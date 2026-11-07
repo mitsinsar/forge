@@ -32,7 +32,7 @@ def test_props_two_figures_and_cut_off_bodies_fail(tmp_path):
 
     cut = tmp_path / "c.png"
     image = Image.new("RGB", (200, 200), (200, 200, 200))
-    ImageDraw.Draw(image).rectangle((92, 120, 108, 199), fill=(150, 20, 20))  # a leg runs off the bottom
+    ImageDraw.Draw(image).rectangle((95, 120, 104, 199), fill=(150, 20, 20))  # a leg runs off the bottom
     image.save(cut)
     assert next(c for c in qc.candidate_checks(cut, kind="weapon", posed_biped=False, vision=None)
                 if c["id"] == "whole")["status"] == qc.WARN  # the silhouette alone only warns
