@@ -52,6 +52,9 @@ SOURCES: dict[str, dict] = {
         "sockets": {"weapon_r": "hand_r", "weapon_l": "hand_l"},
         "a_pose": True,
         "base_body": True,
+        # Every standing idle in the pack stands turned (one foot 40 cm ahead, hips 13 degrees
+        # round): ours stands square to the front.
+        "square": ["idle"],
         "clips": {
             "idle": "Idle_Loop", "walk": "Walk_Loop", "run": "Jog_Fwd_Loop", "attack_1": "Sword_Attack",
             "attack_2": "Punch_Cross", "hit": "Hit_Chest", "death": "Death01", "cast": "Spell_Simple_Shoot",
@@ -154,6 +157,58 @@ def make_in_place(arm, action) -> float:
             point.handle_left[1] -= delta
             point.handle_right[1] -= delta
     return drift
+
+
+def _twin_bone(name: str) -> str:
+    for left, right in (("_l", "_r"), ("_L", "_R"), (".l", ".r"), (".L", ".R")):
+        if name.endswith(left):
+            return name[: -len(left)] + right
+        if name.endswith(right):
+            return name[: -len(right)] + left
+    return name
+
+
+def make_symmetric(arm, action):
+    """A copy of ``action`` where every frame is the pose averaged with its own mirror image
+    (left and right swapped, X flipped): turns and staggered feet cancel out, while what both
+    sides do alike (breathing, arm sway) stays. Works on each bone's motion relative to the rest
+    pose in armature space, so it needs a symmetric rest pose but no particular bone axes."""
+    flip = Matrix.Diagonal((-1.0, 1.0, 1.0, 1.0))
+    arm.animation_data_create()
+    arm.animation_data.action = action
+    start, end = (int(round(v)) for v in action.frame_range)
+    bones = list(arm.pose.bones)
+    rest = {b.name: arm.data.bones[b.name].matrix_local.copy() for b in bones}
+    frames = {}
+    for frame in range(start, end + 1):
+        bpy.context.scene.frame_set(frame)
+        frames[frame] = {b.name: b.matrix @ rest[b.name].inverted() for b in bones}
+    square = bpy.data.actions.new(f"{action.name}_square")
+    arm.animation_data.action = square
+    depth = {b.name: len(b.parent_recursive) for b in bones}
+    for b in bones:
+        b.rotation_mode = "QUATERNION"
+    for frame, moves in frames.items():
+        bpy.context.scene.frame_set(frame)
+        wanted = {}
+        for b in bones:
+            mine = moves[b.name]
+            other = moves.get(_twin_bone(b.name), mine)
+            mirrored = flip @ other @ flip
+            loc_a, rot_a, _ = mine.decompose()
+            loc_b, rot_b, _ = mirrored.decompose()
+            even = Matrix.Translation((loc_a + loc_b) / 2) @ rot_a.slerp(rot_b, 0.5).to_matrix().to_4x4()
+            wanted[b.name] = even @ rest[b.name]
+        for level in sorted(set(depth.values())):
+            for b in bones:
+                if depth[b.name] == level:
+                    b.matrix = wanted[b.name]
+            bpy.context.view_layer.update()
+        for b in bones:
+            b.keyframe_insert("location", frame=frame)
+            b.keyframe_insert("rotation_quaternion", frame=frame)
+            b.keyframe_insert("scale", frame=frame)
+    return square
 
 
 def clear_pose(arm) -> None:
@@ -404,9 +459,15 @@ def build_from_pack(arch_id: str, spec: dict, out: Path) -> dict:
         if action is None:
             raise RuntimeError(f"{arch_id}: no clip named {source!r} in {spec['file']}; found {sorted(actions)}")
         drift = make_in_place(arm, action)
+        squared = clip in spec.get("square", ())
+        if squared:
+            action = make_symmetric(arm, action)
         info = export_clip(arm, action, clip, clips_out / f"{clip}.glb")
+        if squared:
+            bpy.data.actions.remove(action)
         record[clip] = {"source": source, "stand_in": stand_in, "loop": clip in LOOPING,
-                        "in_place_drift_removed_m": round(drift, 3), **info}
+                        "in_place_drift_removed_m": round(drift, 3), **({"squared": True} if squared else {}),
+                        **info}
 
     if spec.get("a_pose"):
         pose_a(arm)  # measure the mesh in the rest pose the template will have

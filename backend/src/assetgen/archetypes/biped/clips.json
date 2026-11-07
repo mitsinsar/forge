@@ -4,6 +4,7 @@
     "stand_in": false,
     "loop": true,
     "in_place_drift_removed_m": 0.0,
+    "squared": true,
     "duration": 2.5,
     "frames": 76
   },
