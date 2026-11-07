@@ -20,8 +20,6 @@ import shutil
 import traceback
 from pathlib import Path
 
-from PIL import Image
-
 from .adapters import Adapters
 from .archetypes import get_archetype, load_archetypes
 from .config import Settings
@@ -31,11 +29,11 @@ from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import checks as qc
-from . import exporters, grips, imaging, pose, variants, watchdog
+from . import exporters, grips, pose, variants, watchdog
 
 log = logging.getLogger("assetgen.pipeline")
 
-# MV-Adapter's view names (seen from the character's right, back, left) to Hunyuan3D-2mv's.
+# MV-Adapter's view names to Hunyuan3D-2mv's (both: the character's own left and right sides).
 HUNYUAN_VIEW = {"front": "front", "right": "right", "back": "back", "left": "left"}
 
 # Added to the negative prompt when the pose guide is used.
@@ -841,10 +839,8 @@ class Pipeline:
             raise RuntimeError("multi-view meshes need MV-Adapter, which is not set up")
         front = directory / "views" / "front_input.png"
         front.parent.mkdir(parents=True, exist_ok=True)
-        if not front.is_file():
-            with Image.open(source) as image:
-                cut, _ = imaging.remove_background(image)
-            cut.save(front)
+        if not front.is_file():  # MV-Adapter's script cuts it out with rembg
+            shutil.copy2(source, front)
         prompt = ((asset.get("outputs") or {}).get("prompt") or {}).get("prompt") or asset["description"]
         self.adapters.image.unload()  # SDXL for the views needs the GPU memory ComfyUI holds
         return self.adapters.views.render_views(front=front, prompt=prompt[:300], seed=seed_of(asset["id"], 1),

@@ -44,7 +44,7 @@ class MultiViewImages:
 
     def render_views(self, *, front: Path, prompt: str, seed: int, out_dir: Path, progress) -> dict[str, Path]:
         """``{view: png}`` for front, right, back and left (files already there are kept)."""
-        out_dir = Path(out_dir)
+        out_dir = Path(out_dir).resolve()  # the script runs in MV-Adapter's folder
         files = {view: out_dir / f"{view}.png" for view in VIEWS}
         if all(p.is_file() for p in files.values()):
             return files
