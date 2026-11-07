@@ -1,10 +1,12 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api, type Engine, type Project } from "../api/client";
 import { keys, useApiMutation, useMeta, useProfiles, useProjects } from "../api/queries";
 import { label, options } from "../labels";
 import {
   Badge,
   Button,
+  Card,
   ConfirmDialog,
   Dialog,
   EmptyState,
@@ -142,6 +144,39 @@ export function ProjectsPage() {
         onClose={() => setDeleting(null)}
         onConfirm={() => deleting && remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
       />
+      <StorageCard />
     </Stack>
+  );
+}
+
+const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(bytes > 100 * 1024 * 1024 ? 0 : 1)} MB`;
+
+/** Disk use of the data folder, and cleaning what can be rebuilt or is no longer used. */
+function StorageCard() {
+  const report = useQuery({ queryKey: ["storage"], queryFn: api.storage });
+  const clean = useApiMutation((ids: string[]) => api.cleanStorage(ids), [["storage"]]);
+  const cleanable = (report.data?.categories ?? []).filter((c) => c.items > 0);
+  return (
+    <Card
+      title="Storage"
+      subtitle={report.data ? `The data folder holds ${megabytes(report.data.total_bytes)}.` : undefined}
+      actions={
+        <Button size="sm" disabled={!cleanable.length} busy={clean.isPending}
+                onClick={() => clean.mutate(cleanable.map((c) => c.id))}>
+          Clean up
+        </Button>
+      }
+    >
+      <Stack gap={2}>
+        {(report.data?.categories ?? []).map((c) => (
+          <Row key={c.id} justify="between">
+            <Text small>{c.label}</Text>
+            <Text small muted>{c.items ? `${c.items} · ${megabytes(c.bytes)}` : "nothing"}</Text>
+          </Row>
+        ))}
+        {clean.data?.freed_bytes !== undefined && <Text small muted>Freed {megabytes(clean.data.freed_bytes)}.</Text>}
+        <ErrorNotice error={report.error ?? clean.error} />
+      </Stack>
+    </Card>
   );
 }

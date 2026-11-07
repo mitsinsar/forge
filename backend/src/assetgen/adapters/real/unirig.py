@@ -35,6 +35,8 @@ from ...config import Settings
 from ...defaults import FIT_BY_HEIGHT
 
 FALLBACK_BELOW = 0.6
+GOOD_FIT = 0.75  # below this, UniRig runs again with another seed (up to unirig_tries runs)
+SEEDS = (12345, 7, 2024, 99, 31337)
 NEAR = 0.1  # matching distance, as a share of the mesh's height (or longest side)
 SUFFIXES = "obj,fbx,FBX,dae,glb,gltf,vrm"
 TAIL_LINES = 15
@@ -310,6 +312,7 @@ class UniRigRig:
         self.root = Path(settings.unirig_path)
         self.python = Path(settings.python_path)
         self.timeout = float(settings.unirig_timeout)
+        self.tries = max(1, min(len(SEEDS), int(settings.unirig_tries)))
 
     def _run(self, args: list[str], log: Path, step: str) -> None:
         if not (self.root / "run.py").is_file():
@@ -349,50 +352,71 @@ class UniRigRig:
                    f"--time={stamp}", "--faces_target_count=50000", f"--input={source}", f"--output_dir={work}"],
                   log, "mesh extraction")
 
-    def predict_skeleton(self, *, mesh, archetype, out_dir, progress):
-        out_dir = Path(out_dir)
-        work = (out_dir / "unirig").resolve()
+    def _attempt(self, mesh: Path, work: Path, seed: int, progress) -> Path:
+        """UniRig's skeleton, skin and merge steps with one seed, in ``work`` (kept files are reused)."""
         work.mkdir(parents=True, exist_ok=True)
         log = work / "unirig.log"
         source = work / "input.glb"
         skeleton_fbx, skin_fbx, rigged = work / "skeleton.fbx", work / "skin.fbx", work / "rigged.glb"
         npz = work / "npz"
         stamp = time.strftime("%Y_%m_%d_%H_%M_%S")
-
+        if rigged.is_file():
+            return rigged
+        lod0_only(Path(mesh), source)
+        if not skeleton_fbx.is_file():
+            progress("UniRig: predicting the skeleton", 0.05)
+            shutil.rmtree(npz, ignore_errors=True)
+            self._extract(source, npz, log, stamp)
+            self._run(["run.py", "--task=configs/task/quick_inference_skeleton_articulationxl_ar_256.yaml",
+                       f"--seed={seed}", f"--input={source}", f"--output={skeleton_fbx}", f"--npz_dir={npz}"],
+                      log, "skeleton")
+        if not skin_fbx.is_file():
+            progress("UniRig: predicting the skin weights", 0.4)
+            shutil.rmtree(npz, ignore_errors=True)
+            self._extract(skeleton_fbx, npz, log, stamp)
+            self._run(["run.py", "--task=configs/task/quick_inference_unirig_skin.yaml", f"--seed={seed}",
+                       f"--input={skeleton_fbx}", f"--output={skin_fbx}", f"--npz_dir={npz}",
+                       "--data_name=raw_data.npz"], log, "skin")
+        progress("UniRig: putting the skeleton on the mesh", 0.75)
+        self._run(["-m", "src.inference.merge", f"--require_suffix={SUFFIXES}", "--num_runs=1", "--id=0",
+                   f"--source={skin_fbx}", f"--target={source}", f"--output={rigged}"], log, "merge")
         if not rigged.is_file():
-            lod0_only(Path(mesh), source)
-            if not skeleton_fbx.is_file():
-                progress("UniRig: predicting the skeleton", 0.05)
-                shutil.rmtree(npz, ignore_errors=True)
-                self._extract(source, npz, log, stamp)
-                self._run(["run.py", "--task=configs/task/quick_inference_skeleton_articulationxl_ar_256.yaml",
-                           "--seed=12345", f"--input={source}", f"--output={skeleton_fbx}", f"--npz_dir={npz}"],
-                          log, "skeleton")
-            if not skin_fbx.is_file():
-                progress("UniRig: predicting the skin weights", 0.4)
-                shutil.rmtree(npz, ignore_errors=True)
-                self._extract(skeleton_fbx, npz, log, stamp)
-                self._run(["run.py", "--task=configs/task/quick_inference_unirig_skin.yaml", "--seed=12345",
-                           f"--input={skeleton_fbx}", f"--output={skin_fbx}", f"--npz_dir={npz}",
-                           "--data_name=raw_data.npz"], log, "skin")
-            progress("UniRig: putting the skeleton on the mesh", 0.75)
-            self._run(["-m", "src.inference.merge", f"--require_suffix={SUFFIXES}", "--num_runs=1", "--id=0",
-                       f"--source={skin_fbx}", f"--target={source}", f"--output={rigged}"], log, "merge")
-            if not rigged.is_file():
-                raise RigError(f"UniRig's merge step wrote no {rigged.name}; see {log.name}.")
+            raise RigError(f"UniRig's merge step wrote no {rigged.name}; see {log.name}.")
+        return rigged
 
-        progress("Matching the skeleton to the template", 0.9)
+    def predict_skeleton(self, *, mesh, archetype, out_dir, progress):
+        """Runs UniRig and fits the template to its skeleton. UniRig's skeleton varies from run to run,
+        so when the fit is below ``GOOD_FIT`` it runs again with other seeds (``unirig_tries`` runs in
+        all, each in its own folder) and keeps the best fit."""
+        out_dir = Path(out_dir)
         template_file = ARCHETYPES_DIR / archetype["folder"] / "skeleton.json"
         if not template_file.is_file():
             raise RigError(f"The {archetype['id']} archetype has no skeleton.json; rebuild the templates with "
                            "blender_scripts/build_archetypes.py.")
         template = json.loads(template_file.read_text(encoding="utf-8"))
-        predicted = predicted_skeleton(rigged)
-        gltf, binary = imaging.read_glb(source)
-        result = match(template, predicted, mesh_bounds_glb(gltf, binary), archetype["id"] in FIT_BY_HEIGHT)
+        best, attempts = None, []
+        for number, seed in enumerate(SEEDS[:max(1, self.tries)]):
+            work = (out_dir / "unirig").resolve() if number == 0 else (out_dir / "unirig" / f"seed_{seed}").resolve()
+            span = (number / self.tries, (number + 1) / self.tries)
+
+            def step(text, fraction, span=span, number=number):
+                progress(text if number == 0 else f"{text} (try {number + 1})", span[0] + (span[1] - span[0]) * 0.9 * fraction)
+
+            rigged = self._attempt(Path(mesh), work, seed, step)
+            progress("Matching the skeleton to the template", span[0] + (span[1] - span[0]) * 0.95)
+            predicted = predicted_skeleton(rigged)
+            gltf, binary = imaging.read_glb(work / "input.glb")
+            result = match(template, predicted, mesh_bounds_glb(gltf, binary), archetype["id"] in FIT_BY_HEIGHT)
+            attempts.append({"seed": seed, "fit_score": result["fit_score"]})
+            if best is None or result["fit_score"] > best[0]["fit_score"]:
+                best = (result, predicted, rigged)
+            if result["fit_score"] >= GOOD_FIT:
+                break
+        result, predicted, rigged = best
         fallback = result["fit_score"] < FALLBACK_BELOW
         record = {"archetype": archetype["id"], "joints": list(template["joints"]), "fallback": fallback,
-                  "predicted_joints": len(predicted["names"]), "unirig_file": str(rigged), **result}
+                  "predicted_joints": len(predicted["names"]), "unirig_file": str(rigged), "attempts": attempts,
+                  **result}
         path = out_dir / "skeleton.json"
         path.write_text(json.dumps(record, indent=2), encoding="utf-8")
         progress("Skeleton fitted", 1.0)

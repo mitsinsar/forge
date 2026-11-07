@@ -20,6 +20,8 @@ import shutil
 import traceback
 from pathlib import Path
 
+from PIL import Image
+
 from .adapters import Adapters
 from .archetypes import get_archetype, load_archetypes
 from .config import Settings
@@ -28,9 +30,13 @@ from .defaults import (EXAMPLE_LORA_WEIGHT, EXAMPLE_NEGATIVE, EXAMPLE_SEED, EXAM
 from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_DOLL_FRAMING, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
-from . import exporters, grips, pose
+from . import checks as qc
+from . import exporters, grips, imaging, pose, variants, watchdog
 
 log = logging.getLogger("assetgen.pipeline")
+
+# MV-Adapter's view names (seen from the character's right, back, left) to Hunyuan3D-2mv's.
+HUNYUAN_VIEW = {"front": "front", "right": "right", "back": "back", "left": "left"}
 
 # Added to the negative prompt when the pose guide is used.
 POSE_NEGATIVE = "hands touching the legs, arms against the body, hands on hips, arms crossed"
@@ -286,6 +292,27 @@ class Pipeline:
             else:
                 await self.run_job(record["id"])
 
+    async def _restart_and_retry(self, asset_id: str, stage: str, exc: Exception) -> bool:
+        """A stage that failed because its tool did not answer or ran out of memory: restart the tool
+        (when assetgen.toml says how) and queue the stage again, once per stage."""
+        tool = watchdog.STAGE_TOOL.get(stage)
+        if not tool or not watchdog.TOOL_TROUBLE.search(str(exc)) or not watchdog.restartable(self.settings, tool):
+            return False
+        asset = self.db.get("assets", asset_id)
+        tried = dict(asset.get("auto_restarts") or {})
+        if tried.get(stage):
+            return False
+        tried[stage] = 1
+        self.update(asset_id, status="running", step=f"Restarting {tool} after: {str(exc)[:120]}", auto_restarts=tried)
+        try:
+            what = await asyncio.to_thread(watchdog.restart_tool, self.settings, tool)
+        except Exception as again:  # noqa: BLE001 - the stage fails as before, with both reasons
+            log.warning("restarting %s failed: %s", tool, again)
+            return False
+        log.info("%s %s; running %s of %s again", tool, what, stage, asset_id)
+        self.enqueue(asset_id, stage, step=f"{tool} {what}; running {stage} again")
+        return True
+
     # ---- side jobs: item fits and example renders ---------------------------------
 
     def queue_job(self, kind: str, target_id: str, params: dict | None = None) -> dict:
@@ -427,6 +454,8 @@ class Pipeline:
                 shutil.rmtree(self.asset_dir(asset_id), ignore_errors=True)
                 return
             log.exception("stage %s of %s failed", stage, asset_id)
+            if await self._restart_and_retry(asset_id, stage, exc):
+                return
             self.update(asset_id, status="failed", step=f"{stage} failed", error=f"{exc}",
                         error_detail=traceback.format_exc(limit=5))
             return
@@ -441,6 +470,7 @@ class Pipeline:
             gate = GATE_OF_STAGE[stage]
             self.update(asset_id, outputs=all_outputs, status="waiting", gate=gate,
                         step=f"Waiting at gate {gate}", progress=1.0)
+            self.autopilot(asset_id)
         else:
             changes = {"outputs": all_outputs, "status": "done", "gate": None, "step": "Done", "progress": 1.0}
             if not asset.get("training_candidate_set"):
@@ -519,7 +549,8 @@ class Pipeline:
             return {"source": "upload", "expansion": expansion, "prompt": "", "negative_prompt": "",
                     "base_model": None, "loras": [], "attempt": attempt, "log": [],
                     "candidates": [self._rel(asset["id"], candidate)],
-                    "pose_check": self._pose_check(asset, [candidate])}
+                    "pose_check": self._pose_check(asset, [candidate]),
+                    "candidate_checks": self._candidate_checks(asset, [candidate])}
         prompt = ", ".join(p for p in (expansion["prompt"], settings.get("prompt_suffix")) if p)
         negative = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
         loras = self._profile_loras(settings)
@@ -533,11 +564,31 @@ class Pipeline:
         if self._posed_biped(asset):
             hints["pose_guide"] = str(pose.guide_image(directory / "pose_guide.png"))
             negative = ", ".join(p for p in (negative, POSE_NEGATIVE) if p)
-        paths = self.adapters.image.render_candidates(
-            prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
-            reference_images=references, count=int(settings["candidates"]), seed=seed_of(asset["id"], attempt),
-            out_dir=directory, progress=scaled, hints=hints, log=stage_log.append)
-        return {"expansion": expansion, "prompt": prompt, "negative_prompt": negative,
+        def render(seed: int) -> list[Path]:
+            return self.adapters.image.render_candidates(
+                prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
+                reference_images=references, count=int(settings["candidates"]), seed=seed,
+                out_dir=directory, progress=scaled, hints=hints, log=stage_log.append)
+
+        paths = render(seed_of(asset["id"], attempt))
+        # Candidates that fail their checks are redrawn with other seeds, a few rounds at most.
+        redrawn: list[int] = []
+        retries = max(0, int(self.settings.auto_retries))
+        for round_ in range(retries + 1):
+            progress("Checking the candidates", 0.97)
+            candidate_checks = self._candidate_checks(asset, paths)
+            bad = [c["candidate"] for c in candidate_checks if c["status"] == qc.FAIL]
+            if not bad or round_ == retries:
+                break
+            for number in bad:
+                paths[number - 1].unlink(missing_ok=True)
+            redrawn += bad
+            paths = render(seed_of(asset["id"], attempt) + 1000 * (round_ + 1))
+        if redrawn:
+            stage_log.append(f"Redrew {len(redrawn)} candidate{'s' if len(redrawn) > 1 else ''} that failed the "
+                             "checks (held items, several figures, cut off, arms against the body).")
+        return {
+                "candidate_checks": candidate_checks, "redrawn": len(redrawn),"expansion": expansion, "prompt": prompt, "negative_prompt": negative,
                 "base_model": settings["base_model"], "loras": loras, "attempt": attempt,
                 "log": stage_log, "candidates": [self._rel(asset["id"], p) for p in paths],
                 "pose_check": self._pose_check(asset, paths)}
@@ -546,6 +597,101 @@ class Pipeline:
     def _posed_biped(asset: dict) -> bool:
         """Biped characters (not gear or weapons, which are drawn alone) get the A-pose guide and check."""
         return asset["kind"] in ("hero", "monster", "boss") and asset.get("archetype") == "biped"
+
+    # ---- colour variants ------------------------------------------------------------
+
+    def make_variant(self, source_id: str, *, name: str | None, colours: dict) -> dict:
+        """A copy of a rigged asset with its texture recoloured (see ``variants``), waiting at gate 3:
+        the mesh, rig and clips are kept, so it takes seconds."""
+        source = self._require(source_id)
+        outputs = dict(source.get("outputs") or {})
+        if not outputs.get("rig"):
+            raise Invalid("only assets rigged at gate 3 can have colour variants")
+        if source["status"] in ("queued", "running"):
+            raise Invalid("wait until the asset stops at a gate or is done")
+        outputs.pop("export", None)
+        outputs["rig"] = {k: v for k, v in outputs["rig"].items() if k != "sprites"}
+        skip = {"id", "created_at", "updated_at", "export_name", "fits", "autopilot_log", "batch_id", "notes"}
+        record = {k: v for k, v in source.items() if k not in skip}
+        approvals = {k: v for k, v in (source.get("approvals") or {}).items() if k in ("1", "2")}
+        record.update(name=name or f"{source['name']} variant", outputs=outputs, approvals=approvals,
+                      status="waiting", stage="rig", gate=3, step="Waiting at gate 3", progress=1.0, error=None,
+                      queued_at=now(), autopilot=False, training_candidate=False, training_candidate_set=False,
+                      variant_of={"id": source_id, "name": source["name"], **colours})
+        asset = self.db.insert("assets", record)
+        shutil.copytree(self.asset_dir(source_id), self.asset_dir(asset["id"]),
+                        ignore=shutil.ignore_patterns("export", "sprites", "fits", "unirig", "*_thumb*.jpg", "*.preview.glb"))
+        recolour = [self.asset_dir(asset["id"]) / rel for rel in (
+            (outputs.get("mesh") or {}).get("texture"), (outputs.get("mesh") or {}).get("glb"),
+            outputs["rig"].get("glb"), *((outputs.get("prompt") or {}).get("candidates") or [])) if rel]
+        for path in recolour:
+            if path.is_file():
+                variants.recolour_file(path, **colours)
+        self.publish_status(asset)
+        return asset
+
+    # ---- autopilot -------------------------------------------------------------------
+
+    def autopilot(self, asset_id: str) -> None:
+        """With autopilot on, approves the gate the asset waits at when its checks found nothing that
+        failed (gate 1: the best candidate). Otherwise it stops there for the user, and says why."""
+        asset = self.db.get("assets", asset_id)
+        if not asset or not asset.get("autopilot") or asset["status"] != "waiting":
+            return
+        gate = asset["gate"]
+        outputs = asset.get("outputs") or {}
+        candidate = None
+        if gate == 1:
+            ranked = sorted(outputs.get("prompt", {}).get("candidate_checks") or [],
+                            key=lambda c: (qc.ORDER[c["status"]], c["candidate"]))
+            usable = [c for c in ranked if c["status"] != qc.FAIL]
+            if not usable:
+                self._autopilot_stop(asset, gate, "every candidate failed its checks")
+                return
+            candidate = usable[0]["candidate"]
+            reason = f"picked candidate {candidate} ({'all checks passed' if usable[0]['status'] == qc.PASS else 'checks: look'})"
+        else:
+            checks = outputs.get({2: "mesh", 3: "rig"}[gate], {}).get("checks") or []
+            failed = [c for c in checks if c["status"] == qc.FAIL]
+            if failed:
+                self._autopilot_stop(asset, gate, "; ".join(f"{c['label']}: {c['detail']}" for c in failed))
+                return
+            reason = "checks passed" if qc.worst(checks) == qc.PASS else "checks: look, nothing failed"
+        self._autopilot_log(asset, gate, "approved", reason)
+        self.approve(asset_id, gate, candidate)
+
+    def _autopilot_log(self, asset: dict, gate: int, action: str, reason: str) -> None:
+        entries = [*(asset.get("autopilot_log") or []), {"gate": gate, "action": action, "reason": reason, "at": now()}]
+        self.db.update("assets", asset["id"], {"autopilot_log": entries})
+
+    def _autopilot_stop(self, asset: dict, gate: int, reason: str) -> None:
+        self._autopilot_log(asset, gate, "stopped", reason)
+        self.update(asset["id"], step=f"Autopilot stopped at gate {gate}: {reason}")
+
+    def set_autopilot(self, asset_id: str, value: bool) -> dict:
+        self._require(asset_id)
+        self.update(asset_id, autopilot=bool(value))
+        if value:
+            self.autopilot(asset_id)
+        return self._require(asset_id)
+
+    def _candidate_checks(self, asset: dict, paths: list[Path]) -> list[dict]:
+        """Gate 1's checks for each candidate (``checks.candidate_checks``); the vision model is asked
+        what it sees, and left out when it can't look at images."""
+        result = []
+        for number, path in enumerate(paths, start=1):
+            try:
+                vision = self.adapters.llm.inspect(image=Path(path), kind=asset["kind"])
+            except Exception:  # noqa: BLE001 - the checks go on without the vision model
+                log.warning("the vision check of %s failed", path, exc_info=True)
+                vision = None
+            try:
+                found = qc.candidate_checks(Path(path), kind=asset["kind"], posed_biped=self._posed_biped(asset),
+                                                 vision=vision)
+            except OSError:
+                found = [qc.check("image", "Readable image", qc.FAIL, "The image could not be read")]
+            result.append({"candidate": number, "checks": found, "status": qc.worst(found)})
+        return result
 
     def _pose_check(self, asset: dict, paths: list[Path]) -> list[dict] | None:
         """Gate 1's arms check for each candidate of a biped character (see ``pose.arms_check``)."""
@@ -579,11 +725,15 @@ class Pipeline:
         texture = directory / "texture.png"
         delight = bool(settings.get("delight", True))
         quality = dict(settings.get("mesh") or {})
+        views = None
+        if quality.get("multi_view") and not (raw.is_file() and texture.is_file()):
+            views = self._mesh_views(asset, source, directory, lambda s, f: progress(s, 0.25 * f))
         if not (raw.is_file() and texture.is_file()):
             self.adapters.mesh.image_to_mesh(
                 image=source, texture_size=int(settings["budgets"]["texture"][asset["kind"]]), out_path=raw,
-                progress=lambda s, f: progress(s, 0.5 * f), hints=self._hints(asset), delight=delight,
-                quality=quality)
+                progress=lambda s, f: progress(s, (0.25 if views else 0.0) + (0.25 if views else 0.5) * f),
+                hints=self._hints(asset), delight=delight, quality=quality,
+                **({"views": {HUNYUAN_VIEW[v]: p for v, p in views.items() if v != "front"}} if views else {}))
         triangles = int(settings["budgets"]["triangles"][asset["kind"]])
         result = self.adapters.blender.cleanup_and_lods(
             raw_mesh=raw, kind=asset["kind"], triangles=triangles, lod_ratios=list(settings["budgets"]["lod_ratios"]),
@@ -591,7 +741,10 @@ class Pipeline:
             remove_floaters=bool(quality.get("remove_floaters", True)), height=asset.get("height"))
         return {"glb": self._rel(asset["id"], result["glb"]), "texture": self._rel(asset["id"], texture),
                 "triangle_budget": triangles, "lods": result["lods"], "delight": delight, "quality": quality,
-                "removed": result.get("removed")}
+                "removed": result.get("removed"), "stats": result.get("stats"),
+                "views": sorted(self._rel(asset["id"], p) for p in (directory / "views").glob("*.png")
+                                if p.stem in HUNYUAN_VIEW) if quality.get("multi_view") else None,
+                "checks": qc.mesh_checks(result.get("stats"))}
 
     def _stage_rig(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)
@@ -622,6 +775,9 @@ class Pipeline:
                   "grip": asset.get("grip") if asset["kind"] == "weapon" else None}
         if attach:
             output["wearer"] = {"id": wearer["id"], "name": wearer["name"]} if wearer else None
+        output["stretch"] = result.get("stretch")
+        output["checks"] = qc.rig_checks(skeleton=None if attach else skeleton, stretch=result.get("stretch"),
+                                              gear=result.get("gear"))
         if result.get("joints"):
             output["joints"] = result["joints"]
             output["joint_overrides"] = sorted(asset.get("joint_overrides") or {})
@@ -678,6 +834,21 @@ class Pipeline:
             grip.pop("second", None)
         self.db.update("assets", asset["id"], {"grip": grip})
         return grip
+
+    def _mesh_views(self, asset: dict, source: Path, directory: Path, progress) -> dict[str, Path]:
+        """Right, back and left views of the picked candidate (MV-Adapter), for a multi-view mesh."""
+        if self.adapters.views is None:
+            raise RuntimeError("multi-view meshes need MV-Adapter, which is not set up")
+        front = directory / "views" / "front_input.png"
+        front.parent.mkdir(parents=True, exist_ok=True)
+        if not front.is_file():
+            with Image.open(source) as image:
+                cut, _ = imaging.remove_background(image)
+            cut.save(front)
+        prompt = ((asset.get("outputs") or {}).get("prompt") or {}).get("prompt") or asset["description"]
+        self.adapters.image.unload()  # SDXL for the views needs the GPU memory ComfyUI holds
+        return self.adapters.views.render_views(front=front, prompt=prompt[:300], seed=seed_of(asset["id"], 1),
+                                                out_dir=directory / "views", progress=progress)
 
     def _render_sprites(self, asset: dict, settings: dict, animated: Path, clips: list[dict], progress) -> dict:
         """Renders the sprite frames into the asset's sprites folder (files already there are kept).

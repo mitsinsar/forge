@@ -532,6 +532,45 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fit
     return {"name": clip["name"], "duration": round((end - start) / FPS, 4), "loop": bool(clip.get("loop"))}
 
 
+def clip_stretch(mesh, arm, clips: list[dict], samples: int = 5) -> dict[str, float]:
+    """For each clip, the worst share (over a few frames) of mesh edges stretched past 1.5x or
+    squeezed under 0.6x of their rest length: what gate 3's stretch check reads."""
+    import numpy as np  # noqa: PLC0415 - Blender ships numpy
+
+    edges = np.empty(len(mesh.data.edges) * 2, dtype=np.int64)
+    mesh.data.edges.foreach_get("vertices", edges)
+    edges = edges.reshape(-1, 2)
+    rest = np.empty(len(mesh.data.vertices) * 3)
+    mesh.data.vertices.foreach_get("co", rest)
+    rest = rest.reshape(-1, 3)
+    rest_len = np.linalg.norm(rest[edges[:, 0]] - rest[edges[:, 1]], axis=1)
+    keep = rest_len > 1e-6
+    result = {}
+    arm.animation_data_create()
+    for clip in clips:
+        action = bpy.data.actions.get(clip["name"])
+        if action is None:
+            continue
+        arm.animation_data.action = action
+        start, end = action.frame_range
+        worst = 0.0
+        for k in range(samples):
+            bpy.context.scene.frame_set(int(round(start + (end - start) * k / max(samples - 1, 1))))
+            evaluated = mesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            data = evaluated.to_mesh()
+            posed = np.empty(len(data.vertices) * 3)
+            data.vertices.foreach_get("co", posed)
+            evaluated.to_mesh_clear()
+            posed = posed.reshape(-1, 3)
+            ratio = np.linalg.norm(posed[edges[:, 0]] - posed[edges[:, 1]], axis=1)[keep] / rest_len[keep]
+            worst = max(worst, float(np.mean((ratio > 1.5) | (ratio < 0.6))))
+        result[clip["name"]] = round(worst, 4)
+    arm.animation_data.action = None
+    for pose_bone in arm.pose.bones:
+        pose_bone.matrix_basis.identity()
+    return result
+
+
 def main(args: dict) -> dict:
     if args.get("attach"):  # gear or a weapon on the base body
         import attach  # noqa: PLC0415 - it imports this module
@@ -560,6 +599,9 @@ def main(args: dict) -> dict:
         progress(0.2 + 0.7 * index / max(len(args["clips"]), 1), f"Retargeting {clip['name']}")
         clips.append(retarget(arm, clip, scale, offset, reference, fitted, natural))
 
+    progress(0.9, "Measuring stretch per clip")
+    stretch = clip_stretch(mesh, arm, clips)
+
     progress(0.92, "Writing the animated GLB")
     out = Path(args["out_glb"])
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -575,7 +617,7 @@ def main(args: dict) -> dict:
     joints = {b.name: {"head": [round(v, 5) for v in arm.matrix_world @ b.head_local],
                        "parent": b.parent.name if b.parent else None}
               for b in arm.data.bones if b.use_deform}
-    return {"clips": clips, "joints": joints, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped, "touching_limb_edges_cut": cut, "idle_reference_bones": sorted(natural),
+    return {"clips": clips, "joints": joints, "stretch": stretch, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped, "touching_limb_edges_cut": cut, "idle_reference_bones": sorted(natural),
             "joints_placed": placed}
 
 

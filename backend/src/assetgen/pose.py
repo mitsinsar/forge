@@ -60,18 +60,45 @@ def guide_image(path: Path, size: int = 1024) -> Path:
     return path
 
 
-def silhouette(image: Image.Image, threshold: int = 28) -> np.ndarray:
-    """Pixels that differ from the plain background (taken from the image's corners)."""
-    pixels = np.asarray(image.convert("RGB"), dtype=np.int16)
+def _smooth(line: np.ndarray, width: int) -> np.ndarray:
+    """A border line with anything narrower than ``width`` (a foot, a shadow) median-filtered away."""
+    half = max(1, width // 2)
+    padded = np.pad(line, ((half, half), (0, 0)), mode="edge")
+    return np.stack([np.median(padded[i:i + 2 * half + 1], axis=0) for i in range(len(line))])
+
+
+def background_model(pixels: np.ndarray) -> np.ndarray:
+    """The plain background behind the figure, from the four image borders blended across the image
+    (a Coons patch), so vertical and radial gradients and vignettes are followed."""
     height, width, _ = pixels.shape
-    patch = max(4, min(height, width) // 32)
-    corners = np.concatenate([pixels[:patch, :patch].reshape(-1, 3), pixels[:patch, -patch:].reshape(-1, 3),
-                              pixels[-patch:, :patch].reshape(-1, 3), pixels[-patch:, -patch:].reshape(-1, 3)])
-    background = np.median(corners, axis=0)
-    mask = np.abs(pixels - background).max(axis=2) > threshold
-    if image.mode == "RGBA":
-        mask &= np.asarray(image)[..., 3] > 16
-    return mask
+    span = max(height, width) // 6
+    top, bottom = _smooth(pixels[0], span), _smooth(pixels[-1], span)
+    left, right = _smooth(pixels[:, 0], span), _smooth(pixels[:, -1], span)
+    u = np.linspace(0, 1, width)[None, :, None]
+    v = np.linspace(0, 1, height)[:, None, None]
+    corners = (1 - u) * (1 - v) * top[0] + u * (1 - v) * top[-1] + (1 - u) * v * bottom[0] + u * v * bottom[-1]
+    return (1 - v) * top[None] + v * bottom[None] + (1 - u) * left[:, None] + u * right[:, None] - corners
+
+
+def touches_edge(mask: np.ndarray, margin: int = 2) -> bool:
+    """Whether the figure (its largest shape) reaches an image edge: something is cut off."""
+    shape = largest_shape(mask)
+    if not shape.any():
+        return False
+    rows, cols = np.nonzero(shape)
+    height, width = shape.shape
+    return bool(rows.min() < margin or cols.min() < margin or rows.max() >= height - margin
+                or cols.max() >= width - margin)
+
+
+def silhouette(image: Image.Image, threshold: int = 28) -> np.ndarray:
+    """The figure's pixels: those that differ from the background model (or, for a cut-out image,
+    the opaque ones)."""
+    if image.mode == "RGBA" and np.asarray(image.getchannel("A")).min() < 255:
+        return np.asarray(image.getchannel("A")) > 16
+    pixels = np.asarray(image.convert("RGB"), dtype=np.float32)
+    difference = np.abs(pixels - background_model(pixels)).max(axis=2)
+    return difference > threshold
 
 
 def largest_shape(mask: np.ndarray) -> np.ndarray:

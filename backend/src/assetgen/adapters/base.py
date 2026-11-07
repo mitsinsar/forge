@@ -26,6 +26,13 @@ class LLMAdapter(Protocol):
         The prompt must force the archetype's rest pose and fold in the
         reviewer's ``notes`` from earlier rejected rounds."""
 
+    def inspect(self, *, image: Path, kind: str) -> dict | None:
+        """Looks at a candidate image: ``{"held_item": bool, "held_item_name": str | None,
+        "figures": int, "whole_body": bool}``. None when the model can't see images."""
+
+    def vary(self, *, description: str, kind: str, count: int) -> list[str]:
+        """``count`` different descriptions of the same kind of asset (for batches)."""
+
 
 class ImageAdapter(Protocol):
     """ComfyUI (Qwen-Image, SDXL or Flux per style profile)."""
@@ -101,10 +108,11 @@ class BlenderAdapter(Protocol):
 
 class Adapters:
     def __init__(self, llm: LLMAdapter, image: ImageAdapter, mesh: MeshAdapter, rig: RigAdapter,
-                 blender: BlenderAdapter):
+                 blender: BlenderAdapter, views=None):
         self.llm = llm
         self.image = image
         self.mesh = mesh
         self.rig = rig
         self.blender = blender
+        self.views = views  # MV-Adapter, for multi-view meshes (optional)
 

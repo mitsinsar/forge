@@ -21,8 +21,9 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
                        SPRITE_LOOKS, STAGES, WEAPON_ATTACKS, WEAPON_CLASSES, deep_merge, profile_defaults)
 from .exporters import safe_name
 from .pipeline import Conflict, Invalid, Pipeline
+from . import delivery, storage, watchdog
 from .tools import check_tools
-from .schemas import (AssetCreate, Kind, Approve, ExamplesRequest, FitRequest, LoraRegister, LoraUpdate,
+from .schemas import (AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
                       TrainingCandidate)
 
@@ -115,6 +116,30 @@ def create_project(body: ProjectCreate, db: Database = Depends(db_of)):
         profile = _new_profile(db, "Default", project["id"], {})
         project = db.update("projects", project["id"], {"default_profile_id": profile["id"]})
     return project
+
+
+@router.post("/tools/{tool}/restart", tags=["tools"],
+             summary="Restart a tool (ComfyUI, Hunyuan3D...) with its command from assetgen.toml, and wait for it")
+async def restart_tool(request: Request, tool: str):
+    settings = pipeline_of(request).settings
+    if not watchdog.restartable(settings, tool):
+        raise HTTPException(422, f"no restart command for {tool}: add [restart.{tool}] to assetgen.toml")
+    try:
+        return {"tool": tool, "result": await asyncio.to_thread(watchdog.restart_tool, settings, tool)}
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/storage", tags=["tools"], summary="Disk use of the data folder, and what can be cleaned")
+def storage_report(request: Request):
+    pipeline = pipeline_of(request)
+    return storage.report(pipeline.settings.data_dir, pipeline.db)
+
+
+@router.post("/storage/clean", tags=["tools"], summary="Delete the chosen cleanable categories")
+def storage_clean(request: Request, body: CleanRequest):
+    pipeline = pipeline_of(request)
+    return storage.clean(pipeline.settings.data_dir, pipeline.db, body.categories)
 
 
 @router.get("/projects/{project_id}/wearers", tags=["projects"],
@@ -353,12 +378,15 @@ def list_assets(request: Request, project_id: str | None = None,
                 status: Literal["queued", "running", "waiting", "done", "failed"] | None = None,
                 archetype: str | None = None, training_candidate: bool | None = None,
                 q: str | None = Query(None, description="Text in the name or description"),
+                batch_id: str | None = Query(None, description="Only the assets of this batch"),
                 db: Database = Depends(db_of)):
     assets = db.list("assets", order="created_at DESC", project_id=project_id, kind=kind, status=status,
                      archetype=archetype, training_candidate=training_candidate)
     if q:
         needle = q.lower()
         assets = [a for a in assets if needle in a["name"].lower() or needle in a["description"].lower()]
+    if batch_id:
+        assets = [a for a in assets if a.get("batch_id") == batch_id]
     return [asset_view(request, a) for a in assets]
 
 
@@ -397,7 +425,46 @@ async def create_asset_from_image(request: Request, file: UploadFile = File(...,
     return _create_asset(request, body, source=image)
 
 
-def _create_asset(request: Request, body: AssetCreate, source: Image.Image | None = None) -> dict:
+@router.post("/assets/batch", tags=["assets"], status_code=201,
+             summary="Create several assets from one description (optionally varied by the LLM), as one batch")
+def create_batch(request: Request, body: BatchCreate):
+    pipeline = pipeline_of(request)
+    descriptions = [body.asset.description] * body.count
+    if body.vary and body.count > 1:
+        try:
+            descriptions = pipeline.adapters.llm.vary(description=body.asset.description, kind=body.asset.kind,
+                                                       count=body.count)
+        except Exception as exc:  # noqa: BLE001 - the user sees why
+            raise HTTPException(502, f"The LLM could not write the variations: {exc}") from exc
+    batch_id = uuid.uuid4().hex[:12]
+    base = (body.asset.name or "").strip()
+    created = []
+    for number, description in enumerate(descriptions, start=1):
+        asset = body.asset.model_copy(update={"description": description[:2000],
+                                              "name": f"{base} {number}" if base else None})
+        created.append(_create_asset(request, asset, batch_id=batch_id))
+    return created
+
+
+@router.post("/assets/{asset_id}/variants", tags=["assets"], status_code=201,
+             summary="A colour variant: a copy of a rigged asset with its texture recoloured, at gate 3")
+def make_variant(request: Request, asset_id: str, body: VariantCreate):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("assets", asset_id), "asset")
+    colours = body.model_dump(exclude={"name"})
+    return asset_view(request, _run(lambda: pipeline.make_variant(asset_id, name=body.name, colours=colours)))
+
+
+@router.put("/assets/{asset_id}/autopilot", tags=["assets"],
+            summary="Turn autopilot on or off (on: approves the current gate now if its checks allow)")
+def set_autopilot(request: Request, asset_id: str, body: Toggle):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("assets", asset_id), "asset")
+    return asset_view(request, pipeline.set_autopilot(asset_id, body.value))
+
+
+def _create_asset(request: Request, body: AssetCreate, source: Image.Image | None = None,
+                  batch_id: str | None = None) -> dict:
     pipeline = pipeline_of(request)
     db = pipeline.db
     project = _found(db.get("projects", body.project_id), "project")
@@ -424,7 +491,7 @@ def _create_asset(request: Request, body: AssetCreate, source: Image.Image | Non
         "name": (body.name or "").strip() or _default_name(body.description), "description": body.description,
         "archetype_override": body.archetype, "archetype": body.archetype, "slot": body.slot,
         "weapon_class": body.weapon_class, "grip": None, "overrides": overrides, "height": body.height,
-        "wearer_id": None,
+        "wearer_id": None, "autopilot": body.autopilot, "batch_id": batch_id,
         "status": "queued", "stage": "prompt", "gate": None, "step": "Waiting for the worker", "progress": 0.0,
         "error": None, "notes": [], "attempts": {}, "approvals": {}, "chosen_candidate": None, "outputs": {},
         "training_candidate": False, "training_candidate_set": False, "queued_at": now(),
@@ -510,36 +577,35 @@ def download_asset(request: Request, asset_id: str):
 
 @router.get("/assets/{asset_id}/thumb", tags=["assets"],
             summary="A small JPEG of the asset's preview (the picked candidate, or the first) for galleries")
-def read_asset_thumb(request: Request, asset_id: str):
+def read_asset_thumb(request: Request, asset_id: str,
+                     candidate: int | None = Query(None, ge=1, description="This candidate (default: the picked one)"),
+                     size: int = Query(384, ge=64, le=1024)):
     pipeline = pipeline_of(request)
     asset = _found(pipeline.db.get("assets", asset_id), "asset")
     candidates = ((asset.get("outputs") or {}).get("prompt") or {}).get("candidates") or []
     if not candidates:
         raise HTTPException(404, "no preview yet")
-    chosen = asset.get("chosen_candidate") or 1
-    source = pipeline.asset_dir(asset_id) / candidates[min(chosen, len(candidates)) - 1]
+    number = candidate or asset.get("chosen_candidate") or 1
+    source = pipeline.asset_dir(asset_id) / candidates[min(number, len(candidates)) - 1]
     if not source.is_file():
         raise HTTPException(404, "no preview yet")
-    thumb = source.with_name(f"{source.stem}_thumb.jpg")
-    if not thumb.is_file() or thumb.stat().st_mtime < source.stat().st_mtime:
-        with Image.open(source) as image:
-            small = image.convert("RGB")
-            small.thumbnail((384, 384))
-            small.save(thumb, quality=85)
-    return FileResponse(thumb, media_type="image/jpeg")
+    return delivery.send(request, delivery.thumbnail(source, size), "image/jpeg")
 
 
 @router.get("/assets/{asset_id}/files/{path:path}", tags=["assets"],
             summary="Download a file the pipeline made (candidates, GLBs, sprites, export files)")
-def read_asset_file(request: Request, asset_id: str, path: str):
+def read_asset_file(request: Request, asset_id: str, path: str,
+                    preview: bool = Query(False, description="GLBs: a light copy with JPEG textures, for viewers")):
     pipeline = pipeline_of(request)
     _found(pipeline.db.get("assets", asset_id), "asset")
     root = pipeline.asset_dir(asset_id).resolve()
     target = (root / path).resolve()
     if not target.is_relative_to(root) or not target.is_file():
         raise HTTPException(404, "file not found")
+    if preview and target.suffix == ".glb":
+        target = delivery.preview_glb(target)
     media = "model/gltf-binary" if target.suffix == ".glb" else None
-    return FileResponse(target, media_type=media)
+    return delivery.send(request, target, media)
 
 
 # ---- item fits, side jobs and examples --------------------------------------
@@ -626,7 +692,7 @@ def read_example(request: Request, path: str):
     target = (root / path).resolve()
     if not target.is_relative_to(root) or not target.is_file():
         raise HTTPException(404, "file not found")
-    return FileResponse(target)
+    return delivery.send(request, target)
 
 
 # ---- outfits ----------------------------------------------------------------

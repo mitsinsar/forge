@@ -80,6 +80,8 @@ class MeshQuality(Strict):
     resolution: int | None = Field(None, ge=128, le=1024, description="Octree (marching cubes) resolution.")
     guidance: float | None = Field(None, ge=1, le=15, description="How closely the shape follows the image.")
     remove_floaters: bool | None = Field(None, description="Drop small pieces that do not touch the body.")
+    multi_view: bool | None = Field(None, description="Draw right, back and left views first (MV-Adapter) and "
+                                                      "build the shape from all four (Hunyuan3D-2mv).")
 
 
 class ProfileSettings(Strict):
@@ -145,6 +147,30 @@ class AssetCreate(Strict):
                                  "(default by kind: hero 1.8, monster 1.5, boss 2.7).")
     profile_id: str | None = Field(None, description="Defaults to the project's default profile.")
     overrides: ProfileSettings | None = Field(None, description="Per-asset overrides of profile fields.")
+    autopilot: bool = Field(False, description="Approve each gate by itself when nothing failed its checks.")
+
+
+class BatchCreate(Strict):
+    asset: AssetCreate = Field(description="What every asset of the batch is made from.")
+    count: int = Field(ge=1, le=20)
+    vary: bool = Field(False, description="Have the LLM write a different description for each asset.")
+
+
+class VariantCreate(Strict):
+    name: str | None = Field(None, max_length=80, description="Defaults to the source's name plus \"variant\".")
+    hue: float = Field(0.0, ge=-180, le=180, description="Turn the colours by this many degrees.")
+    saturation: float = Field(1.0, ge=0, le=3)
+    brightness: float = Field(1.0, ge=0.1, le=3)
+    tint: str | None = Field(None, pattern=r"^#[0-9a-fA-F]{6}$", description="Pull the colours towards this one.")
+    tint_strength: float = Field(0.0, ge=0, le=1)
+
+
+class CleanRequest(Strict):
+    categories: list[Literal["unirig_scratch", "thumbnails", "orphans", "stale_fits", "old_examples"]]
+
+
+class Toggle(Strict):
+    value: bool
 
 
 class Approve(Strict):

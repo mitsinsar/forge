@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { api, type AssetInput, type Kind, type Slot, type WeaponClass } from "../api/client";
 import { keys, useApiMutation, useArchetypes, useMeta, useProfiles, useProjects } from "../api/queries";
 import { KIND_LABEL, isCharacter, label, MESH_PRESETS, meshPreset, options } from "../labels";
 import {
+  Box,
   Button,
   Card,
+  Checkbox,
   EmptyState,
   ErrorNotice,
   Field,
@@ -50,7 +53,29 @@ export function NewAssetPage() {
   const [slot, setSlot] = useState<Slot>("chest");
   const [weaponClass, setWeaponClass] = useState<WeaponClass | "">("");
   const [height, setHeight] = useState("");
+  const [autopilot, setAutopilot] = useState(false);
+  const [multiView, setMultiView] = useState(false);
+  const [count, setCount] = useState("1");
+  const [vary, setVary] = useState(true);
+  const many = Math.max(1, Math.min(20, Number.parseInt(count, 10) || 1));
   const [profileChoice, setProfileId] = useState<string | null>(null);
+  // "More like this": start from another asset's settings.
+  const fromId = params.get("from");
+  const from = useQuery({ queryKey: ["asset", fromId ?? ""], queryFn: () => api.asset(fromId!), enabled: !!fromId });
+  const [filled, setFilled] = useState(false);
+  useEffect(() => {
+    const a = from.data;
+    if (!a || filled) return;
+    setFilled(true);
+    setProjectId(a.project_id);
+    setKind(a.kind);
+    setDescription(a.description);
+    if (a.archetype_override) setArchetype(a.archetype_override);
+    if (a.slot) setSlot(a.slot);
+    if (a.weapon_class) setWeaponClass(a.weapon_class);
+    if (a.height) setHeight(String(a.height));
+    if (a.profile_id) setProfileId(a.profile_id);
+  }, [from.data, filled]);
   const [triangles, setTriangles] = useState("");
   const [meshQuality, setMeshQuality] = useState("");
   const [start, setStart] = useState<Start>("describe");
@@ -61,6 +86,7 @@ export function NewAssetPage() {
     (input: AssetInput) => (start === "image" && image ? api.createAssetFromImage(input, image) : api.createAsset(input)),
     [keys.assets],
   );
+  const batch = useApiMutation((input: AssetInput) => api.createBatch(input, many, vary), [keys.assets]);
   const fromImage = start === "image";
 
   const projectId = projectChoice || projects.data?.[0]?.id || "";
@@ -86,8 +112,7 @@ export function NewAssetPage() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    create.mutate(
-      {
+    const input: AssetInput = {
         project_id: projectId,
         kind,
         description: description.trim(),
@@ -98,15 +123,19 @@ export function NewAssetPage() {
         height: isCharacter(kind) && Number(height) > 0 ? Number(height) : undefined,
         profile_id: profileId || undefined,
         overrides:
-          triangleLimit > 0 || chosenMesh
+          triangleLimit > 0 || chosenMesh || multiView
             ? {
                 ...(triangleLimit > 0 ? { budgets: { triangles: { [kind]: triangleLimit } } } : {}),
-                ...(chosenMesh ? { mesh: { steps: chosenMesh.steps, resolution: chosenMesh.resolution } } : {}),
+                ...(chosenMesh || multiView
+                  ? { mesh: { ...(chosenMesh ? { steps: chosenMesh.steps, resolution: chosenMesh.resolution } : {}),
+                              ...(multiView ? { multi_view: true } : {}) } }
+                  : {}),
               }
             : undefined,
-      },
-      { onSuccess: (asset) => navigate(`/asset/${asset.id}`) },
-    );
+        autopilot,
+      };
+    if (many > 1 && !fromImage) batch.mutate(input, { onSuccess: (made) => navigate(`/?batch=${made[0].batch_id}`) });
+    else create.mutate(input, { onSuccess: (asset) => navigate(`/asset/${asset.id}`) });
   };
 
   return (
@@ -300,15 +329,39 @@ export function NewAssetPage() {
                 )}
               </Field>
             </Grid>
-            <ErrorNotice error={create.error} />
+            <Stack gap={2}>
+              <Checkbox
+                label="Multi-view mesh: draw the back and sides first, so the back isn't guessed (slower)"
+                checked={multiView}
+                onChange={setMultiView}
+              />
+              <Checkbox
+                label="Autopilot: approve each gate by itself when nothing failed its checks (it stops where something did)"
+                checked={autopilot}
+                onChange={setAutopilot}
+              />
+              {!fromImage && (
+                <Row align="top">
+                  <Box width={120}>
+                    <Field label="How many">
+                      {(id) => <Input id={id} type="number" min={1} max={20} value={count} onChange={(e) => setCount(e.target.value)} />}
+                    </Field>
+                  </Box>
+                  {many > 1 && (
+                    <Checkbox label="Vary the description for each (the LLM writes the variations)" checked={vary} onChange={setVary} />
+                  )}
+                </Row>
+              )}
+            </Stack>
+            <ErrorNotice error={create.error ?? batch.error} />
             <Row justify="end">
               <Button
                 type="submit"
                 variant="primary"
-                busy={create.isPending}
+                busy={create.isPending || batch.isPending}
                 disabled={!description.trim() || (fromImage && !image)}
               >
-                {fromImage ? "Build from my image" : "Start generating"}
+                {fromImage ? "Build from my image" : many > 1 ? `Start ${many} assets` : "Start generating"}
               </Button>
             </Row>
           </Stack>

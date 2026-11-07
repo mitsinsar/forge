@@ -106,7 +106,7 @@ PROFILE_DEFAULTS: dict = {
     # is how closely the shape follows the image; remove_floaters drops the small loose
     # pieces image-to-3D models leave floating around the body.
     # The defaults are Hunyuan3D 2.1's own (50 steps, octree 384, guidance 5.0).
-    "mesh": {"steps": 50, "resolution": 384, "guidance": 5.0, "remove_floaters": True},
+    "mesh": {"steps": 50, "resolution": 384, "guidance": 5.0, "remove_floaters": True, "multi_view": False},
     "candidates": 4,
     "clips": list(STANDARD_CLIPS),
     "biped_extra_clips": list(BIPED_EXTRA_CLIPS),

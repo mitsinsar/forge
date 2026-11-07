@@ -42,6 +42,8 @@ export interface MeshQuality {
   guidance: number;
   /** Drop small pieces that float apart from the body. */
   remove_floaters: boolean;
+  /** Draw right, back and left views first (MV-Adapter) and build the shape from all four. */
+  multi_view?: boolean;
 }
 
 /** The most extra LOD levels a profile can hold (the backend's limit). */
@@ -68,6 +70,14 @@ export interface ToolStatus {
   name: string;
   ok: boolean;
   detail: string;
+  /** assetgen.toml says how to restart it. */
+  restartable?: boolean;
+}
+
+export interface StorageReport {
+  total_bytes: number;
+  freed_bytes?: number;
+  categories: { id: string; label: string; items: number; bytes: number }[];
 }
 
 export interface Meta {
@@ -157,6 +167,15 @@ export interface Job {
   error: string | null;
 }
 
+export interface VariantInput {
+  name?: string;
+  hue: number;
+  saturation: number;
+  brightness: number;
+  tint?: string;
+  tint_strength: number;
+}
+
 export interface Outfit {
   id: string;
   project_id: string;
@@ -166,6 +185,14 @@ export interface Outfit {
 }
 
 export const exampleUrl = (path: string) => `/api/examples/${path.split("/").map(encodeURIComponent).join("/")}`;
+
+/** A quality check at a gate. */
+export interface Check {
+  id: string;
+  label: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
+}
 
 export interface Lora {
   id: string;
@@ -237,8 +264,14 @@ export interface AssetOutputs {
     candidates: string[];
     /** Biped characters: whether each candidate's arms stand clear of the body (null: no figure found). */
     pose_check?: { candidate: number; arms_clear: boolean | null; clear_share: number }[] | null;
+    /** Each candidate's checks; failing candidates were redrawn (``redrawn`` of them) before the gate. */
+    candidate_checks?: { candidate: number; checks: Check[]; status: Check["status"] }[];
+    redrawn?: number;
   };
   mesh?: {
+    checks?: Check[];
+    /** Multi-view meshes: the drawn views (front, right, back, left). */
+    views?: string[] | null;
     glb: string;
     texture: string;
     triangle_budget: number;
@@ -249,6 +282,7 @@ export interface AssetOutputs {
     removed?: { floater_pieces?: number; floater_faces?: number; debris_faces?: number } | null;
   };
   rig?: {
+    checks?: Check[];
     glb: string;
     clips: Clip[];
     preview_clips: string[];
@@ -293,6 +327,13 @@ export interface Asset {
   grip: Grip | null;
   /** Characters: the height asked for in metres (null: the kind's default). */
   height?: number | null;
+  autopilot?: boolean;
+  /** What autopilot did at each gate, and why. */
+  autopilot_log?: { gate: number; action: "approved" | "stopped"; reason: string; at: string }[];
+  /** Assets made together by one batch share this id. */
+  batch_id?: string | null;
+  /** Colour variants: the asset they were made from and the colour change. */
+  variant_of?: { id: string; name: string; hue: number; saturation: number; brightness: number } | null;
   /** Gear and weapons: the hero they are fitted on (null: the base mannequin). */
   wearer_id?: string | null;
   /** "upload" when made from the user's own image; missing on older assets. */
@@ -336,6 +377,8 @@ export interface AssetInput {
   weapon_class?: WeaponClass;
   /** Characters: height in metres (default by kind). */
   height?: number;
+  /** Approve each gate by itself when nothing failed its checks. */
+  autopilot?: boolean;
   profile_id?: string;
   /** Per-asset overrides of style profile fields. */
   overrides?: { budgets?: { triangles?: Partial<PerKind> }; mesh?: Partial<MeshQuality> };
@@ -345,6 +388,7 @@ export interface AssetFilters {
   project_id?: string;
   kind?: Kind;
   status?: AssetStatus;
+  batch_id?: string;
 }
 
 export interface RejectInput {
@@ -417,6 +461,9 @@ export function assetFileUrl(assetId: string, relPath: string): string {
 export const api = {
   meta: () => request<Meta>("GET", "/meta"),
   tools: () => request<ToolStatus[]>("GET", "/tools"),
+  restartTool: (tool: string) => request<{ tool: string; result: string }>("POST", `/tools/${tool}/restart`),
+  storage: () => request<StorageReport>("GET", "/storage"),
+  cleanStorage: (categories: string[]) => request<StorageReport>("POST", "/storage/clean", { categories }),
   archetypes: () => request<Archetype[]>("GET", "/archetypes"),
 
   projects: () => request<Project[]>("GET", "/projects"),
@@ -473,6 +520,10 @@ export const api = {
   assets: (filters: AssetFilters) => request<Asset[]>("GET", `/assets${query(filters)}`),
   asset: (id: string) => request<Asset>("GET", `/assets/${id}`),
   createAsset: (input: AssetInput) => request<Asset>("POST", "/assets", input),
+  createBatch: (asset: AssetInput, count: number, vary: boolean) =>
+    request<Asset[]>("POST", "/assets/batch", { asset, count, vary }),
+  setAutopilot: (id: string, value: boolean) => request<Asset>("PUT", `/assets/${id}/autopilot`, { value }),
+  makeVariant: (id: string, input: VariantInput) => request<Asset>("POST", `/assets/${id}/variants`, input),
   createAssetFromImage: (input: AssetInput, file: File) => {
     const form = new FormData();
     form.append("file", file);

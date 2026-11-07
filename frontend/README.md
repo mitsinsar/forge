@@ -39,6 +39,9 @@ After `npm run build`, `uv run assetgen` serves the app itself at http://127.0.0
   for Godot projects and grip fields for weapons). Every gate can be rejected with a note, which
   reruns only that stage. Done shows the export folder, files, zip download, re-export and the
   training-candidate flag; failed shows the error and Retry.
+* **Checks and autopilot** — every gate shows its quality checks (each candidate gets a badge
+  with its first problem). New asset has Autopilot, How many and Vary (a batch); the asset page
+  shows the autopilot log and a switch, plus Colour variant and More like this.
 * **Outfits** — pick a rigged hero, then gear per slot and a weapon; the 3D view plays the hero
   with every item fitted on it (an item not yet fitted on that hero is fitted by a worker job and
   appears when ready). Outfits can be saved, loaded ("Wear") and deleted.

@@ -911,3 +911,13 @@ code,
   background: rgba(13, 11, 18, 0.82);
   backdrop-filter: blur(2px);
 }
+
+.badge-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.badge-button:disabled {
+  cursor: progress;
+}

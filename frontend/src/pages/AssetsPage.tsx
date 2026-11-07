@@ -2,17 +2,19 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { assetFileUrl, localUrl, type Asset, type AssetFilters, type AssetStatus, type Kind } from "../api/client";
 import { useAssets, useMeta, useProjects } from "../api/queries";
 import { AssetStatus as AssetStatusView } from "../components/AssetStatus";
+import { CHECK_TONE, worstCheck } from "../components/Checks";
 import { KIND_LABEL, STATUS_LABEL, label, timeAgo } from "../labels";
 import {
   Badge,
   Box,
+  Button,
   EmptyState,
-  Grid,
-  MediaCard,
   ErrorNotice,
   Field,
+  Grid,
   LinkButton,
   Loading,
+  MediaCard,
   PageHeader,
   Row,
   Select,
@@ -38,6 +40,14 @@ function cardMedia(asset: Asset): { image: string | null; frames?: string[]; fps
   return { image: image ?? frames[0] ?? null, frames, fps: sprites.fps };
 }
 
+/** Waiting assets: whether the current gate's checks found something. */
+function GateCheckBadge({ asset }: { asset: Asset }) {
+  const checks = asset.gate === 2 ? asset.outputs.mesh?.checks : asset.gate === 3 ? asset.outputs.rig?.checks : undefined;
+  const status = worstCheck(checks);
+  if (!status || status === "pass") return null;
+  return <Badge tone={CHECK_TONE[status]}>{status === "fail" ? "Check failed" : "Check: look"}</Badge>;
+}
+
 const STATUS_TONE: Partial<Record<AssetStatus, "warning" | "danger" | "success" | "accent">> = {
   waiting: "warning",
   failed: "danger",
@@ -52,6 +62,7 @@ export function AssetsPage() {
     project_id: params.get("project") || undefined,
     kind: (params.get("kind") as Kind) || undefined,
     status: (params.get("status") as AssetStatus) || undefined,
+    batch_id: params.get("batch") || undefined,
   };
   const view = params.get("view") === "table" ? "table" : "gallery";
   const meta = useMeta();
@@ -65,7 +76,7 @@ export function AssetsPage() {
     else next.delete(key);
     setParams(next, { replace: true });
   };
-  const filtered = !!(filters.project_id || filters.kind || filters.status);
+  const filtered = !!(filters.project_id || filters.kind || filters.status || filters.batch_id);
 
   return (
     <Stack gap={4}>
@@ -97,6 +108,11 @@ export function AssetsPage() {
             { value: "mine", label: "Needs me" },
           ]}
         />
+        {filters.batch_id && (
+          <Button size="sm" variant="ghost" onClick={() => setFilter("batch", "")}>
+            Showing one batch · show all
+          </Button>
+        )}
       </Row>
       <Row gap={3}>
         <Box minWidth={200}>
@@ -168,9 +184,13 @@ export function AssetsPage() {
               title={asset.name}
               subtitle={`${KIND_LABEL[asset.kind]} · ${label(asset.slot ?? asset.weapon_class ?? asset.archetype)} · ${projectName(asset.project_id)}`}
               badges={
-                <Badge tone={STATUS_TONE[asset.status]} dot={asset.status === "running"} pulse={asset.status === "running"}>
-                  {asset.status === "waiting" && asset.gate ? `Gate ${asset.gate}` : STATUS_LABEL[asset.status]}
-                </Badge>
+                <>
+                  <Badge tone={STATUS_TONE[asset.status]} dot={asset.status === "running"} pulse={asset.status === "running"}>
+                    {asset.status === "waiting" && asset.gate ? `Gate ${asset.gate}` : STATUS_LABEL[asset.status]}
+                  </Badge>
+                  {asset.status === "waiting" && <GateCheckBadge asset={asset} />}
+                  {asset.autopilot && asset.status !== "done" && <Badge tone="info">Autopilot</Badge>}
+                </>
               }
               onClick={() => navigate(`/asset/${asset.id}`)}
             />

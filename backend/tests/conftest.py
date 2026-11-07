@@ -4,6 +4,7 @@ import os
 import time
 
 import pytest
+
 from fastapi.testclient import TestClient
 
 from assetgen.adapters import Adapters
@@ -18,6 +19,9 @@ def _no_local_config(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     for name in [n for n in os.environ if n.startswith("ASSETGEN_")]:
         monkeypatch.delenv(name)
+    # Gate 1 redraws candidates that fail their checks; the placeholders often do, so tests that
+    # don't test it turn it off (test_checks.py turns it on).
+    monkeypatch.setenv("ASSETGEN_AUTO_RETRIES", "0")
 
 
 def fake_adapters(**real) -> Adapters:

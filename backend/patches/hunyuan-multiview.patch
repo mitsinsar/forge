@@ -1,0 +1,85 @@
+diff --git a/model_worker.py.before-multiview b/model_worker.py
+index 8da56e6..7201d87 100644
+--- a/model_worker.py.before-multiview
++++ b/model_worker.py
+@@ -144,6 +144,31 @@ class ModelWorker:
+         }
+ 
+     @torch.inference_mode()
++    def mv_pipeline(self):
++        """Local patch (AssetForge): the multi-view shape model (Hunyuan3D-2mv turbo), loaded on first
++        use. Its config names the 2.0 package (hy3dgen.shapegen); 2.1 has the same classes in
++        hy3dshape, so the old names are pointed at them."""
++        if getattr(self, "_mv_pipeline", None) is None:
++            import sys
++            import types
++            import hy3dshape
++            import hy3dshape.models
++            import hy3dshape.pipelines
++            import hy3dshape.preprocessors
++            import hy3dshape.schedulers
++            alias = types.ModuleType("hy3dgen")
++            alias.shapegen = hy3dshape
++            sys.modules.setdefault("hy3dgen", alias)
++            sys.modules.setdefault("hy3dgen.shapegen", hy3dshape)
++            for name in ("models", "pipelines", "preprocessors", "schedulers"):
++                sys.modules.setdefault(f"hy3dgen.shapegen.{name}", getattr(hy3dshape, name))
++            logger.info("Loading the multi-view shape model tencent/Hunyuan3D-2mv (turbo)")
++            self._mv_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
++                "tencent/Hunyuan3D-2mv", subfolder="hunyuan3d-dit-v2-mv-turbo", variant="fp16",
++                use_safetensors=True)
++            self._mv_pipeline.enable_flashvdm(mc_algo=self.mc_algo)
++        return self._mv_pipeline
++
+     def generate(self, uid, params):
+         """
+         Generate a 3D model from the given parameters.
+@@ -170,6 +195,18 @@ class ModelWorker:
+         if image.mode != "RGBA" or params.get("remove_background"):
+             image = self.rembg(image.convert("RGB"))
+         image = image.convert("RGBA")
++        # Local patch (AssetForge): other views of the same subject ({"left": b64, "back": b64,
++        # "right": b64}) build the shape with the multi-view model; the texture still comes from the
++        # front image.
++        views = None
++        if params.get("mv_images"):
++            views = {"front": image}
++            for name, data in params["mv_images"].items():
++                if name in ("left", "back", "right") and data:
++                    view = load_image_from_base64(data)
++                    if view.mode != "RGBA" or params.get("remove_background"):
++                        view = self.rembg(view.convert("RGB"))
++                    views[name] = view.convert("RGBA")
+ 
+         # Generate mesh 
+         try:
+@@ -184,7 +221,12 @@ class ModelWorker:
+             if params.get('seed') is not None:
+                 options['generator'] = torch.Generator().manual_seed(int(params['seed']))
+             logger.info(f'Shape options: { {k: v for k, v in options.items() if k != "generator"} }')
+-            mesh = self.pipeline(image=image, **options)[0]
++            if views and len(views) > 1:
++                options["num_inference_steps"] = min(options.get("num_inference_steps", 30), 30)  # turbo model
++                logger.info(f"Multi-view shape from {sorted(views)}")
++                mesh = self.mv_pipeline()(image=views, **options)[0]
++            else:
++                mesh = self.pipeline(image=image, **options)[0]
+             logger.info("---Shape generation takes %s seconds ---" % (time.time() - start_time))
+         except Exception as e:
+             logger.error(f"Shape generation failed: {e}")
+diff --git a/api_models.py.before-multiview b/api_models.py
+index bb6a3c1..e15abd8 100644
+--- a/api_models.py.before-multiview
++++ b/api_models.py
+@@ -12,6 +12,11 @@ class GenerationRequest(BaseModel):
+         description="Base64 encoded input image for 3D generation",
+         example="iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGP8z4AATAxEcQAz0QEHOoQ+uAAAAABJRU5ErkJggg=="
+     )
++    mv_images: Optional[dict] = Field(
++        None,
++        description="Local patch (AssetForge): other views of the same subject, base64 by name "
++                    "(left, back, right); the shape then comes from the multi-view model"
++    )
+     remove_background: bool = Field(
+         True,
+         description="Whether to automatically remove background from input image"

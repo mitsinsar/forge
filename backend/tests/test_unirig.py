@@ -207,3 +207,13 @@ def test_helpers(tmp_path):
     report = match(TEMPLATE, skeleton, (lo, hi))
     for joint in ("pelvis", "spine_02", "thigh_l", "calf_r", "upperarm_l", "hand_r"):  # an identical skeleton
         assert np.allclose(report["targets"][joint], TEMPLATE["joints"][joint]["head"], atol=1e-4), joint
+
+
+def test_a_bad_fit_tries_other_seeds_and_keeps_the_best(tmp_path):
+    lo, hi = list(LO), list(HI)
+    lo[0], hi[0] = -2.6, 2.6
+    root = fake_unirig(tmp_path / "UniRig", box_glb(lo, hi, predicted_from_template(extra=24)))
+    result, _ = run(adapter(tmp_path, root), tmp_path, box_glb(lo, hi))
+    seeds = [c["args"]["seed"] for c in calls(root) if c["step"] == "skeleton"]
+    assert seeds == ["12345", "7", "2024"] and [a["seed"] for a in result["attempts"]] == [12345, 7, 2024]
+    assert (tmp_path / "rig" / "unirig" / "seed_7" / "rigged.glb").is_file()

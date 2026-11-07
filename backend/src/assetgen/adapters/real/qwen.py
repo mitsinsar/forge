@@ -25,6 +25,12 @@ class LLMError(RuntimeError):
     """A readable failure of the prompt stage."""
 
 
+def _json_part(text: str) -> str:
+    """The JSON object in a model's answer (some wrap it in a code fence or a sentence)."""
+    start, end = text.find("{"), text.rfind("}")
+    return text[start:end + 1] if start != -1 and end > start else text
+
+
 class _FormatRefused(Exception):
     """The server refused the requested response_format; try the next one."""
 
@@ -176,6 +182,46 @@ class QwenLLM:
             return payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"Qwen at {self.url} answered without a message.") from exc
+
+    def inspect(self, *, image, kind):
+        """Asks the (vision) model about a candidate. Returns None when it can't look at images."""
+        import base64  # noqa: PLC0415
+        import io  # noqa: PLC0415
+
+        from PIL import Image  # noqa: PLC0415
+
+        with Image.open(image) as opened:
+            small = opened.convert("RGB")
+            small.thumbnail((512, 512))
+            buffer = io.BytesIO()
+            small.save(buffer, "JPEG", quality=85)
+        data = base64.b64encode(buffer.getvalue()).decode("ascii")
+        subject = {"gear": "an armour or clothing piece shown alone", "weapon": "a weapon shown alone"}.get(
+            kind, "a game character")
+        question = (f"This image should show {subject}, whole, on a plain background. Answer only JSON: "
+                    '{"held_item": <true if a character holds or carries a weapon, shield, staff, bag or any other '
+                    'object, else false>, "held_item_name": <what it holds, or null>, "figures": <how many '
+                    'separate figures or objects are shown>, "whole_body": <true if nothing is cut off by the '
+                    'image edges>}')
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": question},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}}]}]
+        try:
+            answer = json.loads(_json_part(self._post_once(messages, None)))
+        except (LLMError, ValueError):
+            return None
+        return {"held_item": bool(answer.get("held_item")), "held_item_name": answer.get("held_item_name"),
+                "figures": int(answer.get("figures") or 1), "whole_body": bool(answer.get("whole_body", True))}
+
+    def vary(self, *, description, kind, count):
+        text = (f"Write {count} different variations of this {kind} description for a game asset generator. "
+                "Same kind of subject, but vary looks, colours, materials and details; one or two short sentences "
+                f'each. Answer only JSON: {{"descriptions": [<{count} strings>]}}.\n\nDescription: {description}')
+        answer = json.loads(_json_part(self._post_once([{"role": "user", "content": text}], None)))
+        variants = [str(d).strip() for d in answer.get("descriptions", []) if str(d).strip()]
+        if len(variants) < count:
+            raise LLMError(f"Qwen wrote {len(variants)} variations instead of {count}.")
+        return variants[:count]
 
     def expand(self, *, description, kind, archetypes, archetype_override, slot, weapon_class, notes):
         system = build_system_prompt(kind=kind, archetypes=archetypes, archetype_override=archetype_override,

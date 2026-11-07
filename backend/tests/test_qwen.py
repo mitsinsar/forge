@@ -254,7 +254,8 @@ def test_preview_stage_uses_qwen_and_tools_report(fake_qwen, tmp_path, monkeypat
                                                    "description": "a knight in red plate"})
         asset = wait_for(client, created.json()["id"], "waiting", gate=1)
         assert asset["outputs"]["prompt"]["prompt"].startswith("QWEN PROMPT a knight in red plate")
-        assert len(server.requests) == 2
+        prompts = [r for r in server.requests if r["body"]["messages"][0]["role"] == "system"]
+        assert len(prompts) == 2  # the rest are gate 1's vision checks of the candidates
 
         tools = {t["tool"]: t for t in client.get("/api/tools").json()}
         assert tools["llm"]["ok"] is True

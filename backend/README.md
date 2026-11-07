@@ -194,6 +194,82 @@ attack.
   line up frame for frame. Checked in Godot 4.7.2 with a knight, a helmet and a sword stacked as
   three `AnimatedSprite2D` layers.
 
+### Quality checks, autopilot and batches
+
+Every gate has checks (`src/assetgen/checks.py`), each `pass`, `warn` or `fail`, shown at the gate
+and in the gallery:
+
+* **Gate 1, per candidate**: one subject, nothing cut off, arms clear of the body (biped
+  characters) and empty hands (characters). The LLM is asked about each candidate with the image
+  (`inspect`: held items, how many figures, cut off); a text-only model skips that check with a
+  "not checked" warning. Candidates that fail are redrawn with other seeds, up to `auto_retries`
+  rounds (default 2), before the gate.
+* **Gate 2**: loose pieces and holes in the cleaned mesh (`cleanup_lods.py` reports them).
+* **Gate 3**: the skeleton fit (UniRig runs again with other seeds while it is under 0.75, up to
+  `unirig_tries` runs, and keeps the best) and how much each clip stretches the mesh (the share of
+  edges stretched past 1.5x or squeezed under 0.6x, measured by `rig_animate.py`).
+
+**Autopilot** (`autopilot` when creating, or `PUT /api/assets/{id}/autopilot`): when the asset
+stops at a gate and nothing failed, it approves the gate by itself (gate 1: the best candidate);
+otherwise it stops there and says why (`autopilot_log`). **Batches** (`POST /api/assets/batch`):
+up to 20 assets from one description, the same or varied by the LLM (`vary`), sharing a
+`batch_id` (`GET /api/assets?batch_id=`).
+
+### Colour variants
+
+`POST /api/assets/{id}/variants` copies a rigged asset with its texture recoloured (`hue`,
+`saturation`, `brightness`, optional `tint` and `tint_strength`) in every file that holds it, and
+puts the copy at gate 3. The mesh, skeleton and clips are kept, so it takes seconds and fits the
+same gear (`src/assetgen/variants.py`).
+
+### Multi-view meshes
+
+Image-to-3D only sees the front, so the back of a mesh is guessed. With the mesh setting
+`multi_view` (style profile, or per asset on New asset) the mesh stage first draws the right, back
+and left views of the picked candidate with **MV-Adapter** (SDXL image-to-multi-view), and
+Hunyuan3D builds the shape from all four with **Hunyuan3D-2mv** (turbo); the texture still comes
+from the front image. Gate 2 shows the views.
+
+Set up on the RTX 5090 machine (about 13 GB):
+
+* `C:/tools/MV-Adapter`: the [MV-Adapter](https://github.com/huanngzh/MV-Adapter) code with its
+  own Python (`.venv`: torch cu128, diffusers, transformers, peft, accelerate, einops, omegaconf,
+  jaxtyping, matplotlib, pytorch-lightning, opencv-python-headless, trimesh). It is run by
+  `backend/external/mv_views.py` and loads SDXL from ComfyUI's `sd_xl_base_1.0.safetensors`.
+* `C:/tools/MV-Adapter-models`: `mvadapter_i2mv_sdxl.safetensors` (huanngzh/mv-adapter) and
+  `sdxl-vae-fp16-fix/` (madebyollin/sdxl-vae-fp16-fix).
+* `~/.cache/hy3dgen/tencent/Hunyuan3D-2mv/hunyuan3d-dit-v2-mv-turbo` and
+  `~/.cache/hy3dgen/tencent/Hunyuan3D-2/hunyuan3d-vae-v2-0-turbo`: the multi-view shape model and
+  its decoder.
+* `patches/hunyuan-multiview.patch` on the Hunyuan3D 2.1 server: `mv_images` in the request
+  (`left`, `back`, `right`, base64) builds the shape with Hunyuan3D-2mv, loaded on first use.
+
+Settings: `mvadapter_root`, `mvadapter_python`, `mvadapter_models`, `mvadapter_sdxl` (empty:
+ComfyUI's checkpoint) and `mvadapter_timeout`. MV-Adapter needs about 14 GB of GPU memory;
+ComfyUI's models are freed first.
+
+### Restarting tools, and storage
+
+With a `[restart.<tool>]` table in `assetgen.toml` (`command`, `cwd`, `port`; see
+`src/assetgen/watchdog.py`), a stage that fails because ComfyUI (`image`) or Hunyuan3D (`mesh`)
+did not answer or ran out of memory restarts that tool once and runs again; a red tool badge in
+the header restarts it on a click (`POST /api/tools/{tool}/restart`). `GET /api/storage` and
+`POST /api/storage/clean` (the Storage card on the Projects page) show and delete what can be
+rebuilt or is no longer used: UniRig's working files, thumbnails, files of deleted assets, fits on
+deleted heroes and examples of deleted LoRAs and profiles.
+
+```toml
+[restart.image]
+command = ["C:/path/to/ComfyUI/venv/Scripts/python.exe", "main.py", "--port", "8188"]
+cwd = "C:/path/to/ComfyUI"
+port = 8188
+
+[restart.mesh]
+command = ["cmd", "/c", "C:/tools/Hunyuan3D-2.1/start_server.bat"]
+cwd = "C:/tools/Hunyuan3D-2.1"
+port = 8081
+```
+
 ### Side jobs: outfits and example sheets
 
 Besides asset stages, the single worker runs side jobs (`jobs` table, `GET /api/jobs`), oldest
@@ -361,6 +437,8 @@ blender_path = "blender"
 unirig_path = "UniRig"
 python_path = "python"
 unirig_timeout = 900           # seconds one UniRig step may take
+unirig_tries = 3               # UniRig runs (other seeds) while the skeleton fits badly; the best is kept
+auto_retries = 2               # rounds of redrawing gate 1 candidates that fail their checks
 frontend_dir = "../frontend/dist" # built web app served at / (default: the repo's frontend/dist)
 ```
 

@@ -10,6 +10,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 
 from .adapters import Adapters, build_adapters
@@ -57,6 +58,8 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             db.close()
 
     app = FastAPI(title="Asset generator", version=VERSION, description=DESCRIPTION, lifespan=lifespan)
+    # JSON and the app's scripts shrink to a fraction; images and models are left alone (already packed).
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.include_router(router)
     mount_frontend(app, settings.frontend_dir)
     logging.getLogger("assetgen").setLevel(logging.INFO)
@@ -78,5 +81,8 @@ def mount_frontend(app: FastAPI, dist: Path) -> None:
             raise HTTPException(404, "not found")
         target = (root / path).resolve()
         if path and target.is_relative_to(root) and target.is_file():
-            return FileResponse(target)
+            # Vite names built files by their content, so they never change: cache them for good.
+            immutable = path.startswith("assets/")
+            return FileResponse(target, headers={"Cache-Control": "public, max-age=31536000, immutable"
+                                                 if immutable else "no-cache"})
         return FileResponse(root / "index.html", headers={"Cache-Control": "no-cache"})

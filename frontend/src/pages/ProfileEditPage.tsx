@@ -165,6 +165,9 @@ function MeshQualityFields({ mesh, onChange }: { mesh: MeshQuality; onChange: (m
       <Field group label="Clean-up" hint="Image-to-3D models leave small blobs floating around the body. Pieces that touch the body, such as separate armour plates, are kept.">
         {() => <Checkbox checked={mesh.remove_floaters} onChange={(on) => onChange({ ...mesh, remove_floaters: on })} label="Remove floating pieces" />}
       </Field>
+      <Field group label="Views" hint="Image-to-3D only sees the front, so the back is guessed. Multi-view first draws the right, back and left (MV-Adapter, about a minute) and builds the shape from all four (Hunyuan3D-2mv).">
+        {() => <Checkbox checked={!!mesh.multi_view} onChange={(on) => onChange({ ...mesh, multi_view: on })} label="Multi-view mesh" />}
+      </Field>
     </Stack>
   );
 }
