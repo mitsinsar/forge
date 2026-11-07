@@ -8,12 +8,13 @@ args.json::
 
     {"mvadapter_root": "C:/tools/MV-Adapter", "sdxl_checkpoint": ".../sd_xl_base_1.0.safetensors",
      "adapter_dir": "C:/tools/MV-Adapter-models", "vae_dir": ".../sdxl-vae-fp16-fix",
-     "image": "front.png" (RGBA, background cut away), "prompt": "a goblin warrior...",
+     "image": "front.png" (cut out with rembg here unless it is already transparent),
+     "prompt": "a goblin warrior...",
      "out_dir": "views", "seed": 42, "steps": 40, "size": 768}
 
 The SDXL weights come from the checkpoint file ComfyUI already has (no diffusers download); only
-small config files are fetched once. Writes ``<view>.png`` for front, right, back and left (the
-character's right, as seen from that side) and prints PROGRESS lines like the Blender scripts.
+small config files are fetched once. Writes ``<view>.png`` for front, left, back and right (the
+character's left side, back and right side) and prints PROGRESS lines like the Blender scripts.
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ import sys
 import traceback
 from pathlib import Path
 
-VIEWS = {"front": 0, "right": 90, "back": 180, "left": 270}  # azimuth, degrees
+# Azimuth in MV-Adapter's frame, degrees. Its second image shows the character's left side (the
+# character faces image-left) and the fourth its right, the same order Hunyuan3D-2mv reads.
+VIEWS = {"front": 0, "left": 90, "back": 180, "right": 270}
 
 
 def progress(fraction: float, step: str) -> None:
@@ -32,6 +35,14 @@ def progress(fraction: float, step: str) -> None:
 
 def main(args: dict) -> dict:
     sys.path.insert(0, str(Path(args["mvadapter_root"]).resolve()))
+    try:
+        import nvdiffrast.torch  # noqa: F401 - only MV-Adapter's mesh renderer needs it
+    except ImportError:  # the cameras used here don't; a stub lets mvadapter.utils import
+        import types
+
+        stub = types.ModuleType("nvdiffrast")
+        stub.torch = types.ModuleType("nvdiffrast.torch")
+        sys.modules["nvdiffrast"], sys.modules["nvdiffrast.torch"] = stub, stub.torch
     import torch
     from diffusers import AutoencoderKL, StableDiffusionXLPipeline
     from PIL import Image
@@ -57,7 +68,7 @@ def main(args: dict) -> dict:
     pipe.load_custom_adapter(args["adapter_dir"], weight_name="mvadapter_i2mv_sdxl.safetensors")
     pipe.to(device=device, dtype=dtype)
     pipe.cond_encoder.to(device=device, dtype=dtype)
-    pipe.enable_vae_slicing()
+    pipe.vae.enable_slicing()
 
     progress(0.15, "Drawing the views")
     count = len(VIEWS)
@@ -65,7 +76,13 @@ def main(args: dict) -> dict:
                                     bottom=-0.55, top=0.55, azimuth_deg=[a - 90 for a in VIEWS.values()],
                                     device=device)
     control = ((get_plucker_embeds_from_cameras_ortho(cameras.c2w, [1.1] * count, size) + 1.0) / 2.0).clamp(0, 1)
-    reference = preprocess_image(Image.open(args["image"]).convert("RGBA"), size, size)
+    source = Image.open(args["image"])
+    if source.mode != "RGBA" or source.getchannel("A").getextrema()[0] == 255:
+        progress(0.12, "Cutting out the front image")
+        from rembg import new_session, remove  # the same u2net model Hunyuan3D's server uses
+
+        source = remove(source.convert("RGB"), session=new_session("u2net"))
+    reference = preprocess_image(source.convert("RGBA"), size, size)
     steps = int(args.get("steps", 40))
 
     def on_step(pipeline, step, timestep, kwargs):

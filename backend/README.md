@@ -225,8 +225,8 @@ same gear (`src/assetgen/variants.py`).
 ### Multi-view meshes
 
 Image-to-3D only sees the front, so the back of a mesh is guessed. With the mesh setting
-`multi_view` (style profile, or per asset on New asset) the mesh stage first draws the right, back
-and left views of the picked candidate with **MV-Adapter** (SDXL image-to-multi-view), and
+`multi_view` (style profile, or per asset on New asset) the mesh stage first draws the left, back
+and right views of the picked candidate with **MV-Adapter** (SDXL image-to-multi-view), and
 Hunyuan3D builds the shape from all four with **Hunyuan3D-2mv** (turbo); the texture still comes
 from the front image. Gate 2 shows the views.
 
@@ -234,19 +234,24 @@ Set up on the RTX 5090 machine (about 13 GB):
 
 * `C:/tools/MV-Adapter`: the [MV-Adapter](https://github.com/huanngzh/MV-Adapter) code with its
   own Python (`.venv`: torch cu128, diffusers, transformers, peft, accelerate, einops, omegaconf,
-  jaxtyping, matplotlib, pytorch-lightning, opencv-python-headless, trimesh). It is run by
-  `backend/external/mv_views.py` and loads SDXL from ComfyUI's `sd_xl_base_1.0.safetensors`.
+  jaxtyping, matplotlib, pytorch-lightning, opencv-python-headless, trimesh, `triton-windows<3.7`,
+  rembg, onnxruntime). It is run by `backend/external/mv_views.py`, which loads SDXL from ComfyUI's
+  `sd_xl_base_1.0.safetensors`, cuts the front image out with rembg (the `u2net` model Hunyuan3D
+  already keeps in `~/.u2net`) and stubs `nvdiffrast`, which only MV-Adapter's texture tools need.
 * `C:/tools/MV-Adapter-models`: `mvadapter_i2mv_sdxl.safetensors` (huanngzh/mv-adapter) and
   `sdxl-vae-fp16-fix/` (madebyollin/sdxl-vae-fp16-fix).
-* `~/.cache/hy3dgen/tencent/Hunyuan3D-2mv/hunyuan3d-dit-v2-mv-turbo` and
-  `~/.cache/hy3dgen/tencent/Hunyuan3D-2/hunyuan3d-vae-v2-0-turbo`: the multi-view shape model and
-  its decoder.
+* `~/.cache/hy3dgen/tencent/Hunyuan3D-2mv/hunyuan3d-dit-v2-mv-turbo`: the multi-view shape model
+  (it keeps its own VAE; 2.1 can't load the 2.0 turbo VAE).
 * `patches/hunyuan-multiview.patch` on the Hunyuan3D 2.1 server: `mv_images` in the request
-  (`left`, `back`, `right`, base64) builds the shape with Hunyuan3D-2mv, loaded on first use.
+  (`left`, `back`, `right`, base64; the character's own sides) builds the shape with
+  Hunyuan3D-2mv in 10 steps. It is loaded on first use and kept in RAM; for each job it swaps
+  places with the 2.1 shape model on the GPU, since both next to the texture model don't fit.
+  The patch also frees the cached GPU memory after every job, so ComfyUI and MV-Adapter have room.
 
 Settings: `mvadapter_root`, `mvadapter_python`, `mvadapter_models`, `mvadapter_sdxl` (empty:
 ComfyUI's checkpoint) and `mvadapter_timeout`. MV-Adapter needs about 14 GB of GPU memory;
-ComfyUI's models are freed first.
+ComfyUI's models are freed first. Measured on the knight: views about 1.5 min (with loading), then
+Hunyuan3D about 65 s (shape 18 s, texture 60 s).
 
 ### Restarting tools, and storage
 
