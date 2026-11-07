@@ -55,6 +55,37 @@ def textured_glb(albedo: Image.Image) -> bytes:
     return imaging.glb_bytes(gltf, binary)
 
 
+def data_uri_glb(albedo: Image.Image) -> bytes:
+    """Like ``textured_glb``, but with the textures as base64 data URIs, as Hunyuan3D 2.1 writes them:
+    a JPEG labelled image/png for the albedo and a second image for metal/roughness."""
+    gltf, binary = imaging.parse_glb(textured_glb(albedo))
+    jpeg = io.BytesIO()
+    albedo.convert("RGB").save(jpeg, "JPEG")
+    gltf["images"] = [{"uri": "data:image/png;base64," + base64.b64encode(jpeg.getvalue()).decode()},
+                      {"uri": "data:image/png;base64," + base64.b64encode(imaging.png_bytes(albedo)).decode()}]
+    gltf["textures"] = [{"source": 0}, {"source": 1}]
+    gltf["materials"][0]["pbrMetallicRoughness"]["metallicRoughnessTexture"] = {"index": 1}
+    gltf["bufferViews"] = gltf["bufferViews"][:3]
+    binary = binary[:68]
+    gltf["buffers"][0]["byteLength"] = len(binary)
+    return imaging.glb_bytes(gltf, binary)
+
+
+def test_textures_in_data_uris_are_read_and_moved_into_the_glb(fake_hunyuan, tmp_path):
+    server = fake_hunyuan()
+    server.glb = data_uri_glb(lit_albedo())
+    result, _ = run(adapter(tmp_path, server.url), tmp_path, texture_size=128)
+    with Image.open(result["texture"]) as texture:
+        assert texture.size == (128, 128)
+    gltf, binary = imaging.read_glb(result["glb"])
+    albedo = gltf["images"][0]
+    assert "uri" not in albedo and albedo["mimeType"] == "image/png"
+    assert imaging.albedo_image(gltf, binary).size == (128, 128)
+    assert gltf["images"][1]["uri"].startswith("data:")  # metal/roughness kept as it was
+    positions = gltf["bufferViews"][0]
+    assert binary[positions["byteOffset"]:positions["byteOffset"] + 36] == struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0)
+
+
 def lit_albedo(size: int = 256) -> Image.Image:
     """A red albedo with light baked in: bright on top, dark at the bottom."""
     y = np.linspace(1.4, 0.5, size, dtype=np.float32)[:, None, None]

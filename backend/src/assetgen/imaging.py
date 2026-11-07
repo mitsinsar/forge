@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import struct
@@ -190,8 +191,13 @@ def albedo_image_index(gltf: dict) -> int | None:
 
 
 def image_bytes(gltf: dict, binary: bytes, index: int) -> bytes:
+    """The bytes of image ``index``: from the binary chunk, or from a base64 ``data:`` URI
+    (Hunyuan3D 2.1 writes its textures that way)."""
     image = gltf["images"][index]
     if "bufferView" not in image:
+        uri = image.get("uri") or ""
+        if uri.startswith("data:") and ";base64," in uri:
+            return base64.b64decode(uri.split(";base64,", 1)[1])
         raise ValueError("the albedo image is not stored inside the GLB")
     view = gltf["bufferViews"][image["bufferView"]]
     start = view.get("byteOffset", 0)
@@ -209,9 +215,17 @@ def albedo_image(gltf: dict, binary: bytes) -> Image.Image | None:
 
 def replace_image(gltf: dict, binary: bytes, index: int, png: bytes) -> tuple[dict, bytes]:
     """Puts ``png`` in place of image ``index`` and repacks the binary chunk
-    (every buffer view of buffer 0, 4-byte aligned)."""
-    target = gltf["images"][index]["bufferView"]
-    views = gltf["bufferViews"]
+    (every buffer view of buffer 0, 4-byte aligned). An image held as a ``data:`` URI
+    moves into the binary chunk."""
+    views = gltf.setdefault("bufferViews", [])
+    image = gltf["images"][index]
+    if "bufferView" not in image:
+        image.pop("uri", None)
+        views.append({"buffer": 0, "byteOffset": len(binary), "byteLength": 0})
+        image["bufferView"] = len(views) - 1
+        if not gltf.get("buffers"):
+            gltf["buffers"] = [{"byteLength": 0}]
+    target = image["bufferView"]
     packed = bytearray()
     for i, view in enumerate(views):
         if view.get("buffer", 0) != 0:
