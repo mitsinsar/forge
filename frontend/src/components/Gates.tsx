@@ -159,12 +159,13 @@ function GateBar({
 
 // ---- gate 1: preview ------------------------------------------------------------
 
-export function Gate1({ asset }: { asset: Asset }) {
+/** ``readOnly`` shows a finished gate again (from the step bar): the pick, no actions. */
+export function Gate1({ asset, readOnly = false }: { asset: Asset; readOnly?: boolean }) {
   const prompt = asset.outputs.prompt;
   const upload = prompt?.source === "upload";
   const [pickedByUser, setPicked] = useState<number | null>(null);
   // The user's own image is the only candidate; derived, so it holds even when the outputs load after mounting.
-  const picked = upload ? 1 : pickedByUser;
+  const picked = readOnly ? asset.chosen_candidate : upload ? 1 : pickedByUser;
   const [archetype, setArchetype] = useState(asset.archetype ?? "");
   const archetypes = useArchetypes();
   const rerun = useApiMutation((value: string) => api.reject(asset.id, 1, { archetype: value }), [keys.assets, keys.asset(asset.id)]);
@@ -173,11 +174,15 @@ export function Gate1({ asset }: { asset: Asset }) {
   return (
     <Stack gap={4}>
       <Card
-        title={upload ? "Gate 1 · Check your image" : "Gate 1 · Pick a preview"}
+        title={readOnly ? "Preview · approved" : upload ? "Gate 1 · Check your image" : "Gate 1 · Pick a preview"}
         subtitle={
-          upload
-            ? "The mesh is built from this image. Check the archetype below, then build the mesh."
-            : `Attempt ${prompt?.attempt ?? 1}. Pick the image the mesh is built from.`
+          readOnly
+            ? upload
+              ? "Your own image; the mesh was built from it."
+              : `Attempt ${prompt?.attempt ?? 1}. The highlighted image is the one the mesh was built from.`
+            : upload
+              ? "The mesh is built from this image. Check the archetype below, then build the mesh."
+              : `Attempt ${prompt?.attempt ?? 1}. Pick the image the mesh is built from.`
         }
       >
         <Stack gap={4}>
@@ -188,11 +193,12 @@ export function Gate1({ asset }: { asset: Asset }) {
                 src={localUrl(url)}
                 alt={`Candidate ${i + 1}`}
                 selected={picked === i + 1}
-                onClick={() => setPicked(i + 1)}
+                onClick={readOnly ? undefined : () => setPicked(i + 1)}
                 label={<Badge>{i + 1}</Badge>}
               />
             ))}
           </Grid>
+          {!readOnly && (
           <GateBar
             gate={1}
             asset={asset}
@@ -201,6 +207,7 @@ export function Gate1({ asset }: { asset: Asset }) {
             candidate={picked ?? undefined}
             canReject={!upload}
           />
+          )}
         </Stack>
       </Card>
 
@@ -243,7 +250,7 @@ export function Gate1({ asset }: { asset: Asset }) {
               <Badge tone="accent">{label(asset.archetype)}</Badge>
               {asset.archetype_override && <Text small faint>chosen by you</Text>}
             </Row>
-            {isCharacter(asset.kind) ? (
+            {readOnly ? null : isCharacter(asset.kind) ? (
               <>
                 <Field
                   label="Override"
@@ -302,7 +309,7 @@ function meshSummary(mesh: NonNullable<Asset["outputs"]["mesh"]>): string {
   return parts.join(" · ");
 }
 
-export function Gate2({ asset }: { asset: Asset }) {
+export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: boolean }) {
   const mesh = asset.outputs.mesh;
   const [lod, setLod] = useState(0);
   const [wireframe, setWireframe] = useState(false);
@@ -311,7 +318,7 @@ export function Gate2({ asset }: { asset: Asset }) {
   const image = localUrl(asset.urls?.chosen_image);
   return (
     <Card
-      title="Gate 2 · Approve the mesh"
+      title={readOnly ? "Mesh · approved" : "Gate 2 · Approve the mesh"}
       subtitle={mesh ? meshSummary(mesh) : undefined}
       actions={
         image && (
@@ -351,7 +358,7 @@ export function Gate2({ asset }: { asset: Asset }) {
           {mesh && ` LODs at ${mesh.lods.map((l) => `${Math.round(l.ratio * 100)}%`).join(" / ")}.`}
           {mesh?.delight !== undefined && (mesh.delight ? " Baked lighting evened out." : " Baked lighting kept as made.")}
         </Text>
-        <GateBar gate={2} asset={asset} approveLabel="Approve mesh" />
+        {!readOnly && <GateBar gate={2} asset={asset} approveLabel="Approve mesh" />}
       </Stack>
     </Card>
   );
@@ -403,7 +410,7 @@ function GripFields({ grip, onChange }: { grip: Required<Grip>; onChange: (grip:
   );
 }
 
-export function Gate3({ asset, godot }: { asset: Asset; godot: boolean }) {
+export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot: boolean; readOnly?: boolean }) {
   const rig = asset.outputs.rig;
   const [clips, setClips] = useState<string[]>([]);
   const [clipChoice, setClip] = useState<string | null>(null);
@@ -434,7 +441,7 @@ export function Gate3({ asset, godot }: { asset: Asset; godot: boolean }) {
         </Notice>
       )}
       <Card
-        title="Gate 3 · Approve the animated result"
+        title={readOnly ? "Animation · approved" : "Gate 3 · Approve the animated result"}
         subtitle={rig ? `${rig.rig_type} rig · ${rig.skeleton.joints} joints · fit ${Math.round(rig.skeleton.fit_score * 100)}%` : undefined}
       >
         <Stack gap={4}>
@@ -488,6 +495,7 @@ export function Gate3({ asset, godot }: { asset: Asset; godot: boolean }) {
               Sprite frames are rendered at export for this asset.
             </Text>
           )}
+          {!readOnly && (
           <GateBar
             gate={3}
             asset={asset}
@@ -497,9 +505,10 @@ export function Gate3({ asset, godot }: { asset: Asset; godot: boolean }) {
             }
             rejectInput={() => (isWeapon && gripChanged ? { grip } : {})}
           />
+          )}
         </Stack>
       </Card>
-      {isWeapon && (
+      {isWeapon && !readOnly && (
         <Card
           title="Grip"
           subtitle="Where the weapon sits in the hand. Change it and reject to re-rig with the new grip."

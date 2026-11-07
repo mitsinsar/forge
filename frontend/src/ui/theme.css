@@ -619,6 +619,29 @@ code,
   background: var(--danger-soft);
   border-color: var(--danger);
 }
+.stepper__step--button {
+  background: none;
+  border: 0;
+  padding: var(--space-1) var(--space-2);
+  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-2));
+  border-radius: var(--radius);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.stepper__step--button:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+  color: var(--text);
+}
+.stepper__step--button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.stepper__step--selected {
+  background: var(--accent-soft);
+  color: var(--text);
+}
 .stepper__sub {
   font-weight: 500;
   font-size: var(--font-size-sm);
@@ -689,7 +712,8 @@ code,
 .thumb:hover {
   border-color: var(--border-strong);
 }
-.thumb[aria-pressed="true"] {
+.thumb[aria-pressed="true"],
+.thumb--selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -702,7 +726,8 @@ code,
   background: var(--bg-raised);
   color: var(--text);
 }
-.thumb[aria-pressed="true"] .thumb__label .badge {
+.thumb[aria-pressed="true"] .thumb__label .badge,
+.thumb--selected .thumb__label .badge {
   background: var(--accent);
   color: var(--accent-text);
 }
