@@ -217,6 +217,8 @@ export interface Lora {
   licence: string;
   commercial_use: boolean;
   source_url: string;
+  /** Words the LoRA was trained on, added to the front of its prompts. */
+  trigger?: string;
   uploaded: boolean;
   file_exists: boolean;
   examples?: Examples;
@@ -231,6 +233,7 @@ export interface LoraFields {
   licence: string;
   commercial_use: boolean;
   source_url: string;
+  trigger?: string;
 }
 
 export interface Lod {
@@ -533,6 +536,7 @@ export const api = {
     form.append("licence", fields.licence);
     form.append("commercial_use", String(fields.commercial_use));
     form.append("source_url", fields.source_url);
+    form.append("trigger", fields.trigger ?? "");
     return request<Lora>("POST", "/loras/upload", form);
   },
   updateLora: (id: string, input: Partial<LoraFields & { path: string }>) =>

@@ -97,6 +97,7 @@ function LoraDialog({ lora, onClose }: { lora: Lora | null; onClose: () => void 
   const [licence, setLicence] = useState(lora?.licence ?? "");
   const [commercial, setCommercial] = useState(lora?.commercial_use ?? false);
   const [source, setSource] = useState(lora?.source_url ?? "");
+  const [trigger, setTrigger] = useState(lora?.trigger ?? "");
 
   const save = useApiMutation(() => {
     const fields = {
@@ -106,6 +107,7 @@ function LoraDialog({ lora, onClose }: { lora: Lora | null; onClose: () => void 
       licence: licence.trim(),
       commercial_use: commercial,
       source_url: source.trim(),
+      trigger: trigger.trim(),
     };
     if (lora) return api.updateLora(lora.id, lora.uploaded ? fields : { ...fields, path: path.trim() });
     if (mode === "upload") return api.uploadLora(file!, fields);
@@ -165,6 +167,9 @@ function LoraDialog({ lora, onClose }: { lora: Lora | null; onClose: () => void 
             {(id) => <Input id={id} value={licence} onChange={(e) => setLicence(e.target.value)} placeholder="CreativeML OpenRAIL-M" />}
           </Field>
         </Grid>
+        <Field label="Trigger words" hint="The word(s) it was trained on, from its page (Civitai: “Trigger Words”). Added to the front of every prompt that uses it.">
+          {(id) => <Input id={id} mono value={trigger} maxLength={200} onChange={(e) => setTrigger(e.target.value)} placeholder="hkstyle" />}
+        </Field>
         <Field label="Source URL">
           {(id) => <Input id={id} type="url" value={source} onChange={(e) => setSource(e.target.value)} placeholder="https://civitai.com/models/…" />}
         </Field>

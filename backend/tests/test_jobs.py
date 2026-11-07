@@ -166,3 +166,20 @@ def test_a_queued_stage_can_be_stopped_and_resumed(client, settings, tmp_path):
     assert client.post(f"/api/assets/{hero['id']}/stop").status_code == 409  # nothing left to stop
     assert client.post(f"/api/assets/{hero['id']}/retry").status_code == 200  # Resume
     assert wait_for(client, hero["id"], "waiting", gate=3)["stage"] == "rig"
+
+
+def test_lora_trigger_words_lead_the_prompts_that_use_them(client, tmp_path):
+    from assetgen.pipeline import Pipeline
+    assert Pipeline.with_triggers("a knight", [{"trigger": "hkstyle"}]) == "hkstyle, a knight"
+    assert Pipeline.with_triggers("hkstyle, a knight", [{"trigger": "hkstyle"}]) == "hkstyle, a knight"  # once
+    assert Pipeline.with_triggers("a knight", [{"trigger": ""}, {}]) == "a knight"
+    lora_file = tmp_path / "knights.safetensors"
+    lora_file.write_bytes(b"lora")
+    lora = client.post("/api/loras", json={"name": "Knights", "path": str(lora_file), "base_model": "sdxl",
+                                           "trigger": "hkstyle"}).json()
+    assert lora["trigger"] == "hkstyle"
+    assert client.patch(f"/api/loras/{lora['id']}", json={"trigger": "hkstyle, knight"}).json()["trigger"] == "hkstyle, knight"
+    job = client.post(f"/api/loras/{lora['id']}/examples", json={"weight": 0.8}).json()
+    assert wait_job(client, job["id"])["status"] == "done"
+    examples = client.get(f"/api/loras/{lora['id']}").json()["examples"]
+    assert all(item["prompt"] for item in examples["items"])

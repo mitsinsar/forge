@@ -478,7 +478,8 @@ class Pipeline:
             item = {"name": subject["name"], "prompt": subject["prompt"]}
             for variant, render in variants.items():
                 out = root / f"{subject['name']}_{variant}"
-                prompt = ", ".join(p for p in (subject["prompt"], render.get("suffix")) if p)
+                prompt = self.with_triggers(", ".join(p for p in (subject["prompt"], render.get("suffix")) if p),
+                                            render.get("loras", []))
                 negative = ", ".join(p for p in (EXAMPLE_NEGATIVE, render.get("negative")) if p)
                 (path,) = self.adapters.image.render_candidates(
                     prompt=prompt, negative_prompt=negative, base_model=render["base_model"],
@@ -501,7 +502,8 @@ class Pipeline:
         if lora is None:
             raise RuntimeError("the LoRA is gone")
         weight = float(job["params"].get("weight", EXAMPLE_LORA_WEIGHT))
-        entry = {"id": lora["id"], "name": lora["name"], "path": lora["path"], "weight": weight}
+        entry = {"id": lora["id"], "name": lora["name"], "path": lora["path"], "weight": weight,
+                 "trigger": lora.get("trigger") or ""}
         items = self._render_examples("loras", lora["id"], {
             "with": {"base_model": lora["base_model"], "loras": [entry]},
             "without": {"base_model": lora["base_model"]}}, progress)
@@ -640,6 +642,7 @@ class Pipeline:
         prompt = ", ".join(p for p in (expansion["prompt"], suffix) if p)
         negative = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
         loras = self._profile_loras(settings)
+        prompt = self.with_triggers(prompt, loras)
         references = [self.settings.uploads_dir / "references" / r["file"] for r in settings["reference_images"]]
 
         def scaled(step, fraction):
@@ -798,8 +801,15 @@ class Pipeline:
             lora = self.db.get("loras", entry["id"])
             if lora and lora["base_model"] == settings["base_model"]:
                 result.append({"id": lora["id"], "name": lora["name"], "path": lora["path"],
-                               "weight": entry.get("weight", 1.0)})
+                               "weight": entry.get("weight", 1.0), "trigger": lora.get("trigger") or ""})
         return result
+
+    @staticmethod
+    def with_triggers(prompt: str, loras: list[dict]) -> str:
+        """The LoRAs' trigger words at the front of the prompt (each once): a LoRA trained on a word
+        only shows fully when the prompt has it."""
+        words = [lora["trigger"] for lora in loras if lora.get("trigger") and lora["trigger"].lower() not in prompt.lower()]
+        return ", ".join([*words, prompt]) if words else prompt
 
     def _stage_mesh(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)

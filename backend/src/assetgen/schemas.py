@@ -121,6 +121,8 @@ class LoraRegister(Strict):
     licence: str = ""
     commercial_use: bool = False
     source_url: str = ""
+    trigger: str = Field("", max_length=200, description="Words the LoRA was trained on; put at the front of every "
+                                                         "prompt that uses it (e.g. \"hkstyle\").")
 
 
 class LoraUpdate(Strict):
@@ -131,6 +133,7 @@ class LoraUpdate(Strict):
     licence: str | None = None
     commercial_use: bool | None = None
     source_url: str | None = None
+    trigger: str | None = Field(None, max_length=200)
 
 
 # ---- assets -----------------------------------------------------------------
