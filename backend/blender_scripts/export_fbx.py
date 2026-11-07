@@ -171,6 +171,7 @@ def main(args: dict) -> dict:
     if args.get("rigid"):
         drop_extras(animated)
         make_rigid(animated)
+        animated = [obj for obj in animated if alive(obj)]
     lod0 = lod0_from(animated, name)
 
     progress(0.3, "Adding the LODs")

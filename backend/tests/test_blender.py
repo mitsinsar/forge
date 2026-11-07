@@ -352,6 +352,14 @@ def test_a_stick_weapons_grip_is_at_its_thin_end(tmp_path):
     assert names.index("weapon") in socket.get("children", [])  # held by the socket bone, not skinned
     assert "skin" not in gltf["nodes"][names.index("weapon")]
 
+    # Unity gets the weapon alone and rigid, in its own model space.
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    tools.export_fbx(animated_glb=result["glb"], mesh_glb=mesh, lods=[{"level": 0}], rig_type="Humanoid",
+                     out_path=tmp_path / "export" / "Stick.fbx", progress=lambda s, f: None, kind="weapon")
+    record = json.loads((tmp_path / "export" / "export_fbx.result.json").read_text())
+    assert [m["name"] for m in record["meshes"]] == ["Stick_LOD0"] and not record["meshes"][0]["skinned"]
+    assert record["clips"] == []
+
 
 @needs_blender
 def test_a_grip_given_at_gate_3_replaces_the_detected_one(tmp_path):
