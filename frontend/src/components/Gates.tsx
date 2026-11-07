@@ -34,6 +34,7 @@ import { SpritePlayer } from "../viewers/SpritePlayer";
 import { ModelViewer } from "./Viewer";
 import { CheckBadge, ChecksCard } from "./Checks";
 import { JointGuide } from "./JointGuide";
+import { HAS_FACING } from "../viewers/joints";
 import type { Vec3 } from "../viewers/ModelViewer";
 
 const isWeaponKind = (kind: string) => kind === "weapon";
@@ -561,7 +562,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
    *  bone itself points forward. Relative to the rig's result, which already has its twists. */
   const forwardTwist = (name: string): number | null => {
     const joint = rig?.joints?.[name];
-    if (!joint?.axis || !joint.front) return null;
+    if (!joint?.axis || !joint.front || !HAS_FACING.test(name)) return null;
     const [a, f] = [joint.axis, joint.front];
     const along = -a[1]; // forward (0, -1, 0) along the bone
     const want = [0 - along * a[0], -1 - along * a[1], 0 - along * a[2]];
@@ -750,7 +751,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
                 Front, Left and Flat above the model to line joints up straight on.
               </Text>
             )}
-            {editing && pickedJoint && rig?.joints?.[pickedJoint]?.axis && (
+            {editing && pickedJoint && rig?.joints?.[pickedJoint]?.axis && HAS_FACING.test(pickedJoint) && (
               <Row>
                 <Text small>Twist {pickedJoint.replace(/_/g, " ")}</Text>
                 <Button size="sm" onClick={() => twistJoint(pickedJoint, currentTwist(pickedJoint) - 5)}>

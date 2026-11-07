@@ -54,6 +54,14 @@ def test_an_item_is_fitted_on_another_hero_and_kept_per_hero(client, settings, t
     assert client.get(item["urls"]["fits"][elf["id"]]).status_code == 200
     assert item["status"] == "waiting"  # the item's own gate is untouched
 
+    # Rigging the hero again drops the fits made on its old skeleton.
+    client.post(f"/api/assets/{elf['id']}/gates/3/reject", json={"joints": {}})
+    wait_for(client, elf["id"], "waiting", gate=3)
+    item = client.get(f"/api/assets/{helm['id']}").json()
+    assert elf["id"] not in (item.get("fits") or {})
+    assert not (Path(settings.data_dir) / "assets" / helm["id"] / "fits" / elf["id"]).exists()
+    (Path(settings.data_dir) / "assets" / elf["id"] / "rig" / "rigged.blend").write_bytes(b"blend")
+
     assert client.post(f"/api/assets/{helm['id']}/fits", json={"wearer_id": helm["id"]}).status_code == 422
     assert client.post(f"/api/assets/{elf['id']}/fits", json={"wearer_id": elf["id"]}).status_code == 422
 
