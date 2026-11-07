@@ -405,11 +405,18 @@ def natural_pose(idle: dict, reference: dict, fitted_dirs: dict) -> dict:
     template's A-pose reference, with the idle rotation as their reference. A mesh made with its
     arms hanging (not in the A-pose the prompts ask for) then keeps them where they are in idle,
     instead of lowering them by the clip's A-pose-to-idle turn into its legs."""
-    chosen = {}
+    margin = {}  # how much closer to idle than to the A-pose, in radians
     for name, (rotation, direction) in idle.items():
         if name in reference and name in fitted_dirs:
-            if fitted_dirs[name].angle(direction, 0.0) < fitted_dirs[name].angle(reference[name], 0.0):
-                chosen[name] = rotation
+            margin[name] = fitted_dirs[name].angle(reference[name], 0.0) - fitted_dirs[name].angle(direction, 0.0)
+    chosen = {}
+    for name, value in margin.items():
+        # Left and right decide together: the idle clip isn't symmetric, so a limb halfway between
+        # the two poses could otherwise take idle on one side and the A-pose on the other.
+        side = name[-2:]
+        twin = name[:-2] + {"_l": "_r", "_r": "_l"}[side] if side in ("_l", "_r") else None
+        if value + (margin.get(twin, value) if twin else value) > 0:
+            chosen[name] = idle[name][0]
     return chosen
 
 
