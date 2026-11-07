@@ -140,6 +140,63 @@ to the budget.
 3. The first textured run downloads the paint weights; after that a textured mesh takes about
    4 minutes, a shape-only one about 15 seconds.
 
+### UniRig (rig, gate 3): installed, adapter not built yet
+
+[UniRig](https://github.com/VAST-AI-Research/UniRig) predicts a skeleton and skin weights for a
+mesh. Its adapter is ticket #11 (after the archetype templates, #10); until then the rig stage
+fails with "not built yet". On the RTX 5090 machine it is installed at `C:\tools\UniRig`
+(commit `6793c66`) with its own Python 3.11 environment, the paths `unirig_path` and
+`python_path` in `assetgen.toml` point at:
+
+```powershell
+git clone https://github.com/VAST-AI-Research/UniRig C:\tools\UniRig
+cd C:\tools\UniRig
+uv venv --python 3.11 .venv
+.venv\Scripts\python -m ensurepip
+.venv\Scripts\python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+# requirements.txt without flash_attn (no Windows build; see the patch below)
+Get-Content requirements.txt | Where-Object { $_ -notmatch '^flash_attn' } | Set-Content req-win.txt
+.venv\Scripts\python -m pip install -r req-win.txt
+.venv\Scripts\python -m pip install spconv-cu126==2.3.8 psutil
+.venv\Scripts\python -m pip install torch_scatter torch_cluster -f https://data.pyg.org/whl/torch-2.11.0+cu128.html --no-index --only-binary=:all:
+.venv\Scripts\python -m pip install numpy==1.26.4
+git apply C:\path\to\forge\backend\patches\unirig-windows.patch
+```
+
+`patches/unirig-windows.patch` makes UniRig run without `flash_attn` and with PyTorch 2.11:
+
+- `configs/model/unirig_ar_350m_1024_81920_float32.yaml`: `_attn_implementation: sdpa` instead
+  of `flash_attention_2` (skeleton model).
+- `configs/model/unirig_skin.yaml`: `enable_flash: False` for the point encoder (its built-in
+  non-flash attention path).
+- `src/model/unirig_skin.py`: when `flash_attn` is missing, a PyTorch stand-in for its `MHA`
+  cross attention with the same weight names (`Wq`, `Wkv`, `out_proj`), so the released
+  checkpoint loads unchanged.
+- `run.py`: `trainer.predict(..., weights_only=False)`, because the released checkpoints (from
+  the official `VAST-AI/UniRig` Hugging Face repo) store a python-box `Box`, which PyTorch 2.6+
+  will not load with its default `weights_only=True`.
+
+The `.sh` launchers are bash; on Windows run their Python steps directly from `C:\tools\UniRig`
+(the checkpoints download from Hugging Face on the first run):
+
+```powershell
+$py = ".venv\Scripts\python.exe"
+$t = Get-Date -Format "yyyy_MM_dd_HH_mm_ss"
+# 1. skeleton
+& $py -m src.data.extract --config=configs/data/quick_inference.yaml --require_suffix=obj,fbx,FBX,dae,glb,gltf,vrm --force_override=true --num_runs=1 --id=0 --time=$t --faces_target_count=50000 --input=examples/giraffe.glb --output_dir=tmp
+& $py run.py --task=configs/task/quick_inference_skeleton_articulationxl_ar_256.yaml --seed=12345 --input=examples/giraffe.glb --output=results/giraffe_skeleton.fbx --npz_dir=tmp
+# 2. skin weights for that skeleton
+& $py -m src.data.extract --config=configs/data/quick_inference.yaml --require_suffix=obj,fbx,FBX,dae,glb,gltf,vrm --force_override=true --num_runs=1 --id=0 --time=$t --faces_target_count=50000 --input=results/giraffe_skeleton.fbx --output_dir=tmp
+& $py run.py --task=configs/task/quick_inference_unirig_skin.yaml --seed=12345 --input=results/giraffe_skeleton.fbx --output=results/giraffe_skin.fbx --npz_dir=tmp --data_name=raw_data.npz
+# 3. put skeleton and weights on the original (textured) mesh
+& $py -m src.inference.merge --require_suffix=obj,fbx,FBX,dae,glb,gltf,vrm --num_runs=1 --id=0 --source=results/giraffe_skin.fbx --target=examples/giraffe.glb --output=results/giraffe_rigged.glb
+```
+
+On the 5090 the giraffe takes about 3 s for the skeleton and 6 s for the skin; the merged GLB has
+one 44-joint skin on every primitive and keeps its texture. Harmless messages: `pip check` says
+"bpy 4.2.0 is not supported on this platform" (it imports and runs), and the merge prints a Draco
+error (that optional compression library is not bundled; the GLB is written without it).
+
 ## Settings
 
 Defaults, overridden by `assetgen.toml` in the working directory (or the file in `ASSETGEN_CONFIG`),

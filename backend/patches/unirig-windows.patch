@@ -1,0 +1,74 @@
+diff --git a/configs/model/unirig_ar_350m_1024_81920_float32.yaml b/configs/model/unirig_ar_350m_1024_81920_float32.yaml
+index 7b5a83e..67a8b3e 100644
+--- a/configs/model/unirig_ar_350m_1024_81920_float32.yaml
++++ b/configs/model/unirig_ar_350m_1024_81920_float32.yaml
+@@ -6,7 +6,7 @@ llm:
+   hidden_size: 1024
+   word_embed_proj_dim: 1024
+   do_layer_norm_before: True
+-  _attn_implementation: flash_attention_2
++  _attn_implementation: sdpa  # Windows patch: flash_attn has no Windows build
+ 
+ mesh_encoder:
+   __target__: michelangelo_encoder
+diff --git a/configs/model/unirig_skin.yaml b/configs/model/unirig_skin.yaml
+index e13e1bb..0f86bd0 100644
+--- a/configs/model/unirig_skin.yaml
++++ b/configs/model/unirig_skin.yaml
+@@ -20,6 +20,7 @@ mesh_encoder:
+   shuffle_orders: True
+   drop_path: 0.0
+   upcast_attention: False
++  enable_flash: False  # Windows patch: flash_attn has no Windows build
+   upcast_softmax: False
+   enc_depths: [3, 3, 3, 6, 16]
+   enc_channels: [32, 64, 128, 256, 384]
+diff --git a/run.py b/run.py
+index ba04598..2ed1098 100644
+--- a/run.py
++++ b/run.py
+@@ -260,7 +260,9 @@ if __name__ == "__main__":
+         trainer.fit(system, datamodule=data, ckpt_path=resume_from_checkpoint)
+     elif mode == 'predict':
+         assert resume_from_checkpoint is not None, 'expect resume_from_checkpoint in task'
+-        trainer.predict(system, datamodule=data, ckpt_path=resume_from_checkpoint, return_predictions=False)
++        trainer.predict(system, datamodule=data, ckpt_path=resume_from_checkpoint, return_predictions=False,
++                        weights_only=False)  # Windows patch: the released checkpoints store a python-box Box, which
++                                             # PyTorch >= 2.6's default weights_only=True cannot load
+     elif mode == 'validate':
+         trainer.validate(system, datamodule=data, ckpt_path=resume_from_checkpoint)
+     else:
+diff --git a/src/model/unirig_skin.py b/src/model/unirig_skin.py
+index bade115..592d9c7 100644
+--- a/src/model/unirig_skin.py
++++ b/src/model/unirig_skin.py
+@@ -7,7 +7,28 @@ from typing import Dict, List
+ from transformers import AutoModelForCausalLM, AutoConfig
+ import math
+ import torch_scatter
+-from flash_attn.modules.mha import MHA
++try:
++    from flash_attn.modules.mha import MHA
++except ImportError:  # Windows patch: flash_attn has no Windows build
++    class MHA(nn.Module):
++        """Stand-in for flash_attn.modules.mha.MHA(cross_attn=True): same parameter names
++        (Wq, Wkv, out_proj), so the released checkpoint loads; attention runs in PyTorch SDPA."""
++
++        def __init__(self, embed_dim: int, num_heads: int, cross_attn: bool = True, **kwargs):
++            super().__init__()
++            assert cross_attn, "only the cross-attention form is used by UniRig"
++            self.num_heads = num_heads
++            self.head_dim = embed_dim // num_heads
++            self.Wq = nn.Linear(embed_dim, embed_dim)
++            self.Wkv = nn.Linear(embed_dim, 2 * embed_dim)
++            self.out_proj = nn.Linear(embed_dim, embed_dim)
++
++        def forward(self, x, x_kv=None, **kwargs):
++            x_kv = x if x_kv is None else x_kv
++            q = self.Wq(x).unflatten(-1, (self.num_heads, self.head_dim)).transpose(-3, -2)
++            k, v = self.Wkv(x_kv).unflatten(-1, (2, self.num_heads, self.head_dim)).unbind(dim=-3)
++            out = F.scaled_dot_product_attention(q, k.transpose(-3, -2), v.transpose(-3, -2))
++            return self.out_proj(out.transpose(-3, -2).flatten(-2))
+ 
+ from .spec import ModelSpec, ModelInput
+ from .parse_encoder import MAP_MESH_ENCODER, get_mesh_encoder
