@@ -1,0 +1,51 @@
+{
+  "idle": {
+    "source": "procedural",
+    "stand_in": false,
+    "loop": true,
+    "duration": 2.0,
+    "frames": 61
+  },
+  "walk": {
+    "source": "procedural",
+    "stand_in": false,
+    "loop": true,
+    "duration": 1.0,
+    "frames": 31
+  },
+  "run": {
+    "source": "procedural",
+    "stand_in": false,
+    "loop": true,
+    "duration": 0.6,
+    "frames": 19
+  },
+  "attack_1": {
+    "source": "procedural",
+    "stand_in": false,
+    "loop": false,
+    "duration": 0.8,
+    "frames": 25
+  },
+  "attack_2": {
+    "source": "procedural",
+    "stand_in": false,
+    "loop": false,
+    "duration": 0.6667,
+    "frames": 21
+  },
+  "hit": {
+    "source": "procedural",
+    "stand_in": false,
+    "loop": false,
+    "duration": 0.5,
+    "frames": 16
+  },
+  "death": {
+    "source": "procedural",
+    "stand_in": false,
+    "loop": false,
+    "duration": 1.2,
+    "frames": 37
+  }
+}

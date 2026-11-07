@@ -1,0 +1,138 @@
+{
+  "idle": {
+    "source": "Idle_Loop",
+    "stand_in": false,
+    "loop": true,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 2.5,
+    "frames": 76
+  },
+  "walk": {
+    "source": "Walk_Loop",
+    "stand_in": false,
+    "loop": true,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.3333,
+    "frames": 41
+  },
+  "run": {
+    "source": "Jog_Fwd_Loop",
+    "stand_in": false,
+    "loop": true,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 0.9333,
+    "frames": 29
+  },
+  "attack_1": {
+    "source": "Sword_Attack",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.5333,
+    "frames": 47
+  },
+  "attack_2": {
+    "source": "Punch_Cross",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.0,
+    "frames": 31
+  },
+  "hit": {
+    "source": "Hit_Chest",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 0.3333,
+    "frames": 11
+  },
+  "death": {
+    "source": "Death01",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 2.4,
+    "frames": 73
+  },
+  "cast": {
+    "source": "Spell_Simple_Shoot",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 0.5,
+    "frames": 16
+  },
+  "skill": {
+    "source": "Roll",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.4667,
+    "frames": 45
+  },
+  "attack_slash": {
+    "source": "Sword_Attack",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.5333,
+    "frames": 47
+  },
+  "attack_stab": {
+    "source": "Punch_Jab",
+    "stand_in": true,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 0.8667,
+    "frames": 27
+  },
+  "attack_cleave": {
+    "source": "Sword_Attack",
+    "stand_in": true,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.5333,
+    "frames": 47
+  },
+  "attack_overhead": {
+    "source": "Sword_Attack",
+    "stand_in": true,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.5333,
+    "frames": 47
+  },
+  "attack_shoot": {
+    "source": "Pistol_Shoot",
+    "stand_in": true,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 0.6333,
+    "frames": 20
+  },
+  "attack_quick_shot": {
+    "source": "Pistol_Shoot",
+    "stand_in": true,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 0.6333,
+    "frames": 20
+  },
+  "attack_cast": {
+    "source": "Spell_Simple_Shoot",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 0.5,
+    "frames": 16
+  },
+  "attack_strike": {
+    "source": "Punch_Cross",
+    "stand_in": false,
+    "loop": false,
+    "in_place_drift_removed_m": 0.0,
+    "duration": 1.0,
+    "frames": 31
+  }
+}

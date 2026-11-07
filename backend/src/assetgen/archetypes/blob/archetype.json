@@ -3,15 +3,14 @@
   "name": "Blob",
   "description": "Soft body with a squash-and-stretch rig and procedural clips.",
   "rig_type": "Generic",
-  "skeleton_source": "Squash rig (procedural)",
-  "clip_source": "Procedural",
+  "skeleton_source": "Ultimate Monsters (Blob: GreenBlob), Quaternius (CC0)",
+  "clip_source": "Ultimate Monsters (Blob: GreenBlob), Quaternius (CC0)",
   "rest_pose": "round resting shape, sitting on the ground, front view",
   "joints": [
-    "root",
-    "squash",
-    "top",
-    "eye_l",
-    "eye_r"
+    "Body",
+    "Head",
+    "Head2",
+    "Head3"
   ],
   "sockets": {},
   "clips": [
