@@ -479,7 +479,10 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fit
     src_ref = {n: src_dirs[n].rotation_difference(reference[n]) @ src_rots[n] for n in driven}
     for n, rotation in (natural or {}).items():  # bones whose mesh stands as in idle, not the A-pose
         if n in src_ref:
-            src_ref[n] = rotation
+            # Only the idle frame's direction: its twist about the bone (toes turned out) is not
+            # in the fitted bone, and keeping it would turn the knee's hinge sideways.
+            idle_dir = rotation @ Vector((0.0, 1.0, 0.0))
+            src_ref[n] = reference[n].rotation_difference(idle_dir) @ src_ref[n]
     src_parent = {n: (source.data.bones[n].parent.name if source.data.bones[n].parent else None) for n in driven}
     baked = bpy.data.actions.new(clip["name"])
     baked.use_fake_user = True  # kept for the export, which writes every saved action
