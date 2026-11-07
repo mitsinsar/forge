@@ -285,7 +285,7 @@ class FakeBlender(FakeBase):
         return {"glb": glb, "clips": clip_info}
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
-                       look, palette_size, out_dir, progress):
+                       look, palette_size, out_dir, progress, framing=None):
         info = read_glb_json(animated_glb)["extras"]
         parts, color = _parts_from(info["parts"]), to_rgb255(tuple(info["color"]))
         hints = info.get("hints", {})

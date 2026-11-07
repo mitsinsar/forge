@@ -107,12 +107,12 @@ class BlenderTools:
         return {"glb": out_path, "clips": result["clips"], "skinning": result["skinning"]}
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
-                       look, palette_size, out_dir, progress):
+                       look, palette_size, out_dir, progress, framing=None):
         out_dir = Path(out_dir)
         record = out_dir / "sprites.json"
         settings = {"animated_glb": str(Path(animated_glb).resolve()), "clips": clips, "directions": directions,
                     "camera_preset": camera_preset, "frame_size": int(frame_size), "supersample": int(supersample),
-                    "fps": int(fps), "look": look, "palette_size": int(palette_size)}
+                    "fps": int(fps), "look": look, "palette_size": int(palette_size), "framing": framing}
         done = _read_record(record, settings)
         if done is not None:  # already rendered with these settings (resume after a restart)
             progress("Sprites rendered", 1.0)
@@ -125,7 +125,7 @@ class BlenderTools:
             "clips": [{"name": c["name"], "duration": float(c["duration"])} for c in clips],
             "directions": [{"name": d, "yaw": DIRECTION_YAW[d]} for d in directions],
             "tilt": CAMERA_TILT[camera_preset], "size": int(frame_size) * int(supersample),
-            "frame_size": int(frame_size), "fps": int(fps), "outline": 1.0},
+            "frame_size": int(frame_size), "fps": int(fps), "outline": 1.0, "framing": framing},
             out_dir, lambda step, fraction: progress(step, 0.9 * fraction))
         progress("Downscaling the frames", 0.92)
         raw = {d: {c: [Path(p) for p in paths] for c, paths in by_clip.items()}

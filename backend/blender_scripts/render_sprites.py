@@ -6,7 +6,8 @@ Arguments (args.json)::
     {"animated_glb": "animated.glb", "out_dir": "raw",
      "clips": [{"name": "walk", "duration": 1.0, "loop": true}],
      "directions": [{"name": "right", "yaw": 90}], "tilt": 0,
-     "size": 512, "frame_size": 256, "fps": 12, "outline": 1.0}
+     "size": 512, "frame_size": 256, "fps": 12, "outline": 1.0,
+     "framing": {"span": 4.8, "height": 0.9} | null}
 
 ``size`` is the rendered frame's side (``frame_size``, the final one, times the
 supersample); ``outline`` is the outline's width in final pixels (0 for none).
@@ -18,6 +19,9 @@ One orthographic framing is used for every frame, clip and direction: the
 camera looks at the origin (the feet), keeps it centred left to right at the
 same height, and its scale holds the animation's full bounds over all clips
 and directions. So the character keeps one size and ground line everywhere.
+A given ``framing`` (ortho scale, and the height above the feet the camera
+looks at) replaces it, so assets that are layered (a body, its gear and its
+weapon) share one.
 
 Frames are sampled at ``fps`` per clip (``round(duration * fps)`` of them)
 and written to ``out_dir/<direction>/<clip>/<n>.png``.
@@ -292,7 +296,11 @@ def main(args: dict) -> dict:
     fps, size, tilt = int(args["fps"]), int(args["size"]), float(args["tilt"])
 
     progress(0.03, "Framing the animation")
-    span, centre = framing(scene, meshes, clips, tracks, fps, directions, tilt)
+    if args.get("framing"):
+        span = float(args["framing"]["span"])
+        centre = float(args["framing"]["height"]) * math.cos(math.radians(tilt))
+    else:
+        span, centre = framing(scene, meshes, clips, tracks, fps, directions, tilt)
 
     camera = bpy.data.objects.new("Camera", bpy.data.cameras.new("Camera"))
     scene.collection.objects.link(camera)
