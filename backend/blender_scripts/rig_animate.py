@@ -14,15 +14,20 @@ Steps:
    the mesh (along Z for upright archetypes, else the template's longest axis), standing on
    the same ground and centred over it.
 2. Skin LOD0 to it: UniRig's weights (from its merged GLB, its bones renamed to the matched
-   template joints, copied vertex by vertex from the nearest UniRig vertex) when given; else
-   Blender's automatic weights; vertices either leaves unweighted go to their nearest bone.
+   template joints, copied vertex by vertex from the nearest UniRig vertex; weight on bones more
+   than two steps in the tree from the vertex's nearest bone is dropped, since UniRig bleeds
+   weight between limbs that touch) when given; else Blender's automatic weights; vertices
+   either leaves unweighted go to their nearest bone.
 3. For every clip: import the clip's armature at the same scale and place, copy each bone's
-   world transform onto the template bone (Copy Transforms, world space), bake that into a new
-   action named after the clip. Copying world transforms makes clips made on a different rest
-   pose (the biped's clips have a T-pose rest, its template an A-pose) play correctly.
+   world rotation onto the template bone (Copy Rotation, world space), bake that into a new
+   action named after the clip, then move the hips by the clip's travel from its rest. World
+   rotations make clips made on a different rest pose (the biped's clips have a T-pose rest,
+   its template an A-pose) play correctly; copying only rotations keeps the asset's own bone
+   lengths and stance, so nothing stretches.
 4. Export one GLB with the skinned mesh, the armature and one animation per clip.
 
-Result: ``{"clips": [{"name", "duration", "loop"}], "scale", "skinning", "unweighted_before_fix"}``.
+Result: ``{"clips": [{"name", "duration", "loop"}], "scale", "skinning", "unweighted_before_fix",
+"cross_limb_weights_dropped", "joints_placed"}``.
 """
 
 from __future__ import annotations
@@ -184,7 +189,7 @@ def unweighted(mesh) -> int:
     return sum(1 for v in mesh.data.vertices if not any(g.weight > 1e-4 for g in v.groups))
 
 
-def unirig_weights(mesh, unirig_glb: str, mapping: dict) -> None:
+def unirig_weights(mesh, arm, unirig_glb: str, mapping: dict) -> int:
     """Copies UniRig's weights onto ``mesh``, each UniRig bone renamed to its matched template joint
     (several UniRig bones on one joint add up), from the nearest vertex of UniRig's copy of the mesh."""
     objects = import_gltf(unirig_glb)
@@ -208,22 +213,64 @@ def unirig_weights(mesh, unirig_glb: str, mapping: dict) -> None:
     for i, p in enumerate(points):
         tree.insert(p, i)
     tree.balance()
+    near = bone_neighbourhoods(arm)
+    used = set(mapping.values())
+    segments = [(b.name, b.head_local.copy(), b.tail_local.copy()) for b in arm.data.bones if b.name in used]
     groups: dict[str, object] = {}
+    dropped = 0
     for vertex in mesh.data.vertices:
         _, index, _ = tree.find(vertex.co)
-        row = weights[index]
+        anchor = nearest_bone(vertex.co, segments)
+        full = weights[index]
+        # UniRig bleeds weight across limbs that touch (hands hanging by the thighs): keep only
+        # bones close to the vertex's nearest bone in the skeleton tree.
+        row = {j: w for j, w in full.items() if j in near[anchor]}
+        if len(row) < len(full):
+            dropped += 1
+        if not row:
+            row = {anchor: 1.0}
         total = sum(row.values())
         for joint, w in row.items():
             group = groups.get(joint) or mesh.vertex_groups.get(joint) or mesh.vertex_groups.new(name=joint)
             groups[joint] = group
             group.add([vertex.index], w / total, "REPLACE")
+    return dropped
 
 
-def skin(mesh, arm, unirig_glb: str | None, mapping: dict | None) -> tuple[str, int]:
+def bone_neighbourhoods(arm, hops: int = 2) -> dict[str, set[str]]:
+    """For each bone, the bones at most ``hops`` steps away in the tree (itself included)."""
+    links: dict[str, set[str]] = {b.name: set() for b in arm.data.bones}
+    for bone in arm.data.bones:
+        if bone.parent:
+            links[bone.name].add(bone.parent.name)
+            links[bone.parent.name].add(bone.name)
+    result = {}
+    for name in links:
+        seen, frontier = {name}, {name}
+        for _ in range(hops):
+            frontier = {n for f in frontier for n in links[f]} - seen
+            seen |= frontier
+        result[name] = seen
+    return result
+
+
+def nearest_bone(point, segments) -> str:
+    best, best_d = segments[0][0], float("inf")
+    for name, head, tail in segments:
+        seg = tail - head
+        t = 0.0 if seg.length_squared == 0 else max(0.0, min(1.0, (point - head).dot(seg) / seg.length_squared))
+        d = (point - (head + seg * t)).length
+        if d < best_d:
+            best, best_d = name, d
+    return best
+
+
+def skin(mesh, arm, unirig_glb: str | None, mapping: dict | None) -> tuple[str, int, int]:
     method = "unirig"
+    dropped = 0
     if unirig_glb and mapping:
         try:
-            unirig_weights(mesh, unirig_glb, mapping)
+            dropped = unirig_weights(mesh, arm, unirig_glb, mapping)
         except Exception as exc:  # noqa: BLE001 - fall back to Blender's own weights
             print(f"UniRig weights not used: {exc}", flush=True)
             method = "automatic"
@@ -238,10 +285,18 @@ def skin(mesh, arm, unirig_glb: str | None, mapping: dict | None) -> tuple[str, 
     missing = unweighted(mesh)
     if missing:
         nearest_bone_weights(mesh, arm, only_unweighted=True)
-    return method, missing
+    return method, missing, dropped
 
 
-def retarget(arm, clip: dict, scale: float, offset: Vector) -> dict:
+def rest_rotations(arm) -> dict:
+    """Each bone's rest orientation in world space."""
+    return {b.name: (arm.matrix_world @ b.matrix_local).to_3x3().normalized().to_quaternion() for b in arm.data.bones}
+
+
+def retarget(arm, clip: dict, scale: float, offset: Vector, corrections: dict) -> dict:
+    """Bakes ``clip`` onto ``arm``. Each bone turns as the clip's bone turns away from the
+    template's own reference pose (``corrections[bone]`` = reference rest⁻¹ · fitted rest), so
+    the asset keeps its bone lengths and stance; the hips also move by the clip's travel."""
     objects = import_gltf(clip["file"])
     imported = [o.name for o in objects]  # names: removed objects can't be asked for theirs
     source = next(o for o in objects if o.type == "ARMATURE")
@@ -256,27 +311,43 @@ def retarget(arm, clip: dict, scale: float, offset: Vector) -> dict:
     start, end = (int(round(v)) for v in action.frame_range)
     bpy.context.view_layer.update()
 
-    for bone in arm.pose.bones:
-        for constraint in list(bone.constraints):
-            bone.constraints.remove(constraint)
-        if bone.name in source.pose.bones:
-            constraint = bone.constraints.new("COPY_TRANSFORMS")
-            constraint.target, constraint.subtarget = source, bone.name
-            constraint.owner_space = constraint.target_space = "WORLD"
-
-    select_only([arm])
-    bpy.ops.object.mode_set(mode="POSE")
-    bpy.ops.pose.select_all(action="SELECT")
-    bpy.ops.nla.bake(frame_start=start, frame_end=end, step=1, only_selected=False, visual_keying=True,
-                     clear_constraints=False, clear_parents=False, use_current_action=False, bake_types={"POSE"})
-    bpy.ops.object.mode_set(mode="OBJECT")
-    baked = arm.animation_data.action
+    bones = sorted(arm.data.bones, key=lambda b: len(b.parent_recursive))
+    rest = {b.name: arm.matrix_world @ b.matrix_local for b in bones}
+    driven = {b.name for b in bones if b.name in source.pose.bones}
+    movers = {b.name for b in bones if len(b.parent_recursive) <= 1 and b.name in driven}
+    src_rest = {n: source.matrix_world @ source.data.bones[n].head_local for n in movers}
+    baked = bpy.data.actions.new(clip["name"])
     baked.use_fake_user = True  # kept for the export, which writes every saved action
+    arm.animation_data_create()
+    arm.animation_data.action = baked
+    for pose_bone in arm.pose.bones:
+        pose_bone.rotation_mode = "QUATERNION"
+    to_arm = arm.matrix_world.inverted()
+    for frame in range(start, end + 1):
+        bpy.context.scene.frame_set(frame)
+        posed: dict[str, Matrix] = {}
+        for bone in bones:
+            name = bone.name
+            parent = bone.parent.name if bone.parent else None
+            base = posed[parent] @ rest[parent].inverted() @ rest[name] if parent else rest[name].copy()
+            location = base.translation.copy()
+            if name in movers:
+                ratio = rest[name].translation.z / src_rest[name].z if abs(src_rest[name].z) > 1e-3 else 1.0
+                travel = source.matrix_world @ source.pose.bones[name].head - src_rest[name]
+                location = rest[name].translation + travel * ratio
+            if name in driven:
+                turned = (source.matrix_world @ source.pose.bones[name].matrix).to_3x3().normalized().to_quaternion()
+                wanted = Matrix.LocRotScale(location, turned @ corrections[name], None)
+            else:
+                wanted = base.copy()
+                wanted.translation = location
+            posed[name] = wanted
+            pose_bone = arm.pose.bones[name]
+            pose_bone.matrix_basis = (to_arm @ base).inverted() @ (to_arm @ wanted)
+            pose_bone.keyframe_insert("rotation_quaternion", frame=frame)
+            pose_bone.keyframe_insert("location", frame=frame)
     arm.animation_data.action = None
 
-    for bone in arm.pose.bones:
-        for constraint in list(bone.constraints):
-            bone.constraints.remove(constraint)
     for name in imported:
         obj = bpy.data.objects.get(name)
         if obj is not None:
@@ -301,15 +372,18 @@ def main(args: dict) -> dict:
     arm = append_template(args["template_blend"], args["template_object"])
     template = json.loads(Path(args["template_json"]).read_text(encoding="utf-8"))
     scale, offset = fit_template(arm, mesh, template, args.get("fit_axis", "longest"))
+    reference = rest_rotations(arm)  # the pose the clips' rotations are measured from
     placed = pose_to_targets(arm, args.get("targets") or {})
+    fitted = rest_rotations(arm) if placed else reference
+    corrections = {n: reference[n].inverted() @ fitted[n] for n in fitted}
 
     progress(0.1, "Skinning the mesh")
-    method, missing = skin(mesh, arm, args.get("unirig_glb"), args.get("mapping"))
+    method, missing, dropped = skin(mesh, arm, args.get("unirig_glb"), args.get("mapping"))
 
     clips = []
     for index, clip in enumerate(args["clips"]):
         progress(0.2 + 0.7 * index / max(len(args["clips"]), 1), f"Retargeting {clip['name']}")
-        clips.append(retarget(arm, clip, scale, offset))
+        clips.append(retarget(arm, clip, scale, offset, corrections))
 
     progress(0.92, "Writing the animated GLB")
     out = Path(args["out_glb"])
@@ -320,7 +394,7 @@ def main(args: dict) -> dict:
                               export_force_sampling=True, export_skins=True, export_def_bones=False,
                               export_materials="EXPORT")
     progress(1.0, "Animated result ready")
-    return {"clips": clips, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing,
+    return {"clips": clips, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped,
             "joints_placed": placed}
 
 
