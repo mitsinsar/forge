@@ -247,10 +247,35 @@ class Pipeline:
         return self.enqueue(asset_id, stage)
 
     def retry(self, asset_id: str) -> dict:
+        """Runs a failed or stopped stage again; it resumes from the files it already made."""
         asset = self._require(asset_id)
-        if asset["status"] != "failed":
-            raise Conflict(f"only failed assets can be retried (asset is {asset['status']})")
+        if asset["status"] not in ("failed", "stopped"):
+            raise Conflict(f"only failed or stopped assets can be retried (asset is {asset['status']})")
         return self.enqueue(asset_id, asset["stage"])  # keeps finished files: the stage resumes
+
+    def stop_asset(self, asset_id: str) -> dict:
+        """Takes a queued stage off the queue (``stopped``; retry resumes it). A running stage can't be
+        cut off safely (a tool may be mid-job): it finishes and waits at its gate. Autopilot goes off
+        either way, so nothing continues by itself."""
+        asset = self._require(asset_id)
+        if asset["status"] == "queued":
+            return self.update(asset_id, status="stopped", autopilot=False, step="Stopped by you", progress=0.0)
+        if asset["status"] == "running":
+            return self.update(asset_id, autopilot=False)
+        raise Conflict(f"only queued or running assets can be stopped (asset is {asset['status']})")
+
+    def stop_all(self) -> dict:
+        """Stops every queued asset and side job; running ones finish their step (autopilot off)."""
+        stopped = running = jobs = 0
+        for asset in self.db.list("assets"):
+            if asset["status"] in ("queued", "running"):
+                self.stop_asset(asset["id"])
+                stopped += asset["status"] == "queued"
+                running += asset["status"] == "running"
+        for job in self.db.list("jobs", status="queued"):
+            self._job_update(job["id"], status="stopped", step="Stopped by you")
+            jobs += 1
+        return {"stopped": stopped, "finishing": running, "jobs_stopped": jobs}
 
     def reexport(self, asset_id: str) -> dict:
         asset = self._require(asset_id)
@@ -609,7 +634,10 @@ class Pipeline:
                     "candidates": [self._rel(asset["id"], candidate)],
                     "pose_check": self._pose_check(asset, [candidate]),
                     "candidate_checks": self._candidate_checks(asset, [candidate])}
-        prompt = ", ".join(p for p in (expansion["prompt"], settings.get("prompt_suffix")) if p)
+        suffix = settings.get("prompt_suffix") or ""
+        if asset["kind"] in ("gear", "weapon"):  # an item alone: "full body" draws a person to wear it
+            suffix = ", ".join(p.strip() for p in suffix.split(",") if p.strip().lower() not in ("full body", "full-body"))
+        prompt = ", ".join(p for p in (expansion["prompt"], suffix) if p)
         negative = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
         loras = self._profile_loras(settings)
         references = [self.settings.uploads_dir / "references" / r["file"] for r in settings["reference_images"]]

@@ -7,7 +7,7 @@ export type CameraPreset = "side" | "three_quarter" | "topdown_4" | "topdown_8";
 export type Slot = "head" | "chest" | "legs" | "hands" | "feet" | "cape";
 export type WeaponClass = "one_handed" | "two_handed" | "bow" | "staff" | "shield";
 export type Socket = "weapon_r" | "weapon_l";
-export type AssetStatus = "queued" | "running" | "waiting" | "done" | "failed";
+export type AssetStatus = "queued" | "running" | "waiting" | "done" | "failed" | "stopped";
 export type Stage = "prompt" | "mesh" | "rig" | "export";
 export type Gate = 1 | 2 | 3;
 
@@ -579,6 +579,8 @@ export const api = {
   reject: (id: string, gate: Gate, input: RejectInput) =>
     request<Asset>("POST", `/assets/${id}/gates/${gate}/reject`, input),
   retry: (id: string) => request<Asset>("POST", `/assets/${id}/retry`),
+  stop: (id: string) => request<Asset>("POST", `/assets/${id}/stop`),
+  stopQueue: () => request<{ stopped: number; finishing: number; jobs_stopped: number }>("POST", "/queue/stop"),
   reexport: (id: string) => request<Asset>("POST", `/assets/${id}/export`),
   setTrainingCandidate: (id: string, value: boolean) =>
     request<Asset>("PUT", `/assets/${id}/training-candidate`, { value }),

@@ -41,6 +41,7 @@ export const STATUS_LABEL: Record<AssetStatus, string> = {
   waiting: "Waiting",
   done: "Done",
   failed: "Failed",
+  stopped: "Stopped",
 };
 
 export const STAGE_LABEL: Record<Stage, string> = {

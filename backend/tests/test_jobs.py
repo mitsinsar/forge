@@ -150,3 +150,19 @@ def test_a_placement_is_kept_per_hero_and_reaches_the_fit(client, settings, tmp_
     reset = client.post(f"/api/assets/{helm['id']}/fits", json={"wearer_id": "dummy", "reset_placement": True}).json()
     assert wait_job(client, reset["id"])["status"] == "done"
     assert "dummy" not in (client.get(f"/api/assets/{helm['id']}").json().get("placements") or {})
+
+
+def test_a_queued_stage_can_be_stopped_and_resumed(client, settings, tmp_path):
+    project = make_project(client, "unity", tmp_path / "g")
+    hero = _to_gate3(client, _asset(client, project, archetype="biped")["id"])
+    pipeline = client.app.state.pipeline
+    pipeline.db.update("assets", hero["id"], {"status": "queued", "stage": "rig", "gate": None, "autopilot": True})
+    pipeline.db.insert("jobs", {"kind": "fit", "target_id": hero["id"], "params": {"wearer_id": "x"}, "status": "queued",
+                                "step": "Waiting", "progress": 0.0, "error": None, "result": None, "queued_at": "2000"})
+    report = client.post("/api/queue/stop").json()
+    assert report["stopped"] == 1 and report["jobs_stopped"] == 1
+    stopped = client.get(f"/api/assets/{hero['id']}").json()
+    assert stopped["status"] == "stopped" and not stopped["autopilot"]
+    assert client.post(f"/api/assets/{hero['id']}/stop").status_code == 409  # nothing left to stop
+    assert client.post(f"/api/assets/{hero['id']}/retry").status_code == 200  # Resume
+    assert wait_for(client, hero["id"], "waiting", gate=3)["stage"] == "rig"

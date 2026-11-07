@@ -1,6 +1,6 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { assetFileUrl, localUrl, type Asset, type AssetFilters, type AssetStatus, type Kind } from "../api/client";
-import { useAssets, useMeta, useProjects } from "../api/queries";
+import { api, assetFileUrl, localUrl, type Asset, type AssetFilters, type AssetStatus, type Kind } from "../api/client";
+import { keys, useApiMutation, useAssets, useMeta, useProjects } from "../api/queries";
 import { AssetStatus as AssetStatusView } from "../components/AssetStatus";
 import { CHECK_TONE, worstCheck } from "../components/Checks";
 import { KIND_LABEL, STATUS_LABEL, label, timeAgo } from "../labels";
@@ -25,7 +25,7 @@ import {
   Text,
 } from "../ui/kit";
 
-const STATUSES: AssetStatus[] = ["queued", "running", "waiting", "done", "failed"];
+const STATUSES: AssetStatus[] = ["queued", "running", "waiting", "done", "failed", "stopped"];
 
 /** The gallery picture: the picked preview (or the first candidate); Godot assets play their walk sprites
  *  on hover. */
@@ -77,6 +77,9 @@ export function AssetsPage() {
     setParams(next, { replace: true });
   };
   const filtered = !!(filters.project_id || filters.kind || filters.status || filters.batch_id);
+  const allAssets = useAssets({});
+  const queued = (allAssets.data ?? []).filter((a) => a.status === "queued").length;
+  const stopAll = useApiMutation(() => api.stopQueue(), [keys.assets]);
 
   return (
     <Stack gap={4}>
@@ -84,9 +87,17 @@ export function AssetsPage() {
         title="Assets"
         subtitle="Everything generated so far. Status updates live."
         actions={
-          <LinkButton to="/new" variant="primary">
-            New asset
-          </LinkButton>
+          <Row gap={2}>
+            {queued > 0 && (
+              <Button variant="danger" busy={stopAll.isPending} onClick={() => stopAll.mutate(undefined)}
+                      title="Take every queued stage off the queue (each asset can be resumed); running ones finish their step">
+                Stop all queued ({queued})
+              </Button>
+            )}
+            <LinkButton to="/new" variant="primary">
+              New asset
+            </LinkButton>
+          </Row>
         }
       />
       <Row gap={3}>

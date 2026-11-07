@@ -937,6 +937,25 @@ export function FailedView({ asset }: { asset: Asset }) {
   );
 }
 
+// ---- stopped --------------------------------------------------------------------
+
+export function StoppedView({ asset }: { asset: Asset }) {
+  const resume = useApiMutation(() => api.retry(asset.id), [keys.assets, keys.asset(asset.id)]);
+  return (
+    <Card title="Stopped" subtitle={`The ${asset.stage} stage was taken off the queue.`}>
+      <Stack gap={4}>
+        <Text muted small>Resume puts it back in the queue; it picks up from the files it already made.</Text>
+        <ErrorNotice error={resume.error} />
+        <Row justify="end">
+          <Button variant="primary" busy={resume.isPending} onClick={() => resume.mutate(undefined)}>
+            Resume
+          </Button>
+        </Row>
+      </Stack>
+    </Card>
+  );
+}
+
 // ---- details --------------------------------------------------------------------
 
 export function AssetDetails({ asset, projectName, profileName }: { asset: Asset; projectName?: string; profileName?: string }) {

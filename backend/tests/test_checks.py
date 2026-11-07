@@ -192,3 +192,15 @@ def test_install_md_is_generated_from_the_setup_guide():
     install = Path(__file__).resolve().parents[2] / "INSTALL.md"
     assert install.read_text(encoding="utf-8") == install_markdown(), (
         "INSTALL.md is out of date: cd backend; uv run python -m assetgen.setup_guide > ../INSTALL.md")
+
+
+def test_an_item_with_a_person_in_the_picture_fails(tmp_path):
+    from test_pose import figure
+    picture = figure(tmp_path / "helm.png", arms_out=True)
+    worn = qc.candidate_checks(picture, kind="gear", posed_biped=False,
+                               vision={"figures": 1, "whole_body": True, "person": True})
+    alone = qc.candidate_checks(picture, kind="gear", posed_biped=False,
+                                vision={"figures": 1, "whole_body": True, "person": False})
+    assert next(c for c in worn if c["id"] == "alone")["status"] == qc.FAIL
+    assert next(c for c in alone if c["id"] == "alone")["status"] == qc.PASS
+    assert not any(c["id"] == "alone" for c in qc.candidate_checks(picture, kind="hero", posed_biped=False, vision=None))

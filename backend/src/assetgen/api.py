@@ -397,7 +397,7 @@ def asset_view(request: Request, asset: dict) -> dict:
 @router.get("/assets", tags=["assets"], summary="List assets with filters")
 def list_assets(request: Request, project_id: str | None = None,
                 kind: Kind | None = None,
-                status: Literal["queued", "running", "waiting", "done", "failed"] | None = None,
+                status: Literal["queued", "running", "waiting", "done", "failed", "stopped"] | None = None,
                 archetype: str | None = None, training_candidate: bool | None = None,
                 q: str | None = Query(None, description="Text in the name or description"),
                 batch_id: str | None = Query(None, description="Only the assets of this batch"),
@@ -566,7 +566,19 @@ def reject_gate(request: Request, asset_id: str, gate: int, body: Reject | None 
     return asset_view(request, asset)
 
 
-@router.post("/assets/{asset_id}/retry", tags=["assets"], summary="Retry a failed stage (resumes its files)")
+@router.post("/assets/{asset_id}/stop", tags=["assets"],
+             summary="Stop an asset: a queued stage leaves the queue (retry resumes it); a running one finishes its step")
+def stop_asset(request: Request, asset_id: str):
+    return asset_view(request, _run(lambda: pipeline_of(request).stop_asset(asset_id)))
+
+
+@router.post("/queue/stop", tags=["assets"],
+             summary="Stop everything queued (assets and side jobs); running stages finish their step")
+def stop_queue(request: Request):
+    return pipeline_of(request).stop_all()
+
+
+@router.post("/assets/{asset_id}/retry", tags=["assets"], summary="Retry a failed or stopped stage (resumes its files)")
 def retry_asset(request: Request, asset_id: str):
     return asset_view(request, _run(lambda: pipeline_of(request).retry(asset_id)))
 
