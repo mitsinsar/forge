@@ -166,3 +166,19 @@ def test_delete_while_running_cleans_up(client, settings, tmp_path):
         assert not (settings.assets_dir / asset["id"]).exists()
     finally:
         pipeline.adapters.llm.expand = original
+
+
+def test_biped_characters_get_the_pose_guide_and_arms_check(client, settings, tmp_path):
+    project = make_project(client, "unity", tmp_path / "g")
+    hero = wait_for(client, _new(client, project, archetype="biped")["id"], "waiting", gate=1)
+    prompt = hero["outputs"]["prompt"]
+    assert [c["candidate"] for c in prompt["pose_check"]] == list(range(1, len(prompt["candidates"]) + 1))
+    assert all(set(c) == {"candidate", "arms_clear", "clear_share"} for c in prompt["pose_check"])
+    assert "hands touching the legs" in prompt["negative_prompt"]
+    hints = client.app.state.pipeline.adapters.image.last_hints
+    assert Path(hints["pose_guide"]).name == "pose_guide.png" and Path(hints["pose_guide"]).is_file()
+
+    gear = wait_for(client, _new(client, project, kind="gear", slot="head", description="a horned helm")["id"],
+                    "waiting", gate=1)
+    assert gear["outputs"]["prompt"]["pose_check"] is None
+    assert "pose_guide" not in client.app.state.pipeline.adapters.image.last_hints

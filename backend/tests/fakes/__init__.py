@@ -104,6 +104,7 @@ class FakeImage(FakeBase):
     def render_candidates(self, *, prompt, negative_prompt, base_model, loras, reference_images, count, seed,
                           out_dir, progress: Progress, hints, log=None):
         self.loaded = True
+        self.last_hints = dict(hints)
         out_dir.mkdir(parents=True, exist_ok=True)
         paths = []
         for index in range(count):

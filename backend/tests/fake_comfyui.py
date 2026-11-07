@@ -27,10 +27,11 @@ from PIL import Image
 CORE_NODES = {"CheckpointLoaderSimple", "UNETLoader", "CLIPLoader", "DualCLIPLoader", "VAELoader",
               "CLIPTextEncode", "EmptyLatentImage", "EmptySD3LatentImage", "KSampler", "VAEDecode", "SaveImage",
               "FluxGuidance", "ModelSamplingAuraFlow", "LoraLoader", "LoraLoaderModelOnly", "LoadImage",
-              "ImageBatch", "CLIPVisionLoader", "CLIPVisionEncode", "StyleModelLoader", "StyleModelApply"}
+              "ImageBatch", "CLIPVisionLoader", "CLIPVisionEncode", "StyleModelLoader", "StyleModelApply",
+              "ControlNetLoader", "ControlNetApplyAdvanced"}
 IPADAPTER_NODES = {"IPAdapterUnifiedLoader", "IPAdapterAdvanced"}
 MODEL_INPUTS = {"ckpt_name", "unet_name", "clip_name", "clip_name1", "clip_name2", "vae_name", "lora_name",
-                "style_model_name"}
+                "style_model_name", "control_net_name"}
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
@@ -81,6 +82,9 @@ class FakeComfyUI:
                     return self._json(fake.loras)
                 if url.path.startswith("/object_info/"):
                     name = urllib.parse.unquote(url.path.rsplit("/", 1)[1])
+                    if name == "ControlNetLoader" and name in fake.nodes:  # lists its model files
+                        files = sorted(m for m in fake.models if "openpose" in m)
+                        return self._json({name: {"input": {"required": {"control_net_name": [files]}}}})
                     return self._json({name: {"input": {}}} if name in fake.nodes else {})
                 if url.path.startswith("/history/"):
                     prompt_id = url.path.rsplit("/", 1)[1]

@@ -191,6 +191,8 @@ export interface AssetOutputs {
     /** Lines from the image stage: LoRAs used, reference images applied or skipped. */
     log?: string[];
     candidates: string[];
+    /** Biped characters: whether each candidate's arms stand clear of the body (null: no figure found). */
+    pose_check?: { candidate: number; arms_clear: boolean | null; clear_share: number }[] | null;
   };
   mesh?: {
     glb: string;

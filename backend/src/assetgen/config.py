@@ -36,6 +36,10 @@ class Settings:
     comfyui_timeout: float = 600.0
     # API-format workflows, one per base model (empty: backend/workflows).
     comfyui_workflows_dir: str = ""
+    # Pose guide for biped characters: an OpenPose ControlNet in ComfyUI's models/controlnet (SDXL
+    # only; empty turns it off) and how strongly it holds the pose.
+    pose_controlnet: str = "openpose_sdxl_xinsir.safetensors"
+    pose_strength: float = 0.8
     qwen_url: str = "http://127.0.0.1:11434/v1"
     qwen_model: str = "qwen3"
     hunyuan3d_url: str = "http://127.0.0.1:8081"
