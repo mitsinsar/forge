@@ -1,0 +1,2 @@
+# Patches are applied to other repositories with git apply: keep their line endings as written.
+*.patch text eol=lf
