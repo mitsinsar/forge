@@ -537,6 +537,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
   const [moved, setMoved] = useState<Record<string, Vec3>>({});
   const [mirror, setMirror] = useState(true);
   const [pickedJoint, setPickedJoint] = useState<string>();
+  const [jointWireframe, setJointWireframe] = useState(false);
   const movedCount = Object.keys(moved).length;
   const rerig = useApiMutation((joints: Record<string, Vec3>) => api.reject(asset.id, 3, { joints }), [
     keys.assets,
@@ -592,6 +593,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
                   editJoints={editing}
                   onJointMove={moveJoint}
                   onJointPick={setPickedJoint}
+                  wireframe={editing && jointWireframe}
                 />
               )}
             </Stack>
@@ -666,10 +668,12 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
               {editing && (
                 <Checkbox label="Move left and right together" checked={mirror} onChange={setMirror} />
               )}
+              {editing && <Checkbox label="Wireframe" checked={jointWireframe} onChange={setJointWireframe} />}
             </Row>
             {editing && (
               <Text small muted>
-                The model holds its rest pose. Click a joint, then drag the arrows. Orange joints are moved.
+                The model holds its rest pose. Click a joint, then drag the arrows. Orange joints are moved. Use
+                Front, Left and Flat above the model to line joints up straight on.
               </Text>
             )}
             {editing && <JointGuide picked={pickedJoint} onPick={setPickedJoint} />}

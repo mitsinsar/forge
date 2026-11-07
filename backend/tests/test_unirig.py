@@ -217,3 +217,18 @@ def test_a_bad_fit_tries_other_seeds_and_keeps_the_best(tmp_path):
     seeds = [c["args"]["seed"] for c in calls(root) if c["step"] == "skeleton"]
     assert seeds == ["12345", "7", "2024"] and [a["seed"] for a in result["attempts"]] == [12345, 7, 2024]
     assert (tmp_path / "rig" / "unirig" / "seed_7" / "rigged.glb").is_file()
+
+
+def test_a_fist_without_fingers_still_fits(tmp_path):
+    """Gauntlets and fists: UniRig finds no fingers but one chain through the hand. Fingers are
+    details, so the fit stays high, and the wrist lands where the hand starts, not at the chain's end."""
+    names = [n for n in TEMPLATE["joints"] if not n.startswith(("index", "ring", "pinky", "thumb", "weapon"))]
+    rename = {n: f"bone_{i}" for i, n in enumerate(names)}
+    joints = [(rename[n], TEMPLATE["joints"][n]["head"], rename.get(TEMPLATE["joints"][n]["parent"])) for n in names]
+    path = tmp_path / "fist.glb"
+    path.write_bytes(box_glb(LO, HI, joints))  # each hand: one middle-finger chain, no others
+    gltf, binary = imaging.read_glb(path)
+    report = match(TEMPLATE, predicted_skeleton(path), mesh_bounds_glb(gltf, binary, 0))
+    assert report["limbs_found"] == "5/5" and report["fit_score"] >= 0.9, report["fit_score"]
+    for joint in ("hand_l", "hand_r", "lowerarm_l"):
+        assert np.allclose(report["targets"][joint], TEMPLATE["joints"][joint]["head"], atol=0.02), joint

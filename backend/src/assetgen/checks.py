@@ -125,7 +125,13 @@ def rig_checks(*, skeleton: dict | None, stretch: dict | None, gear: dict | None
         fit = float(skeleton.get("fit_score", 0))
         tries = skeleton.get("attempts") or []
         detail = f"Fit {round(fit * 100)} %" + (f" (best of {len(tries)} UniRig runs)" if len(tries) > 1 else "")
-        checks.append(check("fit", "Skeleton fits", FAIL if fit < 0.6 else WARN if fit < 0.75 else PASS, detail))
+        parts = [f"limbs {skeleton['limbs_found']}" if skeleton.get("limbs_found") else ""]
+        parts += [f"{label} {round(float(skeleton[key]) * 100)} %" for key, label in
+                  (("proportions", "proportions"), ("symmetry", "left/right"))
+                  if skeleton.get(key) is not None and float(skeleton[key]) < 0.95]
+        if any(parts):
+            detail += ": " + ", ".join(p for p in parts if p)
+        checks.append(check("fit", "Skeleton fits", FAIL if fit < 0.6 else WARN if fit < 0.9 else PASS, detail))
     if stretch:
         clips = {c: s for c, s in stretch.items() if c in STANDARD_CLIPS} or stretch
         bad = sorted(clips, key=clips.get, reverse=True)
