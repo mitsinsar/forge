@@ -30,7 +30,8 @@ Steps:
 4. Export one GLB with the skinned mesh, the armature and one animation per clip.
 
 Result: ``{"clips": [{"name", "duration", "loop"}], "scale", "skinning", "unweighted_before_fix",
-"cross_limb_weights_dropped", "joints_placed"}``.
+"cross_limb_weights_dropped", "joints_placed", "joints"}`` (``joints``: each deforming joint's
+rest head in the mesh's space, Blender axes, and its parent: what gate 3's joint editor shows).
 """
 
 from __future__ import annotations
@@ -567,7 +568,10 @@ def main(args: dict) -> dict:
                               export_force_sampling=True, export_skins=True, export_def_bones=False,
                               export_materials="EXPORT")
     progress(1.0, "Animated result ready")
-    return {"clips": clips, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped, "touching_limb_edges_cut": cut, "idle_reference_bones": sorted(natural),
+    joints = {b.name: {"head": [round(v, 5) for v in arm.matrix_world @ b.head_local],
+                       "parent": b.parent.name if b.parent else None}
+              for b in arm.data.bones if b.use_deform}
+    return {"clips": clips, "joints": joints, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped, "touching_limb_edges_cut": cut, "idle_reference_bones": sorted(natural),
             "joints_placed": placed}
 
 

@@ -452,7 +452,9 @@ def reject_gate(request: Request, asset_id: str, gate: int, body: Reject | None 
     pipeline = pipeline_of(request)
     body = body or Reject()
     grip = body.grip.model_dump(exclude_none=True) if body.grip else None
-    asset = _run(lambda: pipeline.reject(asset_id, gate, body.note, body.archetype, grip))
+    if body.joints and any(len(p) != 3 for p in body.joints.values()):
+        raise HTTPException(422, "each joint needs three coordinates")
+    asset = _run(lambda: pipeline.reject(asset_id, gate, body.note, body.archetype, grip, body.joints))
     return asset_view(request, asset)
 
 

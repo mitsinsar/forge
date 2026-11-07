@@ -282,7 +282,14 @@ class FakeBlender(FakeBase):
         self._wait()
         glb = builder.write(out_path)
         progress("Animated preview ready", 1.0)
-        return {"glb": glb, "clips": clip_info}
+        result = {"glb": glb, "clips": clip_info}
+        if not attach:  # the template's joints, with the ones moved at gate 3 in place
+            from assetgen.archetypes import ARCHETYPES_DIR  # noqa: PLC0415
+            template = json.loads((ARCHETYPES_DIR / archetype["folder"] / "skeleton.json").read_text(encoding="utf-8"))
+            moved = skeleton.get("overrides") or {}
+            result["joints"] = {n: {"head": moved.get(n, j["head"]), "parent": j["parent"]}
+                                for n, j in template["joints"].items() if not j.get("socket")}
+        return result
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
                        look, palette_size, out_dir, progress, framing=None):

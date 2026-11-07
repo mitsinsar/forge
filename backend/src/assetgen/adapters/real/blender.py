@@ -93,6 +93,8 @@ class BlenderTools:
             return {"glb": out_path, "clips": result["clips"],
                     **{k: result[k] for k in ("gear", "weapon") if k in result}}
         use_unirig = bool(skeleton.get("unirig_file")) and not skeleton.get("fallback")
+        # Joints moved at gate 3 win over UniRig's (and are placed even when its fit fell back).
+        targets = {**((skeleton.get("targets") or {}) if use_unirig else {}), **(skeleton.get("overrides") or {})}
         result = self._run("rig_animate.py", {
             "mesh_glb": str(Path(mesh_glb).resolve()),
             "template_blend": str((folder / "skeleton.blend").resolve()),
@@ -102,9 +104,10 @@ class BlenderTools:
             "clips": clip_args,
             "unirig_glb": skeleton.get("unirig_file") if use_unirig else None,
             "mapping": skeleton.get("mapping") if use_unirig else None,
-            "targets": skeleton.get("targets") if use_unirig else None,
+            "targets": targets or None,
             "out_glb": str(out_path.resolve())}, out_path.parent, progress)
-        return {"glb": out_path, "clips": result["clips"], "skinning": result["skinning"]}
+        return {"glb": out_path, "clips": result["clips"], "skinning": result["skinning"],
+                "joints": result.get("joints")}
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
                        look, palette_size, out_dir, progress, framing=None):

@@ -196,3 +196,28 @@ def test_paper_doll_assets_share_clips_and_framing(client, settings, tmp_path):
     assert not attacks & set(pipeline.clips_for(wolf, profile))
     assert pipeline.paper_doll(hero) and pipeline.paper_doll(helmet) and not pipeline.paper_doll(wolf)
     assert PAPER_DOLL_FRAMING["span"] > 1.8 * 2  # a 1.8 m body with a 1 m weapon swung out
+
+
+def test_joints_moved_at_gate_3_are_used_and_can_be_reset(client, settings, tmp_path):
+    project = make_project(client, "unity", tmp_path / "g")
+    asset = wait_for(client, _new(client, project, archetype="biped")["id"], "waiting", gate=1)
+    client.post(f"/api/assets/{asset['id']}/gates/1/approve", json={"candidate": 1})
+    wait_for(client, asset["id"], "waiting", gate=2)
+    client.post(f"/api/assets/{asset['id']}/gates/2/approve", json={})
+    rigged = wait_for(client, asset["id"], "waiting", gate=3)
+    joints = rigged["outputs"]["rig"]["joints"]
+    assert "calf_l" in joints and joints["calf_l"]["parent"] == "thigh_l" and "weapon_r" not in joints
+
+    moved = [0.1, 0.0, 0.55]
+    response = client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"joints": {"calf_l": moved}})
+    assert response.status_code == 200, response.text
+    again = wait_for(client, asset["id"], "waiting", gate=3)
+    assert again["outputs"]["rig"]["joints"]["calf_l"]["head"] == moved
+    assert again["outputs"]["rig"]["joint_overrides"] == ["calf_l"]
+
+    bad = client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"joints": {"tail_07": [0, 0, 0]}})
+    assert bad.status_code in (409, 422) and "tail_07" in bad.text
+    client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"joints": {}})
+    reset = wait_for(client, asset["id"], "waiting", gate=3)
+    assert reset["outputs"]["rig"]["joint_overrides"] == []
+    assert reset["outputs"]["rig"]["joints"]["calf_l"]["head"] != moved

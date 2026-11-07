@@ -216,6 +216,10 @@ export interface AssetOutputs {
     skeleton: { joints: number; fit_score: number; fallback: boolean };
     grip: Grip | null;
     sprites?: SpritePreview;
+    /** Characters: each joint's rest position (mesh space, Blender axes) and parent. */
+    joints?: Record<string, { head: [number, number, number]; parent: string | null }>;
+    /** Joints the user moved (they replace the detected ones on every re-rig). */
+    joint_overrides?: string[];
     /** Gear: how it was fitted on the base body. */
     gear?: { slot: string; scale: number; inside_before: number; inside_after: number; masked_faces: number };
     /** Weapons: what the grip detection measured. */
@@ -295,6 +299,8 @@ export interface RejectInput {
   note?: string;
   archetype?: string;
   grip?: Grip;
+  /** Gate 3, characters: moved joints (Blender axes); {} goes back to the detected ones. */
+  joints?: Record<string, [number, number, number]>;
 }
 
 export class ApiError extends Error {

@@ -172,7 +172,7 @@ class Pipeline:
         return self.enqueue(asset_id, next_stage)
 
     def reject(self, asset_id: str, gate: int, note: str | None = None, archetype: str | None = None,
-               grip: dict | None = None) -> dict:
+               grip: dict | None = None, joints: dict | None = None) -> dict:
         asset = self._require(asset_id)
         self._require_gate(asset, gate)
         stage = STAGE_OF_GATE[gate]
@@ -190,6 +190,16 @@ class Pipeline:
                 raise Invalid("the grip can only be changed for weapons at gate 3")
             changes["grip"] = {**DEFAULT_GRIPS[asset["weapon_class"]], **(asset.get("grip") or {}), **grip,
                                "source": "manual"}
+        if joints is not None:
+            if gate != 3 or asset["kind"] in ("gear", "weapon"):
+                raise Invalid("joints can only be moved for characters at gate 3")
+            known = set(get_archetype(asset["archetype"])["joints"])
+            unknown = sorted(set(joints) - known)
+            if unknown:
+                raise Invalid(f"unknown joints for the {asset['archetype']} skeleton: {', '.join(unknown)}")
+            # Moved joints add up over rejections; an empty set goes back to the detected ones.
+            changes["joint_overrides"] = ({**(asset.get("joint_overrides") or {}),
+                                           **{k: [float(v) for v in p] for k, p in joints.items()}} if joints else {})
         notes = list(asset.get("notes") or [])
         if note and note.strip():
             notes.append({"gate": gate, "stage": stage, "note": note.strip(), "at": now()})
@@ -456,6 +466,7 @@ class Pipeline:
         else:
             skeleton = self.adapters.rig.predict_skeleton(
                 mesh=mesh, archetype=archetype, out_dir=directory, progress=lambda s, f: progress(s, 0.3 * f))
+            skeleton = {**skeleton, "overrides": dict(asset.get("joint_overrides") or {})}
         project = self.db.get("projects", asset["project_id"]) or {}
         godot = project.get("engine") == "godot"
         result = self.adapters.blender.rig_and_animate(
@@ -467,6 +478,9 @@ class Pipeline:
                   "skeleton": {"joints": len(skeleton["joints"]), "fit_score": skeleton["fit_score"],
                                "fallback": skeleton["fallback"]},
                   "grip": asset.get("grip") if asset["kind"] == "weapon" else None}
+        if result.get("joints"):
+            output["joints"] = result["joints"]
+            output["joint_overrides"] = sorted(asset.get("joint_overrides") or {})
         if result.get("gear"):
             output["gear"] = result["gear"]
         if result.get("weapon"):
