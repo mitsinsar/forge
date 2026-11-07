@@ -2,8 +2,8 @@
 frames and the Unity FBX.
 
 The work happens in the scripts in ``backend/blender_scripts/``, run by
-``blender_runner``. Skinning and clip retargeting (``rig_and_animate``) come
-with the rig adapter in ticket #11; until then it fails with a clear message.
+``blender_runner``. ``rig_and_animate`` skins the mesh to the archetype's template
+skeleton and retargets its clips (gear and weapons wait for ticket #12).
 """
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ from pathlib import Path
 from ...config import Settings
 from ...defaults import CAMERA_TILT, DIRECTION_YAW, MODEL_SIZES
 from ...imaging import finish_sprites, read_glb
-from .blender_runner import run_script
+from .blender_runner import BlenderError, run_script
+
+from ...defaults import FIT_BY_HEIGHT as UPRIGHT  # noqa: E402
 
 
 def merge_glb_extras(source: Path, target: Path, extra: dict | None = None) -> None:
@@ -62,9 +64,36 @@ class BlenderTools:
         merge_glb_extras(Path(raw_mesh), glb, {"triangle_budget": int(triangles)})
         return {"glb": glb, "lods": result["lods"], "removed": result.get("removed")}
 
-    def rig_and_animate(self, **kwargs):
-        from .. import RIG_NOT_BUILT, RigNotBuilt  # the adapters package imports this module
-        raise RigNotBuilt(RIG_NOT_BUILT)
+    def rig_and_animate(self, *, mesh_glb, skeleton, archetype, clips, attach, out_path, progress):
+        """Skins the mesh to the archetype's template skeleton and retargets its clips
+        (``blender_scripts/rig_animate.py``). ``skeleton`` is the rig adapter's result; its
+        UniRig weights are used unless the fit fell back."""
+        from ...archetypes import ARCHETYPES_DIR  # noqa: PLC0415 - keep this module's imports light
+
+        if attach:
+            raise BlenderError("Fitting gear and weapons on the base body is ticket #12; they can't be "
+                               "rigged yet.")
+        out_path = Path(out_path)
+        folder = ARCHETYPES_DIR / archetype["folder"]
+        record = json.loads((folder / "clips.json").read_text(encoding="utf-8"))
+        missing = [c for c in clips if not (folder / "clips" / f"{c}.glb").is_file()]
+        if missing:
+            raise BlenderError(f"The {archetype['id']} archetype has no clip for: {', '.join(missing)}. Rebuild "
+                               "the templates with blender_scripts/build_archetypes.py.")
+        use_unirig = bool(skeleton.get("unirig_file")) and not skeleton.get("fallback")
+        result = self._run("rig_animate.py", {
+            "mesh_glb": str(Path(mesh_glb).resolve()),
+            "template_blend": str((folder / "skeleton.blend").resolve()),
+            "template_object": f"{archetype['id']}_template",
+            "template_json": str((folder / "skeleton.json").resolve()),
+            "fit_axis": "z" if archetype["id"] in UPRIGHT else "longest",
+            "clips": [{"name": c, "file": str((folder / "clips" / f"{c}.glb").resolve()),
+                       "loop": bool(record.get(c, {}).get("loop"))} for c in clips],
+            "unirig_glb": skeleton.get("unirig_file") if use_unirig else None,
+            "mapping": skeleton.get("mapping") if use_unirig else None,
+            "targets": skeleton.get("targets") if use_unirig else None,
+            "out_glb": str(out_path.resolve()), "attach": attach}, out_path.parent, progress)
+        return {"glb": out_path, "clips": result["clips"], "skinning": result["skinning"]}
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
                        look, palette_size, out_dir, progress):

@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from fastapi.testclient import TestClient
 
-from assetgen.adapters import PendingRig, RigNotBuilt, build_adapters
+from assetgen.adapters import build_adapters
 from assetgen.adapters.real.qwen import BIPED_NEGATIVE, CREATURE_NEGATIVE, LLMError, QwenLLM
 from assetgen.archetypes import load_archetypes
 from assetgen.config import load_settings
@@ -231,15 +231,12 @@ def test_the_app_builds_only_real_adapters(tmp_path):
     from assetgen.adapters.real.blender import BlenderTools
     from assetgen.adapters.real.comfyui import ComfyUIImage
     from assetgen.adapters.real.hunyuan3d import Hunyuan3DMesh
+    from assetgen.adapters.real.unirig import UniRigRig
 
     adapters = build_adapters(load_settings(data_dir=tmp_path))
     assert isinstance(adapters.llm, QwenLLM) and isinstance(adapters.image, ComfyUIImage)
     assert isinstance(adapters.mesh, Hunyuan3DMesh) and isinstance(adapters.blender, BlenderTools)
-    assert isinstance(adapters.rig, PendingRig)
-    with pytest.raises(RigNotBuilt, match="ticket #11"):
-        adapters.rig.predict_skeleton(mesh=None, archetype={}, out_dir=tmp_path, progress=print)
-    with pytest.raises(RigNotBuilt, match="ticket #11"):
-        adapters.blender.rig_and_animate(mesh_glb=None)
+    assert isinstance(adapters.rig, UniRigRig)
 
 
 def test_an_old_adapters_table_is_ignored(tmp_path):
@@ -262,7 +259,7 @@ def test_preview_stage_uses_qwen_and_tools_report(fake_qwen, tmp_path, monkeypat
         tools = {t["tool"]: t for t in client.get("/api/tools").json()}
         assert tools["llm"]["ok"] is True
         assert tools["image"]["name"] == "ComfyUI" and tools["image"]["ok"] is False  # checked even when down
-        assert tools["rig"]["ok"] is False and "not built yet" in tools["rig"]["detail"]
+        assert tools["rig"]["name"] == "UniRig" and "UniRig not found" in tools["rig"]["detail"]
 
 
 def test_failed_qwen_fails_the_stage(tmp_path, monkeypatch):

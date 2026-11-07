@@ -16,6 +16,7 @@ REAL_ADAPTERS: dict[str, tuple[str, str]] = {
     "image": ("comfyui", "ComfyUIImage"),
     "mesh": ("hunyuan3d", "Hunyuan3DMesh"),
     "blender": ("blender", "BlenderTools"),
+    "rig": ("unirig", "UniRigRig"),
 }
 
 

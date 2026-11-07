@@ -253,6 +253,41 @@ def _mesh_stage(tmp_path: Path, tools: BlenderTools) -> tuple[Path, list[dict]]:
 
 
 @needs_blender
+@pytest.mark.parametrize("arch_id", ["biped", "quadruped"])
+def test_rig_and_animate_retargets_the_template_clips(tmp_path, arch_id):
+    """Without UniRig weights (fallback): automatic weights, the template's clips baked onto it."""
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    raw = write_raw(tmp_path / "raw.glb", asset_parts("hero", arch_id), 6000)
+    mesh = tools.cleanup_and_lods(raw_mesh=raw, kind="hero" if arch_id == "biped" else "monster", triangles=3000,
+                                  lod_ratios=[0.5], out_dir=tmp_path / "mesh", progress=lambda s, f: None)
+    clips = ["idle", "walk", "attack_1"]
+    result = tools.rig_and_animate(mesh_glb=mesh["glb"], skeleton={"fallback": True}, archetype=get_archetype(arch_id),
+                                   clips=clips, attach=None, out_path=tmp_path / "rig" / "animated.glb",
+                                   progress=lambda s, f: None)
+    assert [c["name"] for c in result["clips"]] == clips
+    assert result["clips"][0]["loop"] is True and result["clips"][2]["loop"] is False
+    assert all(c["duration"] > 0 for c in result["clips"]) and result["skinning"] == "automatic"
+    gltf = read_glb_json(result["glb"])
+    assert sorted(a["name"] for a in gltf["animations"]) == sorted(clips)
+    (skin,) = gltf["skins"]
+    joints = {gltf["nodes"][j]["name"] for j in skin["joints"]}
+    assert set(get_archetype(arch_id)["joints"]) <= joints
+    meshes = [n for n in gltf["nodes"] if "mesh" in n]
+    assert len(meshes) == 1 and "skin" in meshes[0]  # LOD0 only, skinned
+    record = json.loads((tmp_path / "rig" / "rig_animate.result.json").read_text())
+    assert 0.1 < record["scale"] < 3.0  # the source packs come in their own sizes (the wolf is 5.5 m long)
+
+
+@needs_blender
+def test_gear_and_weapons_wait_for_ticket_12(tmp_path):
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    with pytest.raises(BlenderError, match="ticket #12"):
+        tools.rig_and_animate(mesh_glb=tmp_path / "m.glb", skeleton={}, archetype=get_archetype("biped"),
+                              clips=["idle"], attach={"kind": "gear", "slot": "head"},
+                              out_path=tmp_path / "rig" / "animated.glb", progress=lambda s, f: None)
+
+
+@needs_blender
 def test_export_of_the_fake_rig_reimports_with_lods_and_clips(tmp_path):
     tools = RealBlenderFakeRig(load_settings(data_dir=tmp_path, blender_path=BLENDER))
     mesh_glb, lods = _mesh_stage(tmp_path, tools)

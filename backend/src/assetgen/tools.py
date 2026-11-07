@@ -51,16 +51,12 @@ def _check(name: str, settings: Settings) -> tuple[bool, str]:
 
 
 def check_tools(settings: Settings) -> list[dict]:
-    """One entry per tool: ``{tool, name, ok, detail}``. Rigging is never ok until its adapter exists."""
-    from .adapters.real import REAL_ADAPTERS
-
+    """One entry per tool: ``{tool, name, ok, detail}``."""
     with ThreadPoolExecutor(max_workers=len(ADAPTER_NAMES)) as pool:
         results = dict(zip(ADAPTER_NAMES, pool.map(lambda n: _check(n, settings), ADAPTER_NAMES)))
     report = []
     for name in ADAPTER_NAMES:
         ok, detail = results[name]
-        if name not in REAL_ADAPTERS:
-            ok, detail = False, f"adapter not built yet (ticket #11); {detail}"
         label = "Modly" if name == "mesh" and settings.mesh_tool == "modly" else TOOL_NAMES[name]
         report.append({"tool": name, "name": label, "ok": ok, "detail": detail})
     return report

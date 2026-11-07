@@ -72,6 +72,9 @@ MODEL_SIZES: dict[str, tuple[float, str]] = {
     "gear": (1.8, "height"), "weapon": (1.0, "longest"),
 }
 
+# Archetypes whose template is fitted to a mesh by height; the others by the template's longest side.
+FIT_BY_HEIGHT = {"biped", "blob"}
+
 PROFILE_DEFAULTS: dict = {
     "base_model": "sdxl",
     "prompt_suffix": "game asset, full body, plain background, flat even lighting",
