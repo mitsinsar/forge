@@ -20,7 +20,9 @@ clips always apply; UniRig's weights are used for skinning when the fit is good 
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -35,7 +37,7 @@ from ...config import Settings
 from ...defaults import FIT_BY_HEIGHT
 
 FALLBACK_BELOW = 0.6
-GOOD_FIT = 0.75  # below this, UniRig runs again with another seed (up to unirig_tries runs)
+GOOD_FIT = 0.9  # below this, UniRig runs again with another seed (up to unirig_tries runs)
 SEEDS = (12345, 7, 2024, 99, 31337)
 NEAR = 0.1  # matching distance, as a share of the mesh's height (or longest side)
 SUFFIXES = "obj,fbx,FBX,dae,glb,gltf,vrm"
@@ -154,10 +156,17 @@ def _normalise(points: np.ndarray, lo: np.ndarray, hi: np.ndarray, axis: int) ->
     return (points - origin) / max(hi[axis] - lo[axis], 1e-6)
 
 
-MIN_LIMB = 0.08     # a branch shorter than this (share of height) is a detail, such as a finger or toe
+MIN_LIMB = 0.08     # a template branch shorter than this (share of height) is a detail, such as a toe
 END_MATCH = 0.45    # how far apart (share of height) a template limb end and a predicted one may be
 EXTRA_LIMB = 0.3    # a predicted limb at least this long that matches nothing is an extra limb
 EXTRA_PENALTY = 0.25
+FINGER = re.compile(r"^(index|middle|ring|pinky|thumb)_")  # template details: the hand is the limb end
+HAND_SPAN = 0.15    # predicted leaves that branch from one point within this length are fingers (or toes)
+TINY = 0.015        # a predicted leaf this close to its parent is noise
+PROPORTION_OK = 0.2   # a fitted bone within 20 % of the template's length (scaled) costs nothing...
+PROPORTION_BAD = 1.3  # ...and one about 2.5 times too long or short (log2) costs fully
+SYMMETRY_OK = 0.05    # a left and right bone within 5 % of each other's length cost nothing...
+SYMMETRY_BAD = 0.3    # ...and 30 % apart cost fully (lengths: a posed arm still has equal bones)
 
 
 def _tree(names: list[str], parents: list[str | None]) -> tuple[dict, list[str]]:
@@ -168,15 +177,17 @@ def _tree(names: list[str], parents: list[str | None]) -> tuple[dict, list[str]]
     return children, [n for n, p in zip(names, parents) if p is None]
 
 
-def _major(names, parents, pos) -> tuple[dict[str, list[str]], list[str]]:
-    """The skeleton without its details (fingers, toes): each joint's major children, and the
-    limb ends (major joints with no major children)."""
+def _major(names, parents, pos, tails: dict | None = None) -> tuple[dict[str, list[str]], list[str]]:
+    """The skeleton without its details (toes): each joint's major children, and the limb ends
+    (major joints with no major children). A leaf reaches as far as its bone's tail when known
+    (the template's Head is short to its joint but long to its tail)."""
     children, roots = _tree(names, parents)
     reach: dict[str, float] = {}
 
     def reach_of(n: str) -> float:
         if n not in reach:
-            reach[n] = max((np.linalg.norm(pos[c] - pos[n]) + reach_of(c) for c in children[n]), default=0.0)
+            own = float(np.linalg.norm(tails[n] - pos[n])) if tails and n in tails else 0.0
+            reach[n] = max((np.linalg.norm(pos[c] - pos[n]) + reach_of(c) for c in children[n]), default=own)
         return reach[n]
 
     major = {n: [c for c in children[n] if np.linalg.norm(pos[c] - pos[n]) + reach_of(c) >= MIN_LIMB]
@@ -226,6 +237,57 @@ def _along(path: list[str], pos: dict, fraction: float) -> np.ndarray:
     return pos[path[i]] + t * (pos[path[i + 1]] - pos[path[i]])
 
 
+def _predicted_ends(names, parents, pos) -> tuple[list[str], set[str]]:
+    """UniRig's limb ends: its leaves, with each cluster of leaves that branch from one point
+    within ``HAND_SPAN`` (fingers, toes) replaced by that point (the hand). A short single leaf,
+    such as a head joint just above the neck, stays an end; a tiny tip hands the end to its
+    parent. Returns the ends and which of them are such branch points."""
+    children, _ = _tree(names, parents)
+    parent_of = dict(zip(names, parents))
+    leaves = []
+    for n in names:
+        if children[n] or parent_of[n] is None:
+            continue
+        while (parent_of.get(parent_of[n]) is not None and len(children[parent_of[n]]) == 1
+               and np.linalg.norm(pos[n] - pos[parent_of[n]]) < TINY):
+            n = parent_of[n]
+        if np.linalg.norm(pos[n] - pos[parent_of[n]]) >= TINY and n not in leaves:
+            leaves.append(n)
+    branch_of = {}
+    for leaf in leaves:
+        node, length = leaf, 0.0
+        while parent_of.get(node) is not None:
+            up = parent_of[node]
+            length += float(np.linalg.norm(pos[node] - pos[up]))
+            node = up
+            if length > HAND_SPAN or len(children[node]) >= 2:
+                break
+        if len(children[node]) >= 2 and length <= HAND_SPAN:
+            branch_of[leaf] = node
+    ends: list[str] = []
+    branches: set[str] = set()
+    for leaf in leaves:
+        point = branch_of.get(leaf)
+        if point is not None and sum(1 for other in leaves if branch_of.get(other) == point) >= 2:
+            if point not in ends:
+                ends.append(point)
+                branches.add(point)
+        else:
+            ends.append(leaf)
+    return ends, branches
+
+
+def twin(name: str) -> str | None:
+    """The other side's joint (hand_l and hand_r, Ear.L and Ear.R, leg_l1_3 and leg_r1_3)."""
+    for pattern, swap in ((r"_(l|r)$", {"l": "r", "r": "l"}), (r"\.(L|R)$", {"L": "R", "R": "L"}),
+                          (r"_(l|r)(?=\d)", {"l": "r", "r": "l"})):
+        found = re.search(pattern, name)
+        if found:
+            start, end = found.span(1)
+            return name[:start] + swap[found.group(1)] + name[end:]
+    return None
+
+
 def match(template: dict, predicted: dict, asset_bounds: tuple[np.ndarray, np.ndarray],
           by_height: bool = True) -> dict:
     """Aligns UniRig's predicted skeleton with the template by position and chain.
@@ -236,24 +298,46 @@ def match(template: dict, predicted: dict, asset_bounds: tuple[np.ndarray, np.nd
        the paired predicted limbs meet; every template joint between two such key joints gets
        the point at the same share of length along the predicted chain between their partners.
 
+    4. A hand whose fingers UniRig didn't split (a fist, a gauntlet) ends in one chain through
+       the hand: the wrist goes where the template's hand starts along it, not at its end.
+
     Returns ``targets`` (where each major template joint should be, on the asset), the
     ``mapping`` from each predicted joint to the template joint nearest its place (used for its
-    skin weights), and a ``fit_score``: the share of template limbs found, less a penalty for
-    each long predicted limb that matches nothing (wings on a biped)."""
-    t_names = [n for n, j in template["joints"].items() if not j.get("socket")]  # sockets hold props
+    skin weights), and a ``fit_score``: the share of the body's limbs found (head, hands, feet
+    for a biped; fingers are details), times how close the fitted bones are to the template's
+    proportions and how alike UniRig's left and right bone lengths are, less a penalty for each long
+    predicted limb that matches nothing (wings on a biped)."""
+    # Sockets hold props; fingers are details (gauntlets and fists have none to find).
+    t_names = [n for n, j in template["joints"].items() if not j.get("socket") and not FINGER.match(n)]
     t_parent = {n: template["joints"][n]["parent"] for n in t_names}
     t_raw = {n: np.array(template["joints"][n]["head"], float) for n in t_names}
     t_lo, t_hi = np.array(template["mesh_bounds"]["min"], float), np.array(template["mesh_bounds"]["max"], float)
     axis = fit_axis(t_lo, t_hi, by_height)
     t_pos = {n: _normalise(t_raw[n][None], t_lo, t_hi, axis)[0] for n in t_names}
+    t_tail = {n: _normalise(np.array(template["joints"][n]["tail"], float)[None], t_lo, t_hi, axis)[0]
+              for n in t_names if template["joints"][n].get("tail")}
 
     p_names = list(predicted["names"])
     p_parent = dict(zip(p_names, predicted["parents"]))
     p_raw = {n: np.array(v, float) for n, v in zip(p_names, predicted["positions"])}
     p_pos = {n: _normalise(p_raw[n][None], *asset_bounds, axis)[0] for n in p_names}
 
-    t_major, t_ends = _major(t_names, [t_parent[n] for n in t_names], t_pos)
-    p_major, p_ends = _major(p_names, [p_parent[n] for n in p_names], p_pos)
+    t_major, t_ends = _major(t_names, [t_parent[n] for n in t_names], t_pos, t_tail)
+    p_ends, p_branches = _predicted_ends(p_names, [p_parent[n] for n in p_names], p_pos)
+    # How far past each template limb end its fingers reach (the hand's own length), in the
+    # template's units, along its longest finger.
+    all_parent = {n: j["parent"] for n, j in template["joints"].items()}
+    all_raw = {n: np.array(j["head"], float) for n, j in template["joints"].items()}
+    reach_past: dict[str, float] = {}
+    for name in t_names:
+        best = 0.0
+        for finger in (n for n in template["joints"] if FINGER.match(n)):
+            path = _path(finger, all_parent)
+            if name in path:
+                best = max(best, float(_arc(path[path.index(name):], all_raw)[-1]))
+        if best:
+            reach_past[name] = best
+    p_children, _ = _tree(p_names, [p_parent[n] for n in p_names])
 
     pairs = sorted((float(np.linalg.norm(t_pos[a] - p_pos[b])), a, b) for a in t_ends for b in p_ends)
     ends: dict[str, str] = {}
@@ -280,10 +364,41 @@ def match(template: dict, predicted: dict, asset_bounds: tuple[np.ndarray, np.nd
                 continue  # the partners are not on one chain: leave this stretch alone
             p_path = p_path[p_path.index(keys[a]):]
             t_arc = _arc(path[lo_i:hi_i + 1], t_raw)
+            # A fist's chain runs on through the hand: count the template's hand length too.
+            total = t_arc[-1] + (reach_past.get(d, 0.0) if d == end and keys[d] not in p_branches else 0.0)
             for j, name in enumerate(path[lo_i:hi_i + 1]):
                 if name not in targets:
-                    fraction = t_arc[j] / t_arc[-1] if t_arc[-1] > 1e-9 else 0.0
+                    fraction = t_arc[j] / total if total > 1e-9 else 0.0
                     targets[name] = [round(float(v), 5) for v in _along(p_path, p_raw, fraction)]
+
+    height = float(asset_bounds[1][axis] - asset_bounds[0][axis]) or 1.0
+
+    def bone(name: str) -> float | None:
+        parent = t_parent.get(name)
+        if name in targets and parent in targets:
+            return float(np.linalg.norm(np.array(targets[name]) - np.array(targets[parent])))
+        return None
+
+    # Left and right bones should be the same length, whatever pose the arms are in.
+    asymmetry: list[float] = []
+    for name in sorted(targets):
+        other = twin(name)
+        if other and name < other:
+            mine, theirs = bone(name), bone(other)
+            if mine and theirs:
+                miss = abs(math.log2(mine / theirs)) - math.log2(1 + SYMMETRY_OK)
+                asymmetry.append(min(1.0, max(0.0, miss) / (math.log2(1 + SYMMETRY_BAD) - math.log2(1 + SYMMETRY_OK))))
+
+    # How close each fitted bone's length is to the template's (both scaled to their meshes).
+    off: list[float] = []
+    for name in targets:
+        parent = t_parent.get(name)
+        if parent in targets:
+            want = float(np.linalg.norm(t_pos[name] - t_pos[parent]))
+            got = (bone(name) or 0.0) / height
+            if want > 1e-4 and got > 1e-6:
+                miss = abs(math.log2(got / want)) - math.log2(1 + PROPORTION_OK)
+                off.append(min(1.0, max(0.0, miss) / (PROPORTION_BAD - math.log2(1 + PROPORTION_OK))))
 
     mapping: dict[str, str] = {}
     if targets:
@@ -294,14 +409,17 @@ def match(template: dict, predicted: dict, asset_bounds: tuple[np.ndarray, np.nd
 
     def limb_length(end: str) -> float:
         path = _path(end, p_parent)
-        start = next((i for i in range(len(path) - 1, -1, -1) if len(p_major[path[i]]) >= 2), 0)
+        start = next((i for i in range(len(path) - 2, -1, -1) if len(p_children[path[i]]) >= 2), 0)
         return float(_arc(path[start:], p_pos)[-1])
 
     extra = [e for e in p_ends if e not in ends.values() and limb_length(e) >= EXTRA_LIMB]
     found = len(ends) / len(t_ends) if t_ends else 0.0
-    fit = max(0.0, found - EXTRA_PENALTY * len(extra))
+    proportions = 1.0 - (float(np.mean(off)) if off else 0.0)
+    symmetry = 1.0 - (float(np.mean(asymmetry)) if asymmetry else 0.0)
+    fit = max(0.0, found * proportions * symmetry - EXTRA_PENALTY * len(extra))
     return {"mapping": mapping, "targets": targets, "fit_score": round(fit, 3),
-            "limbs_found": f"{len(ends)}/{len(t_ends)}", "matched_ends": ends, "extra_limbs": extra}
+            "limbs_found": f"{len(ends)}/{len(t_ends)}", "proportions": round(proportions, 3),
+            "symmetry": round(symmetry, 3), "matched_ends": ends, "extra_limbs": extra}
 
 
 # ---- the adapter ---------------------------------------------------------------------

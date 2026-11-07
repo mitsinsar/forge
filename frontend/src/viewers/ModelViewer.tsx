@@ -6,6 +6,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { Button } from "../ui/kit";
 
 /** A joint of the rig, in the mesh's space with Blender axes (Z up, -Y front), as the backend sends it. */
 export type Vec3 = [number, number, number];
@@ -23,6 +24,25 @@ const toBlender = (v: THREE.Vector3): Vec3 => [round(v.x), round(-v.z), round(v.
 const round = (n: number) => Math.round(n * 10000) / 10000 + 0;
 // Finger joints are left out of the editor: too small to drag, and rarely wrong.
 const FINGER = /^(index|middle|ring|pinky|thumb)_/;
+const FOV = 35;
+const FLAT_FOV = 2;  // narrow enough that the perspective is gone, wide enough to keep orbiting
+
+// Camera directions. Characters face +Z, so their left side is at +X.
+type View = "Front" | "Left" | "Back" | "Right" | "Top";
+const VIEWS: Record<View, THREE.Vector3> = {
+  Front: new THREE.Vector3(0, 0, 1),
+  Left: new THREE.Vector3(1, 0, 0),
+  Back: new THREE.Vector3(0, 0, -1),
+  Right: new THREE.Vector3(-1, 0, 0),
+  Top: new THREE.Vector3(0, 1, 0.0001).normalize(),
+};
+const VIEW_TITLES: Record<View, string> = {
+  Front: "Look at the front",
+  Left: "Look at the character's left side",
+  Back: "Look at the back",
+  Right: "Look at the character's right side",
+  Top: "Look from above",
+};
 
 interface Props {
   url: string;
@@ -65,13 +85,14 @@ export function ModelViewer({
     mixer: THREE.AnimationMixer | null;
     clips: THREE.AnimationClip[];
     scene?: THREE.Scene;
-    camera?: THREE.Camera;
+    camera?: THREE.PerspectiveCamera;
     controls?: OrbitControls;
     canvas?: HTMLCanvasElement;
     radius?: number;
     extras?: Map<string, { model: THREE.Object3D; mixer: THREE.AnimationMixer; clips: THREE.AnimationClip[] }>;
   }>({ model: null, mixer: null, clips: [] });
   const [extrasLoaded, setExtrasLoaded] = useState(0);
+  const [flat, setFlat] = useState(false);
   const onJointMoveRef = useRef(onJointMove);
   useEffect(() => {
     onJointMoveRef.current = onJointMove;
@@ -102,7 +123,7 @@ export function ModelViewer({
     el.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+    const camera = new THREE.PerspectiveCamera(FOV, 1, 0.01, 1000);
     camera.position.set(2.5, 1.6, 3.5);
     // A soft studio around the model: metal and PBR materials reflect their surroundings, and with
     // nothing to reflect they render nearly black. Plus a key light, a front fill and a rim light.
@@ -218,6 +239,34 @@ export function ModelViewer({
       sceneRef.current = { model: null, mixer: null, clips: [] };
     };
   }, [url]);
+
+  // Flat view: a very narrow lens from far away, so lines that are straight on the model look
+  // straight (no perspective) while the orbit, zoom and joint arrows keep working as usual.
+  useEffect(() => {
+    const { camera, controls } = sceneRef.current;
+    if (!camera || !controls) return;
+    const fov = flat ? FLAT_FOV : FOV;
+    if (camera.fov === fov) return;
+    const offset = camera.position.clone().sub(controls.target);
+    const scale = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.tan(THREE.MathUtils.degToRad(fov / 2));
+    camera.fov = fov;
+    camera.position.copy(controls.target).add(offset.multiplyScalar(scale));
+    camera.near = (sceneRef.current.radius ?? 1) / 100;
+    camera.far = Math.max(camera.position.distanceTo(controls.target) * 4, (sceneRef.current.radius ?? 1) * 100);
+    camera.updateProjectionMatrix();
+    controls.update();
+  }, [flat, loaded]);
+
+  /** Turns the camera to look exactly along an axis (keeping its distance). */
+  const look = (view: View) => {
+    const { camera, controls } = sceneRef.current;
+    if (!camera || !controls) return;
+    const distance = camera.position.distanceTo(controls.target);
+    camera.position.copy(controls.target).add(VIEWS[view].clone().multiplyScalar(distance));
+    camera.up.set(0, 1, 0);
+    camera.lookAt(controls.target);
+    controls.update();
+  };
 
   // LOD visibility and wireframe.
   useEffect(() => {
@@ -421,6 +470,24 @@ export function ModelViewer({
     <div className="stage" ref={host}>
       {state !== "ready" && (
         <div className="stage__overlay">{state === "loading" ? "Loading model…" : "The model could not be loaded."}</div>
+      )}
+      {state === "ready" && (
+        <div className="stage__views" role="toolbar" aria-label="Camera">
+          {(Object.keys(VIEWS) as View[]).map((view) => (
+            <Button key={view} size="sm" variant="ghost" onClick={() => look(view)} title={VIEW_TITLES[view]}>
+              {view}
+            </Button>
+          ))}
+          <Button
+            size="sm"
+            variant={flat ? "primary" : "ghost"}
+            aria-pressed={flat}
+            onClick={() => setFlat(!flat)}
+            title="No perspective: straight lines on the model stay straight, for lining up joints"
+          >
+            Flat
+          </Button>
+        </div>
       )}
     </div>
   );
