@@ -204,3 +204,22 @@ def test_an_item_with_a_person_in_the_picture_fails(tmp_path):
     assert next(c for c in worn if c["id"] == "alone")["status"] == qc.FAIL
     assert next(c for c in alone if c["id"] == "alone")["status"] == qc.PASS
     assert not any(c["id"] == "alone" for c in qc.candidate_checks(picture, kind="hero", posed_biped=False, vision=None))
+
+
+def test_pairs_may_be_two_objects_and_two_mesh_parts():
+    two = {"pieces": 2, "largest_piece_share": 0.51, "open_edges": 0, "edges": 100}
+    assert next(c for c in qc.mesh_checks(two, "gear", pair=True) if c["id"] == "pieces")["status"] == qc.PASS
+    assert next(c for c in qc.mesh_checks(two, "gear") if c["id"] == "pieces")["status"] == qc.FAIL
+    junk = {"pieces": 6, "largest_piece_share": 0.3, "open_edges": 0, "edges": 100}
+    assert next(c for c in qc.mesh_checks(junk, "gear", pair=True) if c["id"] == "pieces")["status"] == qc.FAIL
+
+
+def test_a_pair_of_gloves_is_one_subject(tmp_path):
+    from test_pose import figure
+    picture = figure(tmp_path / "gloves.png", arms_out=True)
+    pair = qc.candidate_checks(picture, kind="gear", posed_biped=False, pair=True,
+                               vision={"figures": 2, "whole_body": True, "person": False})
+    assert next(c for c in pair if c["id"] == "figures")["status"] == qc.PASS
+    three = qc.candidate_checks(picture, kind="gear", posed_biped=False, pair=True,
+                                vision={"figures": 3, "whole_body": True, "person": False})
+    assert next(c for c in three if c["id"] == "figures")["status"] == qc.FAIL

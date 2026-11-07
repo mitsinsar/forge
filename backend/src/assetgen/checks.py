@@ -54,7 +54,12 @@ def _shapes(mask: np.ndarray) -> list[int]:
     return sorted(sizes, reverse=True)
 
 
-def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict | None) -> list[dict]:
+# Gear slots made as a matching pair (two gloves, two boots, two leg pieces): two objects are right.
+PAIR_SLOTS = ("hands", "feet", "legs")
+
+
+def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict | None,
+                     pair: bool = False) -> list[dict]:
     checks = []
     with Image.open(path) as image:
         image.thumbnail((256, 256))
@@ -65,8 +70,12 @@ def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict |
     # The vision model counts figures; the silhouette splits on low contrast (dark clothes on a
     # dark background), so on its own it only warns.
     seen = int(vision.get("figures", 1)) if vision else None
-    if seen is not None and seen > 1:
-        checks.append(check("figures", "One subject", FAIL, f"{seen} separate figures or objects"))
+    allowed = 2 if pair else 1
+    if seen is not None and seen > allowed:
+        checks.append(check("figures", "One subject" if not pair else "One pair",
+                            FAIL, f"{seen} separate figures or objects"))
+    elif pair:
+        checks.append(check("figures", "One pair", PASS, f"{seen or pieces} piece{'s' if (seen or pieces) != 1 else ''}"))
     elif seen is None and pieces > 1:
         checks.append(check("figures", "One subject", WARN, f"The outline falls into {pieces} parts"))
     else:
@@ -104,11 +113,12 @@ def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict |
     return checks
 
 
-def mesh_checks(stats: dict | None, kind: str = "hero") -> list[dict]:
+def mesh_checks(stats: dict | None, kind: str = "hero", pair: bool = False) -> list[dict]:
     if not stats:
         return []
     share = float(stats.get("largest_piece_share", 1.0))
-    loose = 1 - share
+    # A pair is two main pieces: count only what is outside both (taking the second about the size of the first).
+    loose = (0.0 if int(stats.get("pieces", 1)) <= 2 else max(0.0, 1 - 2 * share)) if pair else 1 - share
     open_share = stats.get("open_edges", 0) / max(stats.get("edges", 1), 1)
     floor = float(stats.get("floor_ratio", 1.0))
     found = [check("floor", "No floor under the feet", FAIL if floor > 4 else WARN if floor > 2.5 else PASS,
@@ -116,8 +126,10 @@ def mesh_checks(stats: dict | None, kind: str = "hero") -> list[dict]:
                    "shadow, which tears when the character moves. Reject gate 1 for another image, or reject gate 2."
                    if floor > 2.5 else "The model stands on its own feet")] if kind in ("hero", "monster", "boss") else []
     return found + [
-        check("pieces", "One solid piece", FAIL if loose > 0.25 else WARN if loose > 0.08 else PASS,
-              f"{stats.get('pieces', 1)} pieces; {round(loose * 100)} % of the vertices outside the main one"),
+        check("pieces", "One solid pair" if pair else "One solid piece",
+              FAIL if loose > 0.25 else WARN if loose > 0.08 else PASS,
+              f"{stats.get('pieces', 1)} pieces; {round(loose * 100)} % of the vertices outside the main "
+              f"{'two' if pair else 'one'}"),
         check("holes", "Few holes", WARN if open_share > 0.03 else PASS,
               f"{round(open_share * 100, 1)} % of the edges border a hole"),
     ]
