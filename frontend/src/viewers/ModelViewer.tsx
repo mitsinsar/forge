@@ -98,6 +98,11 @@ interface Props {
   onJointPick?: (name: string) => void;
   /** Select this joint in the editor (picked elsewhere, such as the guide's figure). */
   pickedJoint?: string;
+  /** Place an item: the extra GLB at ``url`` is held still at the rest pose (with the model) and its
+   *  item gets move / rotate / scale arrows. */
+  adjust?: { url: string; mode: "translate" | "rotate" | "scale" } | null;
+  /** The item's move so far: a 4x4 matrix (rows) in Blender world space at the rest pose. */
+  onAdjust?: (rows: number[][]) => void;
   /** More GLBs shown with the model and playing the same clip: items fitted on it (an outfit). Their
    *  copy of the body (meshes named `mannequin`) is hidden; one without the clip is hidden too. */
   extras?: string[];
@@ -118,6 +123,8 @@ export function ModelViewer({
   onJointTwist,
   onJointPick,
   pickedJoint,
+  adjust,
+  onAdjust,
   extras,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
@@ -141,6 +148,10 @@ export function ModelViewer({
   useEffect(() => {
     onJointMoveRef.current = onJointMove;
   }, [onJointMove]);
+  const onAdjustRef = useRef(onAdjust);
+  useEffect(() => {
+    onAdjustRef.current = onAdjust;
+  }, [onAdjust]);
   const onJointTwistRef = useRef(onJointTwist);
   useEffect(() => {
     onJointTwistRef.current = onJointTwist;
@@ -370,19 +381,25 @@ export function ModelViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [extrasKey, loaded]);
 
-  // Clip playback (held at the rest pose while joints are edited).
+  // Clip playback (held at the rest pose while joints are edited or an item is placed).
+  const placing = !!adjust;
   useEffect(() => {
     const { mixer, clips, model } = sceneRef.current;
     if (!mixer || !model) return;
     mixer.stopAllAction();
     const name = (clips.find((c) => c.name === clip) ?? clips[0])?.name;
+    const still = editJoints || placing; // the rest pose, for editing joints or placing an item
     sceneRef.current.extras?.forEach((extra) => {
       extra.mixer.stopAllAction();
       const own = extra.clips.find((c) => c.name === name);
       extra.model.visible = !!own || !name;
-      if (own) extra.mixer.clipAction(own).reset().setLoop(THREE.LoopRepeat, Infinity).play();
+      if (still) {
+        extra.model.traverse((obj) => {
+          if (obj instanceof THREE.SkinnedMesh) obj.skeleton.pose();
+        });
+      } else if (own) extra.mixer.clipAction(own).reset().setLoop(THREE.LoopRepeat, Infinity).play();
     });
-    if (editJoints) {
+    if (still) {
       model.traverse((obj) => {
         if (obj instanceof THREE.SkinnedMesh) obj.skeleton.pose();
       });
@@ -390,7 +407,73 @@ export function ModelViewer({
     }
     const found = clips.find((c) => c.name === clip) ?? clips[0];
     if (found) mixer.clipAction(found).reset().setLoop(THREE.LoopRepeat, Infinity).play();
-  }, [clip, loaded, editJoints, extrasLoaded]);
+  }, [clip, loaded, editJoints, extrasLoaded, placing]);
+
+  // Placing an item: a still copy of it (at the rest pose) gets the arrows; its move is reported in
+  // Blender's world space, where the fit applies it.
+  const adjustGizmo = useRef<TransformControls | null>(null);
+  useEffect(() => {
+    const { scene, camera, controls, canvas } = sceneRef.current;
+    const extra = adjust ? sceneRef.current.extras?.get(adjust.url) : undefined;
+    if (!adjust || !extra || !scene || !camera || !controls || !canvas) return;
+    extra.model.updateMatrixWorld(true);
+    const originals: THREE.Mesh[] = [];
+    extra.model.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && !/^mannequin/i.test(obj.name) && obj.visible) originals.push(obj);
+    });
+    if (!originals.length) return;
+    // The pivot: the hand's socket for a weapon (it is parented to that bone), else the item's middle.
+    const socket = originals.find((m) => m.parent instanceof THREE.Bone)?.parent;
+    const pivot = new THREE.Vector3();
+    if (socket) socket.getWorldPosition(pivot);
+    else new THREE.Box3().setFromObject(extra.model).getCenter(pivot);
+    const group = new THREE.Group();
+    group.position.copy(pivot);
+    scene.add(group);
+    group.updateMatrixWorld(true);
+    for (const mesh of originals) {
+      const copy = new THREE.Mesh(mesh.geometry, mesh.material);
+      mesh.matrixWorld.decompose(copy.position, copy.quaternion, copy.scale);
+      scene.add(copy);
+      group.attach(copy);
+      mesh.visible = false;
+    }
+    const start = group.matrixWorld.clone();
+    const root = extra.model.matrixWorld.clone();
+    // three (Y up, +Z front) to Blender (Z up, -Y front): (x, y, z) -> (x, -z, y).
+    const toBlenderBasis = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1);
+    const gizmo = new TransformControls(camera, canvas);
+    gizmo.setSize(0.9);
+    gizmo.setMode(adjust.mode);
+    gizmo.attach(group);
+    const helper = gizmo.getHelper();
+    scene.add(helper);
+    adjustGizmo.current = gizmo;
+    gizmo.addEventListener("dragging-changed", (event) => {
+      controls.enabled = !event.value;
+    });
+    gizmo.addEventListener("objectChange", () => {
+      group.updateMatrixWorld(true);
+      const move = group.matrixWorld.clone().multiply(start.clone().invert()); // in the scene
+      const local = root.clone().invert().multiply(move).multiply(root); // in the GLB's own space
+      const blender = toBlenderBasis.clone().multiply(local).multiply(toBlenderBasis.clone().invert());
+      const e = blender.elements; // column-major
+      onAdjustRef.current?.([0, 1, 2, 3].map((r) => [0, 1, 2, 3].map((c) => Math.round(e[c * 4 + r] * 1e6) / 1e6)));
+    });
+    return () => {
+      gizmo.detach();
+      scene.remove(helper);
+      gizmo.dispose();
+      adjustGizmo.current = null;
+      scene.remove(group);
+      originals.forEach((m) => (m.visible = true));
+      controls.enabled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adjust?.url, extrasLoaded, loaded]);
+  useEffect(() => {
+    if (adjust) adjustGizmo.current?.setMode(adjust.mode);
+  }, [adjust?.mode, adjust]);
 
   // Joint editor: a handle per joint, a line per bone and an arrow for the way each joint faces,
   // drawn through the mesh at a fixed size on screen. Click a handle to pick it; drag the arrows to

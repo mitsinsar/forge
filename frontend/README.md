@@ -47,7 +47,9 @@ After `npm run build`, `uv run assetgen` serves the app itself at http://127.0.0
   commands to copy. The header's tool badges open it (a red one restarts its tool on a click).
 * **Outfits** — pick a rigged hero or the **Test dummy** (the base mannequin, always there), then gear per slot and a weapon; the 3D view plays the hero
   with every item fitted on it (an item not yet fitted on that hero is fitted by a worker job and
-  appears when ready). Outfits can be saved, loaded ("Wear") and deleted.
+  appears when ready). **Adjust <item>** holds the hero still and puts move / rotate / scale arrows on
+  the item (a weapon turns around the hand); **Save placement** fits it again on that hero with the
+  change, kept per hero. Outfits can be saved, loaded ("Wear") and deleted.
 * **Projects**, **Style profiles** (all fields, reference images, LoRAs of the same base model,
   and an example sheet: a knight, a wolf and a sword in the profile's style) and the **LoRA
   library** (upload or register by path; each LoRA's Examples show the same three subjects with

@@ -20,6 +20,8 @@ import shutil
 import traceback
 from pathlib import Path
 
+import numpy as np
+
 from .adapters import Adapters
 from .archetypes import ARCHETYPES_DIR, get_archetype, load_archetypes
 from .config import Settings
@@ -384,6 +386,18 @@ class Pipeline:
         (out.parent / "clips.json").write_text(json.dumps(result["clips"]), encoding="utf-8")
         return {"clips": result["clips"]}
 
+    def place_item(self, item_id: str, wearer_id: str, change: list[list[float]] | None) -> dict:
+        """Adds ``change`` (a 4x4 move in Blender world space at the rest pose) to the item's kept
+        placement on this wearer, or forgets it (``None``). The next fit on that wearer applies it."""
+        item = self._require(item_id)
+        placements = dict(item.get("placements") or {})
+        if change is None:
+            placements.pop(wearer_id, None)
+        else:
+            before = np.array(placements.get(wearer_id) or np.eye(4), float)
+            placements[wearer_id] = [[round(float(v), 6) for v in row] for row in np.array(change, float) @ before]
+        return self.db.update("assets", item_id, {"placements": placements})
+
     def _drop_fits_on(self, hero_id: str) -> None:
         """Gear and weapons fitted on this hero were fitted on its old skeleton and clips: dropped
         when it is rigged again (outfits fit them anew)."""
@@ -407,6 +421,9 @@ class Pipeline:
         attach = self._attach_for(item)
         if not dummy:
             attach["wearer"] = wearer
+        placement = (item.get("placements") or {}).get(wearer["id"])
+        if placement:
+            attach["placement"] = placement
         archetype = get_archetype("biped")
         clips = self.clips_for(item, self.asset_settings(item))
         result = self.adapters.blender.rig_and_animate(
@@ -414,7 +431,7 @@ class Pipeline:
             skeleton={"joints": archetype["joints"], "fit_score": 1.0, "fallback": False}, archetype=archetype,
             clips=clips, attach=attach, out_path=directory / "animated.glb", progress=progress)
         fit = {"glb": self._rel(item["id"], result["glb"]), "clips": result["clips"],
-               "wearer": {"id": wearer["id"], "name": wearer["name"]}, "at": now(),
+               "wearer": {"id": wearer["id"], "name": wearer["name"]}, "at": now(), "placed": bool(placement),
                **{k: v for k, v in (result.get("gear") or {}).items()}}
         item = self._require(item["id"])
         self.db.update("assets", item["id"], {"fits": {**(item.get("fits") or {}), wearer["id"]: fit}})

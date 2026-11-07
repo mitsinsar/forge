@@ -734,3 +734,28 @@ def test_a_twisted_knee_faces_the_new_way_and_every_clip_reports_its_drift(tmp_p
     assert np.allclose(twisted["joints"]["foot_l"]["front"], plain["joints"]["foot_l"]["front"], atol=1e-3)
     (walk,) = plain["clips"]
     assert walk["follow"]["bone"] and 0 <= walk["follow"]["degrees"] < 20
+
+
+@needs_blender
+def test_a_placement_moves_the_weapon_on_its_socket(tmp_path):
+    """The user's placement (Blender world space, rest pose) moves the weapon; it stays on the socket."""
+    mesh = tmp_path / "stick.glb"
+    builder = GlbBuilder()
+    material = builder.add_material("albedo", (0.5, 0.5, 0.5))
+    parts = [Part((0, 0.11, 0), (0.015, 0.11, 0.015), 1), Part((0, 0.62, 0), (0.05, 0.40, 0.008), 3)]
+    builder.add_node("LOD0", builder.add_mesh("LOD0", build_mesh(parts, 4000), material))
+    builder.write(mesh)
+    attach = {"kind": "weapon", "weapon_class": "one_handed", "socket": "weapon_r", "grip_matrix": None}
+
+    def weapon_node(folder, extra):
+        out = tmp_path / folder
+        out.mkdir()
+        result, gltf, _ = _attach(out, mesh, {**attach, **extra}, clips=("walk",))
+        names = [n.get("name") for n in gltf["nodes"]]
+        assert names.index("weapon") in gltf["nodes"][names.index("weapon_r")].get("children", [])
+        return np.array(gltf["nodes"][names.index("weapon")].get("translation", [0, 0, 0]))
+
+    plain = weapon_node("plain", {})
+    up = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0.1], [0, 0, 0, 1]]  # 10 cm up (Blender Z)
+    moved = weapon_node("moved", {"placement": up})
+    assert 0.09 < float(np.linalg.norm(moved - plain)) < 0.11  # moved 10 cm, still under the socket

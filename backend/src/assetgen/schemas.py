@@ -202,7 +202,11 @@ class Reject(Strict):
 
 
 class FitRequest(Strict):
-    wearer_id: str = Field(description="A rigged biped hero of the same project.")
+    wearer_id: str = Field(description="A rigged biped hero of the same project, or \"dummy\".")
+    placement: list[list[float]] | None = Field(
+        None, description="A move of the item on this hero, added to any kept one: a 4x4 matrix (rows) in "
+                          "Blender world space at the rest pose (Z up, -Y front, metres), applied to the fitted item.")
+    reset_placement: bool = Field(False, description="Forget this hero's placement and fit the item as detected.")
 
 
 class ExamplesRequest(Strict):

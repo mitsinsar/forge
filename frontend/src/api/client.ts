@@ -337,6 +337,8 @@ export interface AssetOutputs {
 
 export interface Asset {
   id: string;
+  /** Gear and weapons: the user's placement on each hero (4x4 rows, Blender world space, rest pose). */
+  placements?: Record<string, number[][]>;
   project_id: string;
   profile_id: string | null;
   kind: Kind;
@@ -547,7 +549,8 @@ export const api = {
     request<Lora>("DELETE", `/loras/${id}/example-images/${encodeURIComponent(name)}`),
   jobs: (filters: { target_id?: string; kind?: string; status?: string }) =>
     request<Job[]>("GET", `/jobs${query(filters)}`),
-  fit: (assetId: string, wearerId: string) => request<Job>("POST", `/assets/${assetId}/fits`, { wearer_id: wearerId }),
+  fit: (assetId: string, wearerId: string, placement?: { placement?: number[][]; reset_placement?: boolean }) =>
+    request<Job>("POST", `/assets/${assetId}/fits`, { wearer_id: wearerId, ...placement }),
   outfits: (projectId?: string) => request<Outfit[]>("GET", `/outfits${query({ project_id: projectId })}`),
   createOutfit: (input: Omit<Outfit, "id">) => request<Outfit>("POST", "/outfits", input),
   updateOutfit: (id: string, input: Partial<Omit<Outfit, "id" | "project_id">>) =>
