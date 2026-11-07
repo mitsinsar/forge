@@ -306,16 +306,29 @@ export function Gate2({ asset }: { asset: Asset }) {
   const mesh = asset.outputs.mesh;
   const [lod, setLod] = useState(0);
   const [wireframe, setWireframe] = useState(false);
+  const [showImage, setShowImage] = useState(false);
   const url = localUrl(asset.urls?.mesh);
+  const image = localUrl(asset.urls?.chosen_image);
   return (
     <Card
       title="Gate 2 · Approve the mesh"
       subtitle={mesh ? meshSummary(mesh) : undefined}
       actions={
-        asset.urls?.chosen_image && (
-          <Box width={56}>
-            <Thumb src={localUrl(asset.urls.chosen_image)} alt="Picked preview" />
-          </Box>
+        image && (
+          <>
+            <Box width={56}>
+              <Thumb src={image} alt="Picked preview (click to enlarge)" onClick={() => setShowImage(true)} />
+            </Box>
+            <Dialog
+              open={showImage}
+              wide
+              title="The image the mesh was built from"
+              onClose={() => setShowImage(false)}
+              actions={<Button onClick={() => setShowImage(false)}>Close</Button>}
+            >
+              <Thumb src={image} alt="Picked preview" />
+            </Dialog>
+          </>
         )
       }
     >
