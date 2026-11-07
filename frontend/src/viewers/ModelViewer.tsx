@@ -39,12 +39,26 @@ interface Props {
   moved?: Record<string, Vec3>;
   editJoints?: boolean;
   onJointMove?: (name: string, head: Vec3) => void;
+  /** Called with the joint clicked in the editor (for the placement hint). */
+  onJointPick?: (name: string) => void;
   /** More GLBs shown with the model and playing the same clip: items fitted on it (an outfit). Their
    *  copy of the body (meshes named `mannequin`) is hidden; one without the clip is hidden too. */
   extras?: string[];
 }
 
-export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved, editJoints, onJointMove, extras }: Props) {
+export function ModelViewer({
+  url,
+  lod,
+  clip,
+  onClips,
+  wireframe,
+  joints,
+  moved,
+  editJoints,
+  onJointMove,
+  onJointPick,
+  extras,
+}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<{
     model: THREE.Object3D | null;
@@ -62,6 +76,10 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
   useEffect(() => {
     onJointMoveRef.current = onJointMove;
   }, [onJointMove]);
+  const onJointPickRef = useRef(onJointPick);
+  useEffect(() => {
+    onJointPickRef.current = onJointPick;
+  }, [onJointPick]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [loaded, setLoaded] = useState(0);
   const onClipsRef = useRef(onClips);
@@ -364,6 +382,7 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
         gizmo.attach(picked);
         canvas.dataset.pickedJoint = (best as THREE.Mesh).name;  // for checks and tests
         paint();
+        onJointPickRef.current?.((best as THREE.Mesh).name);
       }
     };
     canvas.addEventListener("pointerdown", onPointerDown);
