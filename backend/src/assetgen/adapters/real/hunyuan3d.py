@@ -148,12 +148,16 @@ class Hunyuan3DMesh:
                 with Image.open(cutout) as cut:
                     has_alpha = cut.mode == "RGBA"
             else:
-                progress("Removing the background", 0.02)
+                # The server's rembg (a segmentation model) cuts out far better than our flood fill,
+                # which leaves soft gradients and floor shadows in, and Hunyuan3D then builds them
+                # as a floor plate. Only an image that is already cut out (an upload with
+                # transparency) skips it.
                 with Image.open(image) as source:
-                    cut, background = imaging.remove_background(source)
-                has_alpha = background != "none"
+                    has_alpha = source.mode == "RGBA" and source.getchannel("A").getextrema()[0] < 255
+                    kept = source.convert("RGBA" if has_alpha else "RGB")
+                background = "yours" if has_alpha else "hunyuan3d rembg"
                 buffer = io.BytesIO()
-                (cut if has_alpha else cut.convert("RGB")).save(buffer, format="PNG")
+                kept.save(buffer, format="PNG")
                 _write_atomic(cutout, buffer.getvalue())
 
             job_file = directory / JOB_FILE

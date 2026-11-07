@@ -744,7 +744,7 @@ class Pipeline:
                 "removed": result.get("removed"), "stats": result.get("stats"),
                 "views": sorted(self._rel(asset["id"], p) for p in (directory / "views").glob("*.png")
                                 if p.stem in HUNYUAN_VIEW) if quality.get("multi_view") else None,
-                "checks": qc.mesh_checks(result.get("stats"))}
+                "checks": qc.mesh_checks(result.get("stats"), asset["kind"])}
 
     def _stage_rig(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)

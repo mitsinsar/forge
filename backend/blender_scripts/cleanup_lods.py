@@ -234,8 +234,23 @@ def mesh_stats(obj) -> dict:
         sizes.append(size)
     total = max(len(bm.verts), 1)
     bm.free()
+    # A floor plate (the image's ground or shadow built into the mesh): the lowest 2 % of the model
+    # is far wider than the ankles just above it.
+    points = [obj.matrix_world @ v.co for v in obj.data.vertices]
+    floor_ratio = 1.0
+    if points:
+        low, high = min(p.z for p in points), max(p.z for p in points)
+        height = max(high - low, 1e-6)
+
+        def area(z0, z1):
+            band = [p for p in points if low + z0 * height <= p.z <= low + z1 * height]
+            if len(band) < 3:
+                return 0.0
+            return (max(p.x for p in band) - min(p.x for p in band)) * (max(p.y for p in band) - min(p.y for p in band))
+
+        floor_ratio = round(area(0.0, 0.02) / max(area(0.05, 0.12), 1e-6), 2)
     return {"pieces": pieces, "largest_piece_share": round(max(sizes or [0]) / total, 3),
-            "open_edges": open_edges, "edges": len(obj.data.edges)}
+            "open_edges": open_edges, "edges": len(obj.data.edges), "floor_ratio": floor_ratio}
 
 
 def main(args: dict) -> dict:

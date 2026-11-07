@@ -213,22 +213,32 @@ def test_success_writes_glb_and_albedo(fake_hunyuan, tmp_path):
 
     (send,) = server.sends()
     assert send["path"] == "/send"
-    assert send["body"]["texture"] is True and send["body"]["remove_background"] is False
+    assert send["body"]["texture"] is True and send["body"]["remove_background"] is True  # the server's rembg
     names = [s for s, _ in steps]
-    assert names[0] == "Removing the background"
     assert "Building the shape" in names and "Painting the texture" in names and names[-1] == "Mesh ready"
     assert all(0 <= f <= 1 for _, f in steps)
 
 
-def test_background_is_removed_before_sending(fake_hunyuan, tmp_path):
+def test_the_server_cuts_the_background_out_unless_the_image_is_cut_out(fake_hunyuan, tmp_path):
+    """Our flood fill left gradients and floor shadows in, which Hunyuan3D built as a floor plate;
+    its own rembg cuts generated images out. An upload that is already transparent is kept."""
     server = fake_hunyuan()
     run(adapter(tmp_path, server.url), tmp_path)
-    sent = Image.open(io.BytesIO(base64.b64decode(server.sends()[0]["body"]["image"])))
-    assert sent.mode == "RGBA"
-    alpha = np.asarray(sent.getchannel("A"))
-    assert alpha[0, 0] == 0 and alpha[5, 64] == 0 and alpha[127, 127] == 0  # grey background gone
-    assert alpha[60, 64] == 255  # the figure stays
+    body = server.sends()[0]["body"]
+    sent = Image.open(io.BytesIO(base64.b64decode(body["image"])))
+    assert sent.mode == "RGB" and body["remove_background"] is True
     assert (tmp_path / CUTOUT_FILE).is_file()
+
+    cut = tmp_path / "cut"
+    cut.mkdir()
+    upload = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    upload.paste((200, 30, 30, 255), (20, 10, 44, 60))
+    upload.save(cut / "upload.png")
+    adapter(cut, server.url).image_to_mesh(image=cut / "upload.png", texture_size=64, out_path=cut / "raw.glb",
+                                           progress=lambda s, f: None, hints={"asset_id": "a2", "attempt": 1})
+    body = server.sends()[-1]["body"]
+    assert Image.open(io.BytesIO(base64.b64decode(body["image"]))).mode == "RGBA"
+    assert body["remove_background"] is False
 
 
 def test_busy_background_is_left_to_hunyuan(tmp_path):
