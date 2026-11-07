@@ -338,6 +338,8 @@ then run (all archetypes, or only those named; `--out DIR` writes elsewhere):
 It rewrites the templates (and the biped's `base_body.blend`), `clips.json`, `LICENCES.md` and the `joints`, `clips`, `sockets` and
 source fields of `archetype.json`. Which source clip feeds each of our clips is the `SOURCES`
 table at the top of the script; swapping a pack (Truebones, Mixamo) means changing that table.
+The biped's idle is made symmetric (`"square"` in that table): each frame is averaged with its
+mirror image, because every standing idle in the pack stands turned with one foot ahead.
 
 ### UniRig (rig, gate 3)
 
