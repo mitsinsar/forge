@@ -72,6 +72,7 @@ CLASS_FOLDERS = {"CLIPVisionLoader": "clip_vision", "IPAdapterUnifiedLoader": "i
 
 DEFAULT_WORKFLOWS_DIR = Path(__file__).resolve().parents[4] / "workflows"
 HTTP_TIMEOUT = 30.0
+HISTORY_TRIES, HISTORY_WAIT = 10, 0.5  # seconds between asks for a finished run's history
 
 
 def load_workflow(directory: Path, base_model: str) -> dict:
@@ -480,10 +481,15 @@ class ComfyUIImage:
         return self._download(prompt_id, find_node(workflow, "save"))
 
     def _download(self, prompt_id: str, save_node: str) -> bytes:
-        history = (self._json("GET", f"/history/{prompt_id}") or {}).get(prompt_id) or {}
-        outputs = history.get("outputs") or {}
-        images = (outputs.get(save_node) or {}).get("images") or next(
-            (o["images"] for o in outputs.values() if o.get("images")), [])
+        # ComfyUI can report success a moment before it writes the run's history: ask a few times.
+        for attempt in range(HISTORY_TRIES):
+            history = (self._json("GET", f"/history/{prompt_id}") or {}).get(prompt_id) or {}
+            outputs = history.get("outputs") or {}
+            images = (outputs.get(save_node) or {}).get("images") or next(
+                (o["images"] for o in outputs.values() if o.get("images")), [])
+            if images:
+                break
+            time.sleep(HISTORY_WAIT)
         if not images:
             raise ComfyUIError("ComfyUI finished but returned no image.")
         image = images[0]

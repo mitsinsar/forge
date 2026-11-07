@@ -49,12 +49,13 @@ def ws_frame(text: str) -> bytes:
 
 class FakeComfyUI:
     def __init__(self, models: set[str] | None = None, nodes: set[str] | None = None, loras: list[str] | None = None,
-                 steps: int = 3, hang: bool = False):
+                 steps: int = 3, hang: bool = False, history_late: int = 0):
         self.models = set(models or ())
         self.loras = list(loras or [])
         self.nodes = set(nodes if nodes is not None else CORE_NODES | IPADAPTER_NODES)
         self.steps = steps
         self.hang = hang
+        self.history_late = history_late  # how many /history asks find nothing yet after a run
         self.prompts: list[dict] = []  # the workflows queued, in order
         self.uploads: dict[str, bytes] = {}
         self.freed: list[dict] = []
@@ -88,6 +89,9 @@ class FakeComfyUI:
                     return self._json({name: {"input": {}}} if name in fake.nodes else {})
                 if url.path.startswith("/history/"):
                     prompt_id = url.path.rsplit("/", 1)[1]
+                    if fake.history_late > 0:
+                        fake.history_late -= 1
+                        return self._json({})
                     return self._json({prompt_id: fake.history[prompt_id]} if prompt_id in fake.history else {})
                 if url.path == "/view":
                     name = urllib.parse.parse_qs(url.query)["filename"][0]

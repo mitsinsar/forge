@@ -331,3 +331,10 @@ def test_pose_guide_skipped_without_the_controlnet_or_on_other_models(fake_comfy
     render_posed(adapter(server.url, tmp_path / "flux"), tmp_path / "flux", base_model="flux", log=lines.append)
     assert node_of(server.prompts[0], "ControlNetLoader") == []
     assert any("No pose guide for Flux" in line for line in lines)
+
+
+def test_history_written_after_the_success_message_is_waited_for(fake_comfy, tmp_path, monkeypatch):
+    monkeypatch.setattr("assetgen.adapters.real.comfyui.HISTORY_WAIT", 0.01)
+    server = fake_comfy(history_late=3)
+    (path,) = render(adapter(server.url, tmp_path), tmp_path, count=1)
+    assert path.is_file()
