@@ -97,13 +97,18 @@ def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict |
     return checks
 
 
-def mesh_checks(stats: dict | None) -> list[dict]:
+def mesh_checks(stats: dict | None, kind: str = "hero") -> list[dict]:
     if not stats:
         return []
     share = float(stats.get("largest_piece_share", 1.0))
     loose = 1 - share
     open_share = stats.get("open_edges", 0) / max(stats.get("edges", 1), 1)
-    return [
+    floor = float(stats.get("floor_ratio", 1.0))
+    found = [check("floor", "No floor under the feet", FAIL if floor > 4 else WARN if floor > 2.5 else PASS,
+                   f"The bottom is {floor:g}x as wide as the ankles: a floor plate from the image's ground or "
+                   "shadow, which tears when the character moves. Reject gate 1 for another image, or reject gate 2."
+                   if floor > 2.5 else "The model stands on its own feet")] if kind in ("hero", "monster", "boss") else []
+    return found + [
         check("pieces", "One solid piece", FAIL if loose > 0.25 else WARN if loose > 0.08 else PASS,
               f"{stats.get('pieces', 1)} pieces; {round(loose * 100)} % of the vertices outside the main one"),
         check("holes", "Few holes", WARN if open_share > 0.03 else PASS,
