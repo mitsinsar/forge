@@ -157,15 +157,15 @@ class QwenLLM:
         self.model = settings.qwen_model
         self._format = 0  # index into RESPONSE_FORMATS; moves on when the server refuses one
 
-    def _post(self, messages: list[dict]) -> str:
+    def _post(self, messages: list[dict], model: str | None = None) -> str:
         while True:
             try:
-                return self._post_once(messages, RESPONSE_FORMATS[self._format])
+                return self._post_once(messages, RESPONSE_FORMATS[self._format], model)
             except _FormatRefused:
                 self._format += 1
 
-    def _post_once(self, messages: list[dict], response_format: dict | None) -> str:
-        fields = {"model": self.model, "messages": messages, "temperature": 0.4}
+    def _post_once(self, messages: list[dict], response_format: dict | None, model: str | None = None) -> str:
+        fields = {"model": model or self.model, "messages": messages, "temperature": 0.4}
         if response_format is not None:
             fields["response_format"] = response_format
         body = json.dumps(fields).encode("utf-8")
@@ -190,19 +190,45 @@ class QwenLLM:
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"Qwen at {self.url} answered without a message.") from exc
 
-    def inspect(self, *, image, kind):
-        """Asks the (vision) model about a candidate. Returns None when it can't look at images."""
+    @staticmethod
+    def _image_part(path, size: int = 512) -> dict:
         import base64  # noqa: PLC0415
         import io  # noqa: PLC0415
 
         from PIL import Image  # noqa: PLC0415
 
-        with Image.open(image) as opened:
+        with Image.open(path) as opened:
             small = opened.convert("RGB")
-            small.thumbnail((512, 512))
+            small.thumbnail((size, size))
             buffer = io.BytesIO()
             small.save(buffer, "JPEG", quality=85)
         data = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}}
+
+    def judge_mesh(self, *, picture, views, description, kind, model=None):
+        """Compares renders of a finished 3D model with the picture it was made from. Returns
+        ``{"match": 0-10, "problems": [...]}``, or None when the model can't look at images."""
+        question = (f"The first image is the picture a 3D model was made from; it should show: {description}. "
+                    f"The next {len(views)} images are renders of that 3D model from the front, the side and the "
+                    "back. Judge the 3D model only. Answer only JSON: "
+                    '{"match": <0-10: how well the 3D model shows the same thing as the picture, with all its main '
+                    'parts, the right shape and colours; 10 is the same; take off for missing or extra parts, a '
+                    'ground or floor plate under it, melted or broken areas, holes, a wrong thing>, '
+                    '"problems": [<short phrases: what is wrong, or nothing>]}')
+        content = [{"type": "text", "text": question}, self._image_part(picture),
+                   *(self._image_part(v, 384) for v in views)]
+        try:
+            answer = json.loads(_json_part(self._post_once([{"role": "user", "content": content}], None, model)))
+        except (LLMError, ValueError):
+            return None
+        try:
+            match = max(0, min(10, int(round(float(answer.get("match"))))))
+        except (TypeError, ValueError):
+            return None
+        return {"match": match, "problems": [str(p) for p in (answer.get("problems") or []) if str(p).strip()][:5]}
+
+    def inspect(self, *, image, kind, description=None, model=None):
+        """Asks the (vision) model about a candidate. Returns None when it can't look at images."""
         subject = {"gear": "an armour or clothing piece shown alone", "weapon": "a weapon shown alone"}.get(
             kind, "a game character")
         question = (f"This image should show {subject}, whole, on a plain background. Answer only JSON: "
@@ -210,36 +236,44 @@ class QwenLLM:
                     'object, else false>, "held_item_name": <what it holds, or null>, "figures": <how many '
                     'separate figures or objects are shown>, "whole_body": <true if nothing is cut off by the '
                     'image edges>, "person": <true if a person, mannequin, body, head or limbs are shown, even '
-                    'only wearing or holding something, else false>}')
-        messages = [{"role": "user", "content": [
-            {"type": "text", "text": question},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}}]}]
+                    'only wearing or holding something, else false>'
+                    + (f', "match": <0-10: how well the image shows this description: {description}; the right '
+                       'thing, its parts, materials and colours; 10 is exact>, "problems": [<short phrases: what is '
+                       'wrong or missing, or nothing>]' if description else "") + '}')
+        messages = [{"role": "user", "content": [{"type": "text", "text": question}, self._image_part(image)]}]
         try:
-            answer = json.loads(_json_part(self._post_once(messages, None)))
+            answer = json.loads(_json_part(self._post_once(messages, None, model)))
         except (LLMError, ValueError):
             return None
-        return {"held_item": bool(answer.get("held_item")), "held_item_name": answer.get("held_item_name"),
-                "figures": int(answer.get("figures") or 1), "whole_body": bool(answer.get("whole_body", True)),
-                "person": bool(answer.get("person"))}
+        found = {"held_item": bool(answer.get("held_item")), "held_item_name": answer.get("held_item_name"),
+                 "figures": int(answer.get("figures") or 1), "whole_body": bool(answer.get("whole_body", True)),
+                 "person": bool(answer.get("person"))}
+        if description:
+            try:
+                found["match"] = max(0, min(10, int(round(float(answer.get("match"))))))
+            except (TypeError, ValueError):
+                pass
+            found["problems"] = [str(p) for p in (answer.get("problems") or []) if str(p).strip()][:5]
+        return found
 
-    def vary(self, *, description, kind, count):
+    def vary(self, *, description, kind, count, model=None):
         text = (f"Write {count} different variations of this {kind} description for a game asset generator. "
                 "Same kind of subject, but vary looks, colours, materials and details; one or two short sentences "
                 f'each. Answer only JSON: {{"descriptions": [<{count} strings>]}}.\n\nDescription: {description}')
-        answer = json.loads(_json_part(self._post_once([{"role": "user", "content": text}], None)))
+        answer = json.loads(_json_part(self._post_once([{"role": "user", "content": text}], None, model)))
         variants = [str(d).strip() for d in answer.get("descriptions", []) if str(d).strip()]
         if len(variants) < count:
             raise LLMError(f"Qwen wrote {len(variants)} variations instead of {count}.")
         return variants[:count]
 
-    def expand(self, *, description, kind, archetypes, archetype_override, slot, weapon_class, notes):
+    def expand(self, *, description, kind, archetypes, archetype_override, slot, weapon_class, notes, model=None):
         system = build_system_prompt(kind=kind, archetypes=archetypes, archetype_override=archetype_override,
                                      slot=slot, weapon_class=weapon_class, notes=notes)
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": f"Asset kind: {kind}\nDescription: {description.strip()}"}]
         problem = ""
         for attempt in range(ATTEMPTS):
-            content = self._post(messages)
+            content = self._post(messages, model)
             try:
                 data = parse_reply(content)
                 break

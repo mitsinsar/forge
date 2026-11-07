@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, exampleUrl, localUrl, MAX_EXTRA_LODS, type Kind, type MeshQuality, type Meta, type PerKind, type Profile, type ProfileInput } from "../api/client";
 import { keys, useApiMutation, useLatestJob, useLoras, useMeta, useProfile, useProjects } from "../api/queries";
 import { ExampleSheet, JobProgress } from "../components/Examples";
@@ -38,6 +38,7 @@ function toInput(source: Profile | Meta["profile_defaults"], name: string, proje
     name,
     project_id: projectId,
     base_model: source.base_model,
+    text_model: source.text_model ?? "",
     prompt_suffix: source.prompt_suffix,
     negative_prompt: source.negative_prompt,
     loras: source.loras.map((l) => ({ ...l, weight: Math.round(l.weight * 100) / 100 })),
@@ -203,6 +204,7 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
   const projects = useProjects();
   const allLoras = useLoras();
   const [form, setForm] = useState(initial);
+  const models = useQuery({ queryKey: ["models"], queryFn: api.models, staleTime: 60_000 });
   const [pending, setPending] = useState<{ file: File; preview: string }[]>([]);
   const [deleting, setDeleting] = useState(false);
   const set = <K extends keyof ProfileInput>(key: K, value: ProfileInput[K]) => setForm((f) => ({ ...f, [key]: value }));
@@ -300,12 +302,50 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
           </Grid>
         </Card>
 
-        <Card title="Image model" subtitle="Used for the gate 1 previews.">
+        <Card title="Models" subtitle="Which local model does each step. Only installed ones work; the Setup page says how to add the others.">
+          <Grid cols={3}>
+            <Field label="Language model" hint="Writes the image prompts and judges pictures and meshes (it needs vision).">
+              {(id) => (
+                <Select
+                  id={id}
+                  value={form.text_model ?? ""}
+                  onChange={(e) => set("text_model", e.target.value)}
+                  options={[
+                    { value: "", label: `Default (${models.data?.text_default ?? "from settings"})` },
+                    ...(models.data?.text ?? []).map((m) => ({ value: m.id, label: m.installed ? m.label : `${m.label} (not found)` })),
+                  ]}
+                />
+              )}
+            </Field>
+            <Field label="Image model" hint="Draws the gate 1 pictures. Changing it removes LoRAs made for another model.">
+              {(id) => (
+                <Select
+                  id={id}
+                  value={form.base_model}
+                  onChange={(e) => changeBaseModel(e.target.value as ProfileInput["base_model"])}
+                  options={(models.data?.image ?? meta.base_models.map((b) => ({ id: b, label: label(b), installed: true }))).map((m) => ({
+                    value: m.id,
+                    label: m.installed ? m.label : `${m.label} (not installed)`,
+                  }))}
+                />
+              )}
+            </Field>
+            <Field label="3D model" hint="Builds the mesh at gate 2. Multi-view (below) needs Hunyuan3D 2.1.">
+              {(id) => (
+                <Select
+                  id={id}
+                  value={form.mesh.model ?? "hunyuan3d-2.1"}
+                  onChange={(e) => set("mesh", { ...form.mesh, model: e.target.value as MeshQuality["model"] })}
+                  options={(models.data?.mesh ?? []).map((m) => ({ value: m.id, label: m.installed ? m.label : `${m.label} (not running)` }))}
+                />
+              )}
+            </Field>
+          </Grid>
+        </Card>
+
+        <Card title="Pictures" subtitle="How the gate 1 pictures are drawn.">
           <Stack gap={4}>
             <Grid cols={2}>
-              <Field label="Base model" hint="Changing it removes LoRAs made for another base model.">
-                {(id) => <Select id={id} value={form.base_model} onChange={(e) => changeBaseModel(e.target.value as ProfileInput["base_model"])} options={options(meta.base_models)} />}
-              </Field>
               <Field label="Preview candidates" hint="Images rendered per round at gate 1.">
                 {(id) => <NumberInput id={id} value={form.candidates} min={1} max={8} onChange={(n) => set("candidates", n)} />}
               </Field>

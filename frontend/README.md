@@ -42,6 +42,8 @@ After `npm run build`, `uv run assetgen` serves the app itself at http://127.0.0
 * **Checks and autopilot** — every gate shows its quality checks (each candidate gets a badge
   with its first problem). New asset has Autopilot, How many and Vary (a batch); the asset page
   shows the autopilot log and a switch, plus Colour variant and More like this.
+* **Style profile → Models** — the language model, image model and 3D model of the profile, from
+  what is installed (`GET /api/models`).
 * **Setup** — every service with Restart (or Start) and Stop, then each part Forge needs (language model,
   ComfyUI, Hunyuan3D, UniRig, Blender, optional MV-Adapter) checked live, with numbered install steps and
   commands to copy. The header's tool badges open it (a red one restarts its tool on a click).

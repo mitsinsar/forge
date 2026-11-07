@@ -205,6 +205,20 @@ attack.
   line up frame for frame. Checked in Godot 4.7.2 with a knight, a helmet and a sword stacked as
   three `AnimatedSprite2D` layers.
 
+### Models
+
+Each style profile picks the model of each step (`GET /api/models` lists them and which are
+installed; the profile page shows the same):
+
+* `text_model`: the language model (an LM Studio id) that writes the image prompts and judges
+  pictures and meshes. Empty: `qwen_model` from the settings. It must see images to judge.
+* `base_model`: the image model (`sdxl`, `flux`, `qwen-image`; installed when ComfyUI has every
+  file its workflow in `workflows/` loads). Qwen-Image (Apache 2.0) follows prompts far better
+  than SDXL; Flux.1 dev has a non-commercial licence.
+* `mesh.model`: `hunyuan3d-2.1` (shape and PBR texture; multi-view needs it) or
+  `hunyuan3d-2-mini` (Hunyuan3D 2 mini turbo through Modly; fast). Both adapters are built at
+  start, so profiles can differ.
+
 ### Quality checks, autopilot and batches
 
 Every gate has checks (`src/assetgen/checks.py`), each `pass`, `warn` or `fail`, shown at the gate
@@ -215,14 +229,26 @@ and in the gallery:
   (`inspect`: held items, how many figures, cut off); a text-only model skips that check with a
   "not checked" warning. Candidates that fail are redrawn with other seeds, up to `auto_retries`
   rounds (default 2), before the gate.
-* **Gate 2**: loose pieces and holes in the cleaned mesh (`cleanup_lods.py` reports them).
+  The vision model also scores how well each picture **matches the description** (0-10; under 5
+  fails, under 7 warns) and says what is wrong; when it found problems, the redraw starts from a
+  prompt written again with them in mind.
+* **Gate 2**: loose pieces and holes in the cleaned mesh (`cleanup_lods.py` reports them), and
+  whether it **looks like the picture**: `blender_scripts/mesh_views.py` renders it from the
+  front, the side and the back, and the vision model compares those with the picture (`judge_mesh`,
+  0-10 with its problems; kept as `outputs.mesh.judge`).
 * **Gate 3**: the skeleton fit (UniRig runs again with other seeds while it is under 0.75, up to
   `unirig_tries` runs, and keeps the best) and how much each clip stretches the mesh (the share of
   edges stretched past 1.5x or squeezed under 0.6x, measured by `rig_animate.py`).
 
-**Autopilot** (`autopilot` when creating, or `PUT /api/assets/{id}/autopilot`): when the asset
-stops at a gate and nothing failed, it approves the gate by itself (gate 1: the best candidate);
-otherwise it stops there and says why (`autopilot_log`). **Batches** (`POST /api/assets/batch`):
+**Autopilot** (auto mode; `autopilot` when creating, or `PUT /api/assets/{id}/autopilot`) decides
+each gate from those checks, the judge's included, and logs why (`autopilot_log`):
+
+* gate 1: the best candidate (fewest problems, then the judge's score); none usable: draw again
+  with the judge's notes (`AUTO_REDRAWS`, once), then stop.
+* gate 2: approve; something failed: build the mesh again with a new seed (`AUTO_MESH_RETRIES`,
+  once), then from the next-best picture (`AUTO_PICTURES`: three in all), then draw gate 1 again.
+* gate 3: approve, that is export, only with `autopilot_export`; otherwise it stops there, ready
+  for you. A failed check stops it at any gate. **Batches** (`POST /api/assets/batch`):
 up to 20 assets from one description, the same or varied by the LLM (`vary`), sharing a
 `batch_id` (`GET /api/assets?batch_id=`).
 

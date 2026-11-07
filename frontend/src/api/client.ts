@@ -44,6 +44,22 @@ export interface MeshQuality {
   remove_floaters: boolean;
   /** Draw right, back and left views first (MV-Adapter) and build the shape from all four. */
   multi_view?: boolean;
+  /** The image-to-3D model. */
+  model?: "hunyuan3d-2.1" | "hunyuan3d-2-mini";
+}
+
+/** The models a profile can pick for each step (GET /api/models). */
+export interface ModelChoice {
+  id: string;
+  label: string;
+  installed: boolean;
+  missing?: string[];
+}
+export interface ModelChoices {
+  text: ModelChoice[];
+  text_default: string;
+  image: ModelChoice[];
+  mesh: ModelChoice[];
 }
 
 /** The most extra LOD levels a profile can hold (the backend's limit). */
@@ -51,6 +67,8 @@ export const MAX_EXTRA_LODS = 8;
 
 export interface ProfileSettings {
   base_model: BaseModel;
+  /** The language model (LM Studio id) that writes prompts and judges results; "" is the default. */
+  text_model?: string;
   prompt_suffix: string;
   negative_prompt: string;
   loras: LoraRef[];
@@ -355,8 +373,10 @@ export interface Asset {
   /** Characters: the height asked for in metres (null: the kind's default). */
   height?: number | null;
   autopilot?: boolean;
+  /** With autopilot: also approve gate 3 (export) when everything passes. */
+  autopilot_export?: boolean;
   /** What autopilot did at each gate, and why. */
-  autopilot_log?: { gate: number; action: "approved" | "stopped"; reason: string; at: string }[];
+  autopilot_log?: { gate: number; action: "approved" | "stopped" | "rebuilt" | "redrew"; reason: string; at: string }[];
   /** Assets made together by one batch share this id. */
   batch_id?: string | null;
   /** Colour variants: the asset they were made from and the colour change. */
@@ -406,6 +426,7 @@ export interface AssetInput {
   height?: number;
   /** Approve each gate by itself when nothing failed its checks. */
   autopilot?: boolean;
+  autopilot_export?: boolean;
   profile_id?: string;
   /** Per-asset overrides of style profile fields. */
   overrides?: { budgets?: { triangles?: Partial<PerKind> }; mesh?: Partial<MeshQuality> };
@@ -566,7 +587,9 @@ export const api = {
   createAsset: (input: AssetInput) => request<Asset>("POST", "/assets", input),
   createBatch: (asset: AssetInput, count: number, vary: boolean) =>
     request<Asset[]>("POST", "/assets/batch", { asset, count, vary }),
-  setAutopilot: (id: string, value: boolean) => request<Asset>("PUT", `/assets/${id}/autopilot`, { value }),
+  setAutopilot: (id: string, value: boolean, exportToo?: boolean) =>
+    request<Asset>("PUT", `/assets/${id}/autopilot`, { value, ...(exportToo === undefined ? {} : { export: exportToo }) }),
+  models: () => request<ModelChoices>("GET", "/models"),
   makeVariant: (id: string, input: VariantInput) => request<Asset>("POST", `/assets/${id}/variants`, input),
   createAssetFromImage: (input: AssetInput, file: File) => {
     const form = new FormData();

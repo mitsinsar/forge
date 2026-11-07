@@ -54,6 +54,14 @@ class BlenderTools:
         return run_script(self.blender, script, args, work_dir=out_dir,
                           log_path=out_dir / f"blender_{Path(script).stem}.log", progress=progress)
 
+    def render_views(self, *, mesh_glb, out_dir, progress, size: int = 384) -> list[Path]:
+        """The finished mesh from the front, the side and the back (``mesh_views.py``), for the judge."""
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        result = self._run("mesh_views.py", {"mesh_glb": str(Path(mesh_glb).resolve()),
+                                             "out_dir": str(out_dir.resolve()), "size": size}, out_dir, progress)
+        return [Path(result["views"][v]) for v in ("front", "side", "back")]
+
     def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress, remove_floaters=True,
                          height=None):
         out_dir = Path(out_dir)

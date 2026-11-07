@@ -54,6 +54,7 @@ export function NewAssetPage() {
   const [weaponClass, setWeaponClass] = useState<WeaponClass | "">("");
   const [height, setHeight] = useState("");
   const [autopilot, setAutopilot] = useState(false);
+  const [autoExport, setAutoExport] = useState(false);
   const [multiView, setMultiView] = useState(false);
   const [count, setCount] = useState("1");
   const [vary, setVary] = useState(true);
@@ -133,6 +134,7 @@ export function NewAssetPage() {
               }
             : undefined,
         autopilot,
+        autopilot_export: autopilot && autoExport,
       };
     if (many > 1 && !fromImage) batch.mutate(input, { onSuccess: (made) => navigate(`/?batch=${made[0].batch_id}`) });
     else create.mutate(input, { onSuccess: (asset) => navigate(`/asset/${asset.id}`) });
@@ -336,10 +338,13 @@ export function NewAssetPage() {
                 onChange={setMultiView}
               />
               <Checkbox
-                label="Autopilot: approve each gate by itself when nothing failed its checks (it stops where something did)"
+                label="Autopilot: the local vision model judges each picture and mesh against the description, and redraws or rebuilds what doesn't match; it stops at gate 3 for you"
                 checked={autopilot}
                 onChange={setAutopilot}
               />
+              {autopilot && (
+                <Checkbox label="…and export by itself when everything passes" checked={autoExport} onChange={setAutoExport} />
+              )}
               {!fromImage && (
                 <Row align="top">
                   <Box width={120}>

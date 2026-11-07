@@ -7,6 +7,7 @@ import { AssetDetails, DoneView, FailedView, Gate1, Gate2, Gate3, StoppedView } 
 import { KIND_LABEL, STAGE_LABEL, label } from "../labels";
 import {
   Badge,
+  Checkbox,
   Button,
   Card,
   ConfirmDialog,
@@ -198,11 +199,13 @@ export function AssetPage() {
 /** Autopilot: on or off, and what it did at each gate. */
 function AutopilotCard({ asset }: { asset: Asset }) {
   const toggle = useApiMutation((value: boolean) => api.setAutopilot(asset.id, value), [keys.assets, keys.asset(asset.id)]);
+  const exporting = useApiMutation((value: boolean) => api.setAutopilot(asset.id, !!asset.autopilot, value),
+                                   [keys.assets, keys.asset(asset.id)]);
   if (asset.status === "done" && !asset.autopilot_log?.length) return null;
   return (
     <Card
       title="Autopilot"
-      subtitle="Approves each gate by itself when nothing failed its checks, and stops where something did."
+      subtitle="Judges each picture and mesh against the description with the local vision model: approves what passes, redraws or rebuilds what doesn't, and stops at gate 3 unless export is on."
       actions={
         asset.status !== "done" && (
           <Button size="sm" variant={asset.autopilot ? "secondary" : "primary"} busy={toggle.isPending}
@@ -213,10 +216,14 @@ function AutopilotCard({ asset }: { asset: Asset }) {
       }
     >
       <Stack gap={2}>
+        {asset.status !== "done" && (
+          <Checkbox label="Export by itself when everything passes" checked={!!asset.autopilot_export}
+                    onChange={(on) => exporting.mutate(on)} />
+        )}
         {!asset.autopilot_log?.length && <Text small muted>{asset.autopilot ? "On. Nothing decided yet." : "Off."}</Text>}
         {asset.autopilot_log?.map((entry) => (
           <Row key={entry.at} gap={2}>
-            <Badge tone={entry.action === "approved" ? "success" : "warning"}>
+            <Badge tone={entry.action === "approved" ? "success" : entry.action === "stopped" ? "warning" : "info"}>
               Gate {entry.gate} · {entry.action}
             </Badge>
             <Text small muted>{entry.reason}</Text>

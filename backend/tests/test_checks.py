@@ -76,7 +76,8 @@ def test_autopilot_takes_an_asset_to_the_export_when_checks_pass(client, tmp_pat
     _clean(monkeypatch)
     project = make_project(client, "unity", tmp_path / "g")
     created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "archetype": "biped",
-                                               "description": "a hooded rogue", "autopilot": True}).json()
+                                               "description": "a hooded rogue", "autopilot": True,
+                                               "autopilot_export": True}).json()
     done = wait_for(client, created["id"], "done", timeout=60)
     assert done["chosen_candidate"] == 1
     assert [(e["gate"], e["action"]) for e in done["autopilot_log"]] == [(1, "approved"), (2, "approved"), (3, "approved")]
@@ -223,3 +224,45 @@ def test_a_pair_of_gloves_is_one_subject(tmp_path):
     three = qc.candidate_checks(picture, kind="gear", posed_biped=False, pair=True,
                                 vision={"figures": 3, "whole_body": True, "person": False})
     assert next(c for c in three if c["id"] == "figures")["status"] == qc.FAIL
+
+
+def test_autopilot_stops_at_gate_3_unless_export_is_on(client, tmp_path, monkeypatch):
+    _clean(monkeypatch)
+    project = make_project(client, "unity", tmp_path / "g")
+    created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "archetype": "biped",
+                                               "description": "a hooded rogue", "autopilot": True}).json()
+    ready = wait_for(client, created["id"], "waiting", gate=3, timeout=60)
+    assert ready["autopilot_log"][-1]["gate"] == 3 and ready["autopilot_log"][-1]["action"] == "stopped"
+    assert "ready for you at gate 3" in ready["step"]
+
+
+def test_a_mesh_the_judge_rejects_is_rebuilt_then_made_from_the_next_picture(client, tmp_path, monkeypatch):
+    _clean(monkeypatch)
+    llm = client.app.state.pipeline.adapters.llm
+    llm.mesh_judgements = [{"match": 2, "problems": ["the head is missing"]},
+                           {"match": 3, "problems": ["the head is missing"]},
+                           {"match": 9, "problems": []}]
+    project = make_project(client, "unity", tmp_path / "g")
+    created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "archetype": "biped",
+                                               "description": "a hooded rogue", "autopilot": True}).json()
+    ready = wait_for(client, created["id"], "waiting", gate=3, timeout=90)
+    log = [(e["gate"], e["action"]) for e in ready["autopilot_log"]]
+    assert log == [(1, "approved"), (2, "rebuilt"), (2, "rebuilt"), (2, "approved"), (3, "stopped")], log
+    assert "new seed" in ready["autopilot_log"][1]["reason"] and "candidate 2" in ready["autopilot_log"][2]["reason"]
+    assert ready["chosen_candidate"] == 2
+    looks = next(c for c in ready["outputs"]["mesh"]["checks"] if c["id"] == "looks")
+    assert looks["status"] == qc.PASS and ready["outputs"]["mesh"]["judge"]["match"] == 9
+
+
+def test_the_profiles_language_model_writes_and_judges(client, tmp_path):
+    llm = client.app.state.pipeline.adapters.llm
+    llm.seen_models.clear()
+    project = make_project(client, "unity", tmp_path / "g")
+    profile = client.post("/api/profiles", json={"name": "Qwen judged", "text_model": "qwen3.6-35b-a3b"}).json()
+    created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "archetype": "biped",
+                                               "description": "a rogue", "profile_id": profile["id"]}).json()
+    wait_for(client, created["id"], "waiting", gate=1)
+    assert llm.seen_models and set(llm.seen_models) == {"qwen3.6-35b-a3b"}
+    models = client.get("/api/models").json()
+    assert {m["id"] for m in models["mesh"]} == {"hunyuan3d-2.1", "hunyuan3d-2-mini"}
+    assert "sdxl" in {m["id"] for m in models["image"]}

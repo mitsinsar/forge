@@ -98,6 +98,7 @@ FIT_BY_HEIGHT = {"biped", "blob"}
 
 PROFILE_DEFAULTS: dict = {
     "base_model": "sdxl",
+    "text_model": "",  # empty: settings.qwen_model
     "prompt_suffix": "game asset, full body, plain background, flat even lighting",
     "negative_prompt": "cropped, blurry, text, watermark, multiple characters, cast shadow",
     "loras": [],
@@ -108,7 +109,8 @@ PROFILE_DEFAULTS: dict = {
     # is how closely the shape follows the image; remove_floaters drops the small loose
     # pieces image-to-3D models leave floating around the body.
     # The defaults are Hunyuan3D 2.1's own (50 steps, octree 384, guidance 5.0).
-    "mesh": {"steps": 50, "resolution": 384, "guidance": 5.0, "remove_floaters": True, "multi_view": False},
+    "mesh": {"steps": 50, "resolution": 384, "guidance": 5.0, "remove_floaters": True, "multi_view": False,
+             "model": "hunyuan3d-2.1"},
     "candidates": 4,
     "clips": list(STANDARD_CLIPS),
     "biped_extra_clips": list(BIPED_EXTRA_CLIPS),
@@ -143,3 +145,16 @@ def deep_merge(base: dict, override: dict | None) -> dict:
         else:
             result[key] = copy.deepcopy(value)
     return result
+
+
+# The image-to-3D models a profile can pick (mesh.model), and the adapter each runs on.
+MESH_MODELS: dict[str, dict] = {
+    "hunyuan3d-2.1": {"label": "Hunyuan3D 2.1 (shape and PBR texture)", "tool": "hunyuan3d"},
+    "hunyuan3d-2-mini": {"label": "Hunyuan3D 2 mini turbo (Modly, fast)", "tool": "modly"},
+}
+
+# Auto mode: how much a judged result may miss before it is redone.
+JUDGE_FAIL, JUDGE_WARN = 5, 7  # the vision model's 0-10 "matches" score: below FAIL fails, below WARN warns
+AUTO_MESH_RETRIES = 1  # rebuilds of a mesh (new seed) before trying the next picture
+AUTO_PICTURES = 3  # pictures a mesh is tried from before gate 1 is redrawn
+AUTO_REDRAWS = 1  # redraws of gate 1 (with the judge's notes) before autopilot stops for you
