@@ -167,6 +167,14 @@ export interface Outfit {
 
 export const exampleUrl = (path: string) => `/api/examples/${path.split("/").map(encodeURIComponent).join("/")}`;
 
+/** A quality check at a gate. */
+export interface Check {
+  id: string;
+  label: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
+}
+
 export interface Lora {
   id: string;
   name: string;
@@ -237,8 +245,12 @@ export interface AssetOutputs {
     candidates: string[];
     /** Biped characters: whether each candidate's arms stand clear of the body (null: no figure found). */
     pose_check?: { candidate: number; arms_clear: boolean | null; clear_share: number }[] | null;
+    /** Each candidate's checks; failing candidates were redrawn (``redrawn`` of them) before the gate. */
+    candidate_checks?: { candidate: number; checks: Check[]; status: Check["status"] }[];
+    redrawn?: number;
   };
   mesh?: {
+    checks?: Check[];
     glb: string;
     texture: string;
     triangle_budget: number;
@@ -249,6 +261,7 @@ export interface AssetOutputs {
     removed?: { floater_pieces?: number; floater_faces?: number; debris_faces?: number } | null;
   };
   rig?: {
+    checks?: Check[];
     glb: string;
     clips: Clip[];
     preview_clips: string[];

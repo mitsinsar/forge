@@ -31,6 +31,7 @@ import {
 } from "../ui/kit";
 import { SpritePlayer } from "../viewers/SpritePlayer";
 import { ModelViewer } from "./Viewer";
+import { CheckBadge, ChecksCard } from "./Checks";
 import type { Vec3 } from "../viewers/ModelViewer";
 
 const isWeaponKind = (kind: string) => kind === "weapon";
@@ -164,7 +165,10 @@ export function Gate1({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
   const archetypes = useArchetypes();
   const rerun = useApiMutation((value: string) => api.reject(asset.id, 1, { archetype: value }), [keys.assets, keys.asset(asset.id)]);
   const candidates = asset.urls?.candidates ?? [];
-  const touching = (prompt?.pose_check ?? []).filter((c) => c.arms_clear === false).map((c) => c.candidate);
+  const checksOf = (n: number) => prompt?.candidate_checks?.find((c) => c.candidate === n)?.checks;
+  const touching = prompt?.candidate_checks
+    ? []
+    : (prompt?.pose_check ?? []).filter((c) => c.arms_clear === false).map((c) => c.candidate);
 
   return (
     <Stack gap={4}>
@@ -187,6 +191,12 @@ export function Gate1({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
               stretch when the character moves. Pick a candidate without this warning, or reject to draw new ones.
             </Notice>
           )}
+          {!readOnly && !!prompt?.redrawn && (
+            <Text small muted>
+              {prompt.redrawn} candidate{prompt.redrawn > 1 ? "s were" : " was"} redrawn because the checks failed
+              (a held item, several figures, cut off, or arms against the body).
+            </Text>
+          )}
           <Grid min={180}>
             {candidates.map((url, i) => (
               <Thumb
@@ -199,6 +209,7 @@ export function Gate1({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
                   <Row gap={1}>
                     <Badge>{i + 1}</Badge>
                     {touching.includes(i + 1) && <Badge tone="warning">Arms touch body</Badge>}
+                    {!readOnly && <CheckBadge checks={checksOf(i + 1)} />}
                   </Row>
                 }
               />
@@ -323,6 +334,7 @@ export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
   const url = localUrl(asset.urls?.mesh);
   const image = localUrl(asset.urls?.chosen_image);
   return (
+    <Stack gap={4}>
     <Card
       title={readOnly ? "Mesh · approved" : "Gate 2 · Approve the mesh"}
       subtitle={mesh ? meshSummary(mesh) : undefined}
@@ -368,6 +380,8 @@ export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
         {!readOnly && <GateBar gate={2} asset={asset} approveLabel="Approve mesh" />}
       </Stack>
     </Card>
+    {!readOnly && <ChecksCard checks={mesh?.checks} subtitle="Loose pieces and holes in the cleaned mesh." />}
+    </Stack>
   );
 }
 
@@ -620,6 +634,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
           )}
         </Stack>
       </Card>
+      {!readOnly && <ChecksCard checks={rig?.checks} subtitle="How well the skeleton fits, and how much each clip stretches the mesh." />}
       {canEditJoints && (
         <Card
           title="Joints"

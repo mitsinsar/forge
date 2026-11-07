@@ -2,6 +2,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { assetFileUrl, localUrl, type Asset, type AssetFilters, type AssetStatus, type Kind } from "../api/client";
 import { useAssets, useMeta, useProjects } from "../api/queries";
 import { AssetStatus as AssetStatusView } from "../components/AssetStatus";
+import { CHECK_TONE, worstCheck } from "../components/Checks";
 import { KIND_LABEL, STATUS_LABEL, label, timeAgo } from "../labels";
 import {
   Badge,
@@ -36,6 +37,14 @@ function cardMedia(asset: Asset): { image: string | null; frames?: string[]; fps
   const clip = byClip.walk ? "walk" : byClip.idle ? "idle" : Object.keys(byClip)[0];
   const frames = (clip ? byClip[clip] : []).map((f) => assetFileUrl(asset.id, f));
   return { image: image ?? frames[0] ?? null, frames, fps: sprites.fps };
+}
+
+/** Waiting assets: whether the current gate's checks found something. */
+function GateCheckBadge({ asset }: { asset: Asset }) {
+  const checks = asset.gate === 2 ? asset.outputs.mesh?.checks : asset.gate === 3 ? asset.outputs.rig?.checks : undefined;
+  const status = worstCheck(checks);
+  if (!status || status === "pass") return null;
+  return <Badge tone={CHECK_TONE[status]}>{status === "fail" ? "Check failed" : "Check: look"}</Badge>;
 }
 
 const STATUS_TONE: Partial<Record<AssetStatus, "warning" | "danger" | "success" | "accent">> = {
@@ -168,9 +177,12 @@ export function AssetsPage() {
               title={asset.name}
               subtitle={`${KIND_LABEL[asset.kind]} · ${label(asset.slot ?? asset.weapon_class ?? asset.archetype)} · ${projectName(asset.project_id)}`}
               badges={
-                <Badge tone={STATUS_TONE[asset.status]} dot={asset.status === "running"} pulse={asset.status === "running"}>
-                  {asset.status === "waiting" && asset.gate ? `Gate ${asset.gate}` : STATUS_LABEL[asset.status]}
-                </Badge>
+                <>
+                  <Badge tone={STATUS_TONE[asset.status]} dot={asset.status === "running"} pulse={asset.status === "running"}>
+                    {asset.status === "waiting" && asset.gate ? `Gate ${asset.gate}` : STATUS_LABEL[asset.status]}
+                  </Badge>
+                  {asset.status === "waiting" && <GateCheckBadge asset={asset} />}
+                </>
               }
               onClick={() => navigate(`/asset/${asset.id}`)}
             />

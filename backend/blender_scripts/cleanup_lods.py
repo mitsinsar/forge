@@ -209,6 +209,35 @@ def copy_object(obj, name: str):
     return copy
 
 
+def mesh_stats(obj) -> dict:
+    """What gate 2's checks read: separate pieces (vertices welded first, so UV seams don't count)
+    and open edges (border of a hole)."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
+    open_edges = sum(1 for e in bm.edges if len(e.link_faces) == 1)
+    seen, pieces, sizes = set(), 0, []
+    for start in bm.verts:
+        if start.index in seen:
+            continue
+        pieces += 1
+        stack, size = [start], 0
+        seen.add(start.index)
+        while stack:
+            vert = stack.pop()
+            size += 1
+            for edge in vert.link_edges:
+                other = edge.other_vert(vert)
+                if other.index not in seen:
+                    seen.add(other.index)
+                    stack.append(other)
+        sizes.append(size)
+    total = max(len(bm.verts), 1)
+    bm.free()
+    return {"pieces": pieces, "largest_piece_share": round(max(sizes or [0]) / total, 3),
+            "open_edges": open_edges, "edges": len(obj.data.edges)}
+
+
 def main(args: dict) -> dict:
     progress(0.02, "Importing the raw mesh")
     empty_scene()
@@ -235,13 +264,14 @@ def main(args: dict) -> dict:
         lods.append({"level": level, "ratio": ratio,
                      "triangles": decimate(lod, round(lods[0]["triangles"] * ratio))})
 
+    stats = mesh_stats(obj)
     progress(0.92, "Writing the GLB")
     out = Path(args["out_glb"])
     out.parent.mkdir(parents=True, exist_ok=True)
     bpy.ops.export_scene.gltf(filepath=str(out), export_format="GLB", use_selection=False, export_yup=True,
                               export_apply=True, export_animations=False)
     progress(1.0, "LODs ready")
-    return {"lods": lods, "raw_triangles": raw_triangles, "removed": removed, "scale": scale}
+    return {"lods": lods, "raw_triangles": raw_triangles, "removed": removed, "scale": scale, "stats": stats}
 
 
 if __name__ == "__main__":

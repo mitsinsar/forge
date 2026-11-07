@@ -55,6 +55,8 @@ class Settings:
     blender_path: Path = Path("blender")
     unirig_path: Path = Path("UniRig")
     unirig_timeout: float = 900.0  # seconds one UniRig step may take (the first run downloads its checkpoints)
+    unirig_tries: int = 3  # UniRig runs (other seeds) when the skeleton fits badly; the best is kept
+    auto_retries: int = 2  # rounds of redrawing gate 1 candidates that fail their checks
     python_path: Path = Path("python")
     # The built web app (npm run build in frontend/), served at / when it exists.
     frontend_dir: Path = Path(__file__).resolve().parents[3] / "frontend" / "dist"

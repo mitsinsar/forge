@@ -57,6 +57,16 @@ def _has(text: str, word: str) -> bool:
 class FakeLLM(FakeBase):
     """Keyword rules standing in for Qwen's structured JSON answer."""
 
+    inspections: list = []  # answers ``inspect`` gives first (then a clean one); tests set them
+
+    def inspect(self, *, image, kind):
+        if self.inspections:
+            return self.inspections.pop(0)
+        return {"held_item": False, "held_item_name": None, "figures": 1, "whole_body": True}
+
+    def vary(self, *, description, kind, count):
+        return [f"{description}, variant {n}" for n in range(1, count + 1)]
+
     def expand(self, *, description, kind, archetypes, archetype_override, slot, weapon_class, notes):
         self._wait()
         text = _words(description)

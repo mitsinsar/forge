@@ -66,7 +66,7 @@ class BlenderTools:
             "lod_ratios": [float(r) for r in lod_ratios], "height": size, "fit": fit,
             "remove_floaters": bool(remove_floaters)}, out_dir, progress)
         merge_glb_extras(Path(raw_mesh), glb, {"triangle_budget": int(triangles)})
-        return {"glb": glb, "lods": result["lods"], "removed": result.get("removed")}
+        return {"glb": glb, "lods": result["lods"], "removed": result.get("removed"), "stats": result.get("stats")}
 
     def rig_and_animate(self, *, mesh_glb, skeleton, archetype, clips, attach, out_path, progress):
         """Skins the mesh to the archetype's template skeleton and retargets its clips
@@ -120,7 +120,7 @@ class BlenderTools:
             "targets": targets or None,
             "out_glb": str(out_path.resolve())}, out_path.parent, progress)
         return {"glb": out_path, "clips": result["clips"], "skinning": result["skinning"],
-                "joints": result.get("joints")}
+                "joints": result.get("joints"), "stretch": result.get("stretch")}
 
     def render_sprites(self, *, animated_glb, clips, directions, camera_preset, frame_size, supersample, fps,
                        look, palette_size, out_dir, progress, framing=None):

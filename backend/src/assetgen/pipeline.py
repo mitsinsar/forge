@@ -28,6 +28,7 @@ from .defaults import (EXAMPLE_LORA_WEIGHT, EXAMPLE_NEGATIVE, EXAMPLE_SEED, EXAM
 from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_DOLL_FRAMING, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
+from . import checks as qc
 from . import exporters, grips, pose
 
 log = logging.getLogger("assetgen.pipeline")
@@ -519,7 +520,8 @@ class Pipeline:
             return {"source": "upload", "expansion": expansion, "prompt": "", "negative_prompt": "",
                     "base_model": None, "loras": [], "attempt": attempt, "log": [],
                     "candidates": [self._rel(asset["id"], candidate)],
-                    "pose_check": self._pose_check(asset, [candidate])}
+                    "pose_check": self._pose_check(asset, [candidate]),
+                    "candidate_checks": self._candidate_checks(asset, [candidate])}
         prompt = ", ".join(p for p in (expansion["prompt"], settings.get("prompt_suffix")) if p)
         negative = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
         loras = self._profile_loras(settings)
@@ -533,11 +535,31 @@ class Pipeline:
         if self._posed_biped(asset):
             hints["pose_guide"] = str(pose.guide_image(directory / "pose_guide.png"))
             negative = ", ".join(p for p in (negative, POSE_NEGATIVE) if p)
-        paths = self.adapters.image.render_candidates(
-            prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
-            reference_images=references, count=int(settings["candidates"]), seed=seed_of(asset["id"], attempt),
-            out_dir=directory, progress=scaled, hints=hints, log=stage_log.append)
-        return {"expansion": expansion, "prompt": prompt, "negative_prompt": negative,
+        def render(seed: int) -> list[Path]:
+            return self.adapters.image.render_candidates(
+                prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
+                reference_images=references, count=int(settings["candidates"]), seed=seed,
+                out_dir=directory, progress=scaled, hints=hints, log=stage_log.append)
+
+        paths = render(seed_of(asset["id"], attempt))
+        # Candidates that fail their checks are redrawn with other seeds, a few rounds at most.
+        redrawn: list[int] = []
+        retries = max(0, int(self.settings.auto_retries))
+        for round_ in range(retries + 1):
+            progress("Checking the candidates", 0.97)
+            candidate_checks = self._candidate_checks(asset, paths)
+            bad = [c["candidate"] for c in candidate_checks if c["status"] == qc.FAIL]
+            if not bad or round_ == retries:
+                break
+            for number in bad:
+                paths[number - 1].unlink(missing_ok=True)
+            redrawn += bad
+            paths = render(seed_of(asset["id"], attempt) + 1000 * (round_ + 1))
+        if redrawn:
+            stage_log.append(f"Redrew {len(redrawn)} candidate{'s' if len(redrawn) > 1 else ''} that failed the "
+                             "checks (held items, several figures, cut off, arms against the body).")
+        return {
+                "candidate_checks": candidate_checks, "redrawn": len(redrawn),"expansion": expansion, "prompt": prompt, "negative_prompt": negative,
                 "base_model": settings["base_model"], "loras": loras, "attempt": attempt,
                 "log": stage_log, "candidates": [self._rel(asset["id"], p) for p in paths],
                 "pose_check": self._pose_check(asset, paths)}
@@ -546,6 +568,24 @@ class Pipeline:
     def _posed_biped(asset: dict) -> bool:
         """Biped characters (not gear or weapons, which are drawn alone) get the A-pose guide and check."""
         return asset["kind"] in ("hero", "monster", "boss") and asset.get("archetype") == "biped"
+
+    def _candidate_checks(self, asset: dict, paths: list[Path]) -> list[dict]:
+        """Gate 1's checks for each candidate (``checks.candidate_checks``); the vision model is asked
+        what it sees, and left out when it can't look at images."""
+        result = []
+        for number, path in enumerate(paths, start=1):
+            try:
+                vision = self.adapters.llm.inspect(image=Path(path), kind=asset["kind"])
+            except Exception:  # noqa: BLE001 - the checks go on without the vision model
+                log.warning("the vision check of %s failed", path, exc_info=True)
+                vision = None
+            try:
+                found = qc.candidate_checks(Path(path), kind=asset["kind"], posed_biped=self._posed_biped(asset),
+                                                 vision=vision)
+            except OSError:
+                found = [qc.check("image", "Readable image", qc.FAIL, "The image could not be read")]
+            result.append({"candidate": number, "checks": found, "status": qc.worst(found)})
+        return result
 
     def _pose_check(self, asset: dict, paths: list[Path]) -> list[dict] | None:
         """Gate 1's arms check for each candidate of a biped character (see ``pose.arms_check``)."""
@@ -591,7 +631,8 @@ class Pipeline:
             remove_floaters=bool(quality.get("remove_floaters", True)), height=asset.get("height"))
         return {"glb": self._rel(asset["id"], result["glb"]), "texture": self._rel(asset["id"], texture),
                 "triangle_budget": triangles, "lods": result["lods"], "delight": delight, "quality": quality,
-                "removed": result.get("removed")}
+                "removed": result.get("removed"), "stats": result.get("stats"),
+                "checks": qc.mesh_checks(result.get("stats"))}
 
     def _stage_rig(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)
@@ -622,6 +663,9 @@ class Pipeline:
                   "grip": asset.get("grip") if asset["kind"] == "weapon" else None}
         if attach:
             output["wearer"] = {"id": wearer["id"], "name": wearer["name"]} if wearer else None
+        output["stretch"] = result.get("stretch")
+        output["checks"] = qc.rig_checks(skeleton=None if attach else skeleton, stretch=result.get("stretch"),
+                                              gear=result.get("gear"))
         if result.get("joints"):
             output["joints"] = result["joints"]
             output["joint_overrides"] = sorted(asset.get("joint_overrides") or {})
