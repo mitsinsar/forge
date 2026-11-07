@@ -108,6 +108,14 @@ def setup_report(settings: Settings, patches: str | None = None) -> list[dict]:
             _step("Optional, for the pose guide (characters stand in an A-pose): the OpenPose ControlNet (2.5 GB).",
                   f"curl -L -o models/controlnet/{settings.pose_controlnet} https://huggingface.co/xinsir/"
                   "controlnet-openpose-sdxl-1.0/resolve/main/diffusion_pytorch_model.safetensors"),
+            _step("Optional, recommended: Qwen-Image, which follows prompts far better than SDXL (Apache 2.0, "
+                  "about 30 GB). Pick it per style profile under Models.",
+                  "curl -L -o models/diffusion_models/qwen_image_fp8_e4m3fn.safetensors https://huggingface.co/"
+                  "Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_fp8_e4m3fn.safetensors\n"
+                  "curl -L -o models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors https://huggingface.co/"
+                  "Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors\n"
+                  "curl -L -o models/vae/qwen_image_vae.safetensors https://huggingface.co/"
+                  "Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors"),
             _step("Start it.", "venv/Scripts/python main.py --port 8188"),
             _step("Tell Forge where it is, in backend/assetgen.toml.",
                   'comfyui_url = "http://127.0.0.1:8188"\ncomfyui_dir = "C:/tools/ComfyUI"'),

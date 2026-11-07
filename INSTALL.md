@@ -107,20 +107,28 @@ Draws the four candidate images at gate 1 with SDXL (Flux and Qwen-Image workflo
    curl -L -o models/controlnet/openpose_sdxl_xinsir.safetensors https://huggingface.co/xinsir/controlnet-openpose-sdxl-1.0/resolve/main/diffusion_pytorch_model.safetensors
    ```
 
-5. Start it.
+5. Optional, recommended: Qwen-Image, which follows prompts far better than SDXL (Apache 2.0, about 30 GB). Pick it per style profile under Models.
+
+   ```
+   curl -L -o models/diffusion_models/qwen_image_fp8_e4m3fn.safetensors https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_fp8_e4m3fn.safetensors
+   curl -L -o models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+   curl -L -o models/vae/qwen_image_vae.safetensors https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors
+   ```
+
+6. Start it.
 
    ```
    venv/Scripts/python main.py --port 8188
    ```
 
-6. Tell Forge where it is, in backend/assetgen.toml.
+7. Tell Forge where it is, in backend/assetgen.toml.
 
    ```
    comfyui_url = "http://127.0.0.1:8188"
    comfyui_dir = "C:/tools/ComfyUI"
    ```
 
-7. Optional: let the Setup page restart and stop it.
+8. Optional: let the Setup page restart and stop it.
 
    ```
    [restart.image]
