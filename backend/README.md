@@ -1,6 +1,6 @@
-# assetgen — asset generator backend
+# Forge backend (`assetgen`)
 
-FastAPI + SQLite backend of the asset generator. A text description becomes a game-ready,
+FastAPI + SQLite backend of Forge. A text description becomes a game-ready,
 animated asset through three approval gates, then is exported into a Unity or Godot project.
 
 ```
@@ -253,7 +253,8 @@ Set up on the RTX 5090 machine (about 13 GB):
   `sdxl-vae-fp16-fix/` (madebyollin/sdxl-vae-fp16-fix).
 * `~/.cache/hy3dgen/tencent/Hunyuan3D-2mv/hunyuan3d-dit-v2-mv-turbo`: the multi-view shape model
   (it keeps its own VAE; 2.1 can't load the 2.0 turbo VAE).
-* `patches/hunyuan-multiview.patch` on the Hunyuan3D 2.1 server: `mv_images` in the request
+* `patches/hunyuan3d-2.1.patch` on the Hunyuan3D 2.1 server (all of Forge's changes to it, against
+  upstream: background removal, quality settings, job errors, multi-view): `mv_images` in the request
   (`left`, `back`, `right`, base64; the character's own sides) builds the shape with
   Hunyuan3D-2mv in 10 steps. It is loaded on first use and kept in RAM; for each job it swaps
   places with the 2.1 shape model on the GPU, since both next to the texture model don't fit.
@@ -264,12 +265,24 @@ ComfyUI's checkpoint) and `mvadapter_timeout`. MV-Adapter needs about 14 GB of G
 ComfyUI's models are freed first. Measured on the knight: views about 1.5 min (with loading), then
 Hunyuan3D about 65 s (shape 18 s, texture 60 s).
 
-### Restarting tools, and storage
+### Restarting and stopping tools, setup, and storage
 
-With a `[restart.<tool>]` table in `assetgen.toml` (`command`, `cwd`, `port`; see
-`src/assetgen/watchdog.py`), a stage that fails because ComfyUI (`image`) or Hunyuan3D (`mesh`)
-did not answer or ran out of memory restarts that tool once and runs again; a red tool badge in
-the header restarts it on a click (`POST /api/tools/{tool}/restart`). `GET /api/storage` and
+With a `[restart.<tool>]` table in `assetgen.toml` (`command`, `cwd`, and `port` or a `stop`
+command; see `src/assetgen/watchdog.py`), a stage that fails because ComfyUI (`image`) or
+Hunyuan3D (`mesh`) did not answer or ran out of memory restarts that tool once and runs again.
+The **Setup** page lists every service with **Restart** (or Start) and **Stop**
+(`POST /api/tools/{tool}/restart`, `/stop`; a stop runs the `stop` command, else stops whatever
+listens on `port`); a red badge in the header restarts its tool on a click, a green one opens
+Setup. Setup also checks each part Forge needs and shows the steps to install what is missing
+(`GET /api/setup`, `src/assetgen/setup_guide.py`, which also generates the repository's
+`INSTALL.md`). LM Studio has its own commands:
+
+```toml
+[restart.llm]
+command = ["lms", "server", "start", "--port", "1234"]
+stop = ["lms", "server", "stop"]
+```
+ `GET /api/storage` and
 `POST /api/storage/clean` (the Storage card on the Projects page) show and delete what can be
 rebuilt or is no longer used: UniRig's working files, thumbnails, files of deleted assets, fits on
 deleted heroes and examples of deleted LoRAs and profiles.

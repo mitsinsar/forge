@@ -574,6 +574,26 @@ export function TableRow({ onClick, children }: { onClick?: () => void; children
   );
 }
 
+// ---- CodeBlock (a command to copy) ------------------------------------------
+
+export function CodeBlock({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(code).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <div className="code-block">
+      <pre>{code}</pre>
+      <Button size="sm" variant="ghost" onClick={copy} aria-label="Copy">
+        {copied ? "Copied" : "Copy"}
+      </Button>
+    </div>
+  );
+}
+
 // ---- Thumb (selectable image) ------------------------------------------------
 
 export function Thumb({
