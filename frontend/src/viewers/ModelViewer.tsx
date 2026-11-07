@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 /** A joint of the rig, in the mesh's space with Blender axes (Z up, -Y front), as the backend sends it. */
 export type Vec3 = [number, number, number];
@@ -77,15 +78,29 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Neutral tone mapping keeps the texture's colours while taming bright highlights.
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1.1;
     el.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
     camera.position.set(2.5, 1.6, 3.5);
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x2a2536, 1.0));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+    // A soft studio around the model: metal and PBR materials reflect their surroundings, and with
+    // nothing to reflect they render nearly black. Plus a key light, a front fill and a rim light.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = environment;
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3448, 0.6));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.6);
     sun.position.set(3, 5, 4);
     scene.add(sun);
+    const fill = new THREE.DirectionalLight(0xfff4e8, 0.8);
+    fill.position.set(-3, 2, 5);
+    scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xdfe8ff, 0.6);
+    rim.position.set(0, 4, -5);
+    scene.add(rim);
     const grid = new THREE.GridHelper(4, 16, 0x463f57, 0x2f2a3b);
     scene.add(grid);
 
@@ -178,6 +193,8 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
           });
         }
       });
+      environment.dispose();
+      pmrem.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       sceneRef.current = { model: null, mixer: null, clips: [] };
