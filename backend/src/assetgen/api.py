@@ -387,7 +387,9 @@ def asset_view(request: Request, asset: dict) -> dict:
         "export_files": [url(f"{export['folder']}/{f}") for f in export.get("files", [])] if export else [],
         "thumb": str(request.url_for("read_asset_thumb", asset_id=asset["id"])) if prompt.get("candidates") else None,
         # Gear and weapons fitted on other heroes (outfits): hero id -> animated GLB.
-        "fits": {hero: url(fit["glb"]) for hero, fit in (asset.get("fits") or {}).items()},
+        # A version per fit, so a viewer reloads one that was fitted again at the same path.
+        "fits": {hero: f"{url(fit['glb'])}?v={re.sub(r'[^0-9]', '', str(fit.get('at', '')))}"
+                 for hero, fit in (asset.get("fits") or {}).items()},
     }
     return view
 
@@ -664,6 +666,10 @@ def fit_item(request: Request, asset_id: str, body: FitRequest):
         raise HTTPException(409, "the item has no mesh yet: approve its gate 2 first")
     if body.wearer_id != DUMMY and body.wearer_id not in {w["id"] for w in pipeline.wearers(item["project_id"])}:
         raise HTTPException(422, "the wearer must be a rigged biped hero of the same project, or the test dummy")
+    if body.placement is not None and (len(body.placement) != 4 or any(len(r) != 4 for r in body.placement)):
+        raise HTTPException(422, "placement is a 4x4 matrix, as four rows of four numbers")
+    if body.placement is not None or body.reset_placement:
+        pipeline.place_item(asset_id, body.wearer_id, None if body.reset_placement else body.placement)
     return pipeline.queue_job("fit", asset_id, {"wearer_id": body.wearer_id})
 
 

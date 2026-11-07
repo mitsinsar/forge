@@ -50,7 +50,7 @@ def test_an_item_is_fitted_on_another_hero_and_kept_per_hero(client, settings, t
     assert done["status"] == "done", done
     item = client.get(f"/api/assets/{helm['id']}").json()
     assert item["fits"][elf["id"]]["wearer"]["name"] == "Elf"
-    assert item["urls"]["fits"][elf["id"]].endswith(f"fits/{elf['id']}/animated.glb")
+    assert item["urls"]["fits"][elf["id"]].split("?")[0].endswith(f"fits/{elf['id']}/animated.glb")
     assert client.get(item["urls"]["fits"][elf["id"]]).status_code == 200
     assert item["status"] == "waiting"  # the item's own gate is untouched
 
@@ -131,3 +131,22 @@ def test_the_test_dummy_is_built_once_and_dressed_like_a_hero(client, settings, 
     outfit = client.post("/api/outfits", json={"project_id": project["id"], "name": "Trial", "hero_id": "dummy",
                                                "items": [helm["id"]]})
     assert outfit.status_code == 201, outfit.text
+
+
+def test_a_placement_is_kept_per_hero_and_reaches_the_fit(client, settings, tmp_path):
+    project = make_project(client, "unity", tmp_path / "g")
+    helm = _to_gate3(client, _asset(client, project, kind="gear", slot="head", description="a helm")["id"])
+    up = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0.1], [0, 0, 0, 1]]
+    job = client.post(f"/api/assets/{helm['id']}/fits", json={"wearer_id": "dummy", "placement": up}).json()
+    assert wait_job(client, job["id"])["status"] == "done"
+    assert client.app.state.pipeline.adapters.blender.last_attach["placement"] == up
+    again = client.post(f"/api/assets/{helm['id']}/fits", json={"wearer_id": "dummy", "placement": up}).json()
+    assert wait_job(client, again["id"])["status"] == "done"
+    item = client.get(f"/api/assets/{helm['id']}").json()
+    assert item["placements"]["dummy"][2][3] == 0.2  # added to the kept one
+    assert item["fits"]["dummy"]["placed"] and "?v=" in item["urls"]["fits"]["dummy"]
+    bad = client.post(f"/api/assets/{helm['id']}/fits", json={"wearer_id": "dummy", "placement": [[1, 0]]})
+    assert bad.status_code == 422
+    reset = client.post(f"/api/assets/{helm['id']}/fits", json={"wearer_id": "dummy", "reset_placement": True}).json()
+    assert wait_job(client, reset["id"])["status"] == "done"
+    assert "dummy" not in (client.get(f"/api/assets/{helm['id']}").json().get("placements") or {})

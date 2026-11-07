@@ -309,6 +309,10 @@ first with the stages, so the GPU is never shared:
   (`asset.fits`, `urls.fits`). The Outfits screen uses them to swap items between heroes; the
   item's own gate and export are untouched. Outfits are saved in the `outfits` table
   (`/api/outfits`). `wearer_id: "dummy"` fits on the **test dummy**, the biped base body.
+  `placement` (a 4x4 move, rows, in Blender world space at the rest pose) is added to the item's
+  kept placement on that hero (`asset.placements`) and applied by the fit: a weapon moves on its
+  socket, gear has its vertices moved and keeps its weights. `reset_placement: true` forgets it.
+  The Outfits screen's **Adjust** makes one with move, rotate and scale arrows.
 * `dummy` (started by `GET /api/dummy`): builds the test dummy once, the base body with every biped
   clip, in `data/dummy/biped/animated.glb` (`GET /api/dummy/animated.glb`). Outfits can use it as
   the hero (`hero_id: "dummy"`).

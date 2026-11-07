@@ -35,6 +35,8 @@ const DUMMY = "dummy";
 /** The item's GLB fitted on this hero: its own gate 3 result when it was fitted there (on the base
  *  body, for the dummy), else a kept fit. */
 function fittedUrl(item: Asset, heroId: string): string | null {
+  // A placement made here is only in the fit on that hero.
+  if (item.placements?.[heroId]) return localUrl(item.urls?.fits?.[heroId] ?? null) ?? null;
   const own = item.outputs.rig ? (item.outputs.rig.wearer?.id ?? DUMMY) : null;
   if (own === heroId) return localUrl(item.urls?.animated ?? null) ?? null;
   return localUrl(item.urls?.fits?.[heroId] ?? null) ?? null;
@@ -103,6 +105,19 @@ export function OutfitsPage() {
   }, [pendingKey, client]);
 
   const fit = useApiMutation(({ item, wearer }: { item: string; wearer: string }) => api.fit(item, wearer), [["jobs", "fit", projectId]]);
+  // Placing an item on the hero: arrows in the 3D view, then a refit with the move.
+  const [adjusting, setAdjusting] = useState<string | null>(null); // item id
+  const [adjustMode, setAdjustMode] = useState<"translate" | "rotate" | "scale">("translate");
+  const [placement, setPlacement] = useState<number[][] | null>(null);
+  const place = useApiMutation(
+    ({ item, wearer, reset }: { item: string; wearer: string; reset?: boolean }) =>
+      api.fit(item, wearer, reset ? { reset_placement: true } : { placement: placement ?? undefined }),
+    [["jobs", "fit", projectId], keys.assets],
+  );
+  const stopAdjusting = () => {
+    setAdjusting(null);
+    setPlacement(null);
+  };
   const pick = (group: string, item: Asset | null) => {
     setChosen((current) => {
       const next = { ...current };
@@ -175,7 +190,80 @@ export function OutfitsPage() {
                   <Tabs label="Clip" value={clip} onChange={setClip}
                         items={hero.clips.map((c) => ({ value: c.name, label: label(c.name) }))} />
                 )}
-                {hero?.url && <ModelViewer url={hero.url} clip={clip} extras={extras} />}
+                {hero?.url && (
+                  <ModelViewer
+                    url={hero.url}
+                    clip={clip}
+                    extras={extras}
+                    adjust={(() => {
+                      const item = adjusting ? worn.find((i) => i.id === adjusting) : undefined;
+                      const itemUrl = item && hero ? fittedUrl(item, hero.id) : null;
+                      return itemUrl ? { url: itemUrl, mode: adjustMode } : null;
+                    })()}
+                    onAdjust={setPlacement}
+                  />
+                )}
+                {hero && worn.some((i) => fittedUrl(i, hero.id)) && (
+                  <Stack gap={2}>
+                    {!adjusting ? (
+                      <Row gap={2}>
+                        <Text small muted>Place an item by hand:</Text>
+                        {worn.filter((i) => fittedUrl(i, hero.id)).map((i) => (
+                          <Button key={i.id} size="sm" onClick={() => setAdjusting(i.id)}>
+                            Adjust {i.name}
+                          </Button>
+                        ))}
+                      </Row>
+                    ) : (
+                      <>
+                        <Row gap={2}>
+                          <Tabs
+                            label="Arrows"
+                            value={adjustMode}
+                            onChange={setAdjustMode}
+                            items={[
+                              { value: "translate", label: "Move" },
+                              { value: "rotate", label: "Rotate" },
+                              { value: "scale", label: "Scale" },
+                            ]}
+                          />
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={!placement}
+                            busy={place.isPending}
+                            onClick={() =>
+                              place.mutate({ item: adjusting, wearer: hero.id }, { onSuccess: stopAdjusting })
+                            }
+                          >
+                            Save placement
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={stopAdjusting}>
+                            Cancel
+                          </Button>
+                          {!!worn.find((i) => i.id === adjusting)?.placements?.[hero.id] && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              busy={place.isPending}
+                              onClick={() =>
+                                place.mutate({ item: adjusting, wearer: hero.id, reset: true }, { onSuccess: stopAdjusting })
+                              }
+                            >
+                              Back to the automatic fit
+                            </Button>
+                          )}
+                        </Row>
+                        <Text small muted>
+                          The hero holds still. Drag the arrows to put {worn.find((i) => i.id === adjusting)?.name} where it
+                          belongs (a weapon turns around the hand); Front, Left and Flat help line it up. Saving fits it again on{" "}
+                          {hero.name} with your change, kept for this hero.
+                        </Text>
+                      </>
+                    )}
+                    <ErrorNotice error={place.error} />
+                  </Stack>
+                )}
                 {hero?.id === DUMMY && !dummy.data?.ready && (
                   <Text small muted>
                     Building the test dummy{dummy.data?.job ? ` · ${dummy.data.job.step}` : ""}… it takes about a minute, once.

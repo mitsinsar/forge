@@ -439,6 +439,17 @@ def attach_weapon(item, arm, socket: str, grip: Matrix) -> None:
     item.matrix_world = bone_frame @ grip.inverted()
 
 
+def place(item, move: Matrix) -> None:
+    """The user's placement: ``move`` (Blender world space, rest pose) applied to the fitted item.
+    A weapon keeps its socket as parent; gear has its vertices moved and keeps its weights."""
+    if item.parent_type == "BONE":
+        item.matrix_world = move @ item.matrix_world
+    else:
+        item.data.transform(item.matrix_world.inverted() @ move @ item.matrix_world)
+        item.data.update()
+    bpy.context.view_layer.update()
+
+
 def as_rows(matrix: Matrix) -> list[list[float]]:
     return [[round(v, 6) for v in row] for row in matrix]
 
@@ -481,6 +492,9 @@ def main(args: dict) -> dict:
         result["weapon"] = {"grip_matrix": as_rows(grip), "detected_grip_matrix": as_rows(detected),
                             "second_grip_matrix": as_rows(second) if second else None,
                             "manual": bool(manual), **measured}
+
+    if attach.get("placement") and item is not None:
+        place(item, Matrix(attach["placement"]))
 
     if wearer:  # its clips are already baked on its skeleton
         clips = [{"name": c["name"], "duration": c["duration"], "loop": bool(c.get("loop"))} for c in args["clips"]]
