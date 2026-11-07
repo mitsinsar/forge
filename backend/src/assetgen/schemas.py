@@ -154,6 +154,15 @@ class BatchCreate(Strict):
     vary: bool = Field(False, description="Have the LLM write a different description for each asset.")
 
 
+class VariantCreate(Strict):
+    name: str | None = Field(None, max_length=80, description="Defaults to the source's name plus \"variant\".")
+    hue: float = Field(0.0, ge=-180, le=180, description="Turn the colours by this many degrees.")
+    saturation: float = Field(1.0, ge=0, le=3)
+    brightness: float = Field(1.0, ge=0.1, le=3)
+    tint: str | None = Field(None, pattern=r"^#[0-9a-fA-F]{6}$", description="Pull the colours towards this one.")
+    tint_strength: float = Field(0.0, ge=0, le=1)
+
+
 class Toggle(Strict):
     value: bool
 

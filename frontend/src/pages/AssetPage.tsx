@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, type Asset, type Stage } from "../api/client";
+import { api, localUrl, type Asset, type Stage } from "../api/client";
 import { keys, useApiMutation, useAsset, useProfiles, useProjects } from "../api/queries";
 import { AssetStatus } from "../components/AssetStatus";
 import { AssetDetails, DoneView, FailedView, Gate1, Gate2, Gate3 } from "../components/Gates";
@@ -10,8 +10,12 @@ import {
   Button,
   Card,
   ConfirmDialog,
+  Dialog,
   EmptyState,
   ErrorNotice,
+  Field,
+  Grid,
+  Input,
   LinkButton,
   Loading,
   Notice,
@@ -95,6 +99,7 @@ export function AssetPage() {
   const projects = useProjects();
   const profiles = useProfiles();
   const [deleting, setDeleting] = useState(false);
+  const [varying, setVarying] = useState(false);
   const [viewing, setViewing] = useState<Stage | null>(null);
   const remove = useApiMutation(() => api.deleteAsset(id), [keys.assets]);
 
@@ -140,15 +145,22 @@ export function AssetPage() {
           </Row>
         }
         actions={
-          <Button variant="ghost" onClick={() => setDeleting(true)}>
-            Delete asset
-          </Button>
+          <Row gap={2}>
+            <LinkButton to={`/new?from=${a.id}`} variant="ghost">More like this</LinkButton>
+            {a.outputs.rig && a.status !== "running" && a.status !== "queued" && (
+              <Button onClick={() => setVarying(true)}>Colour variant</Button>
+            )}
+            <Button variant="ghost" onClick={() => setDeleting(true)}>
+              Delete asset
+            </Button>
+          </Row>
         }
       />
       <Stepper steps={steps(a, shown, setViewing)} />
       <ErrorNotice error={asset.error} />
       {body}
       <AutopilotCard asset={a} />
+      {varying && <VariantDialog asset={a} onClose={() => setVarying(false)} />}
       <AssetDetails asset={a} projectName={project?.name} profileName={profile?.name} />
       <ConfirmDialog
         open={deleting}
@@ -194,5 +206,66 @@ function AutopilotCard({ asset }: { asset: Asset }) {
         <ErrorNotice error={toggle.error} />
       </Stack>
     </Card>
+  );
+}
+
+/** A colour variant: same mesh, rig and clips, recoloured texture. The preview applies the change
+ *  with CSS filters (close to, not exactly, what the recolour does). */
+function VariantDialog({ asset, onClose }: { asset: Asset; onClose: () => void }) {
+  const navigate = useNavigate();
+  const [name, setName] = useState(`${asset.name} variant`);
+  const [hue, setHue] = useState(0);
+  const [saturation, setSaturation] = useState(1);
+  const [brightness, setBrightness] = useState(1);
+  const [tint, setTint] = useState("#3355ff");
+  const [tintStrength, setTintStrength] = useState(0);
+  const make = useApiMutation(
+    () => api.makeVariant(asset.id, { name, hue, saturation, brightness, tint, tint_strength: tintStrength }),
+    [keys.assets],
+  );
+  const image = localUrl(asset.urls?.thumb ?? asset.urls?.chosen_image ?? null);
+  const slider = (label: string, value: number, set: (v: number) => void, min: number, max: number, step: number) => (
+    <Field label={`${label}: ${value}`}>
+      {(id) => <Input id={id} type="range" min={min} max={max} step={step} value={value} onChange={(e) => set(Number(e.target.value))} />}
+    </Field>
+  );
+  return (
+    <Dialog
+      open
+      title={`Colour variant of ${asset.name}`}
+      onClose={onClose}
+      actions={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={make.isPending} onClick={() => make.mutate(undefined, { onSuccess: (v) => navigate(`/asset/${v.id}`) })}>
+            Make the variant
+          </Button>
+        </>
+      }
+    >
+      <Stack gap={3}>
+        <Text small muted>
+          Same mesh, skeleton and clips with the texture recoloured: ready in seconds at gate 3, and it fits the same gear.
+        </Text>
+        <Grid cols={2}>
+          <Stack gap={2}>
+            {image && (
+              <img src={image} alt="Preview" style={{ width: "100%", borderRadius: 10,
+                filter: `hue-rotate(${hue}deg) saturate(${saturation}) brightness(${brightness})` }} />
+            )}
+            <Text small faint>Preview (approximate; the tint is not shown).</Text>
+          </Stack>
+          <Stack gap={2}>
+            <Field label="Name">{(id) => <Input id={id} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />}</Field>
+            {slider("Hue (degrees)", hue, setHue, -180, 180, 5)}
+            {slider("Saturation", saturation, setSaturation, 0, 2, 0.05)}
+            {slider("Brightness", brightness, setBrightness, 0.3, 2, 0.05)}
+            <Field label="Tint colour">{(id) => <Input id={id} type="color" value={tint} onChange={(e) => setTint(e.target.value)} />}</Field>
+            {slider("Tint strength", tintStrength, setTintStrength, 0, 1, 0.05)}
+          </Stack>
+        </Grid>
+        <ErrorNotice error={make.error} />
+      </Stack>
+    </Dialog>
   );
 }

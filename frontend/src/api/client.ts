@@ -157,6 +157,15 @@ export interface Job {
   error: string | null;
 }
 
+export interface VariantInput {
+  name?: string;
+  hue: number;
+  saturation: number;
+  brightness: number;
+  tint?: string;
+  tint_strength: number;
+}
+
 export interface Outfit {
   id: string;
   project_id: string;
@@ -311,6 +320,8 @@ export interface Asset {
   autopilot_log?: { gate: number; action: "approved" | "stopped"; reason: string; at: string }[];
   /** Assets made together by one batch share this id. */
   batch_id?: string | null;
+  /** Colour variants: the asset they were made from and the colour change. */
+  variant_of?: { id: string; name: string; hue: number; saturation: number; brightness: number } | null;
   /** Gear and weapons: the hero they are fitted on (null: the base mannequin). */
   wearer_id?: string | null;
   /** "upload" when made from the user's own image; missing on older assets. */
@@ -497,6 +508,7 @@ export const api = {
   createBatch: (asset: AssetInput, count: number, vary: boolean) =>
     request<Asset[]>("POST", "/assets/batch", { asset, count, vary }),
   setAutopilot: (id: string, value: boolean) => request<Asset>("PUT", `/assets/${id}/autopilot`, { value }),
+  makeVariant: (id: string, input: VariantInput) => request<Asset>("POST", `/assets/${id}/variants`, input),
   createAssetFromImage: (input: AssetInput, file: File) => {
     const form = new FormData();
     form.append("file", file);

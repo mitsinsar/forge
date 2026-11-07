@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { api, type AssetInput, type Kind, type Slot, type WeaponClass } from "../api/client";
 import { keys, useApiMutation, useArchetypes, useMeta, useProfiles, useProjects } from "../api/queries";
 import { KIND_LABEL, isCharacter, label, MESH_PRESETS, meshPreset, options } from "../labels";
@@ -57,6 +58,23 @@ export function NewAssetPage() {
   const [vary, setVary] = useState(true);
   const many = Math.max(1, Math.min(20, Number.parseInt(count, 10) || 1));
   const [profileChoice, setProfileId] = useState<string | null>(null);
+  // "More like this": start from another asset's settings.
+  const fromId = params.get("from");
+  const from = useQuery({ queryKey: ["asset", fromId ?? ""], queryFn: () => api.asset(fromId!), enabled: !!fromId });
+  const [filled, setFilled] = useState(false);
+  useEffect(() => {
+    const a = from.data;
+    if (!a || filled) return;
+    setFilled(true);
+    setProjectId(a.project_id);
+    setKind(a.kind);
+    setDescription(a.description);
+    if (a.archetype_override) setArchetype(a.archetype_override);
+    if (a.slot) setSlot(a.slot);
+    if (a.weapon_class) setWeaponClass(a.weapon_class);
+    if (a.height) setHeight(String(a.height));
+    if (a.profile_id) setProfileId(a.profile_id);
+  }, [from.data, filled]);
   const [triangles, setTriangles] = useState("");
   const [meshQuality, setMeshQuality] = useState("");
   const [start, setStart] = useState<Start>("describe");

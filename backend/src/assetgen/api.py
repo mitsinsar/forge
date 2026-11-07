@@ -22,7 +22,7 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
 from .exporters import safe_name
 from .pipeline import Conflict, Invalid, Pipeline
 from .tools import check_tools
-from .schemas import (AssetCreate, BatchCreate, Kind, Approve, ExamplesRequest, Toggle, FitRequest, LoraRegister, LoraUpdate,
+from .schemas import (AssetCreate, BatchCreate, Kind, Approve, ExamplesRequest, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
                       TrainingCandidate)
 
@@ -419,6 +419,15 @@ def create_batch(request: Request, body: BatchCreate):
                                               "name": f"{base} {number}" if base else None})
         created.append(_create_asset(request, asset, batch_id=batch_id))
     return created
+
+
+@router.post("/assets/{asset_id}/variants", tags=["assets"], status_code=201,
+             summary="A colour variant: a copy of a rigged asset with its texture recoloured, at gate 3")
+def make_variant(request: Request, asset_id: str, body: VariantCreate):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("assets", asset_id), "asset")
+    colours = body.model_dump(exclude={"name"})
+    return asset_view(request, _run(lambda: pipeline.make_variant(asset_id, name=body.name, colours=colours)))
 
 
 @router.put("/assets/{asset_id}/autopilot", tags=["assets"],

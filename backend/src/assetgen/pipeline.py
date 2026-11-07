@@ -29,7 +29,7 @@ from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import checks as qc
-from . import exporters, grips, pose
+from . import exporters, grips, pose, variants
 
 log = logging.getLogger("assetgen.pipeline")
 
@@ -569,6 +569,38 @@ class Pipeline:
     def _posed_biped(asset: dict) -> bool:
         """Biped characters (not gear or weapons, which are drawn alone) get the A-pose guide and check."""
         return asset["kind"] in ("hero", "monster", "boss") and asset.get("archetype") == "biped"
+
+    # ---- colour variants ------------------------------------------------------------
+
+    def make_variant(self, source_id: str, *, name: str | None, colours: dict) -> dict:
+        """A copy of a rigged asset with its texture recoloured (see ``variants``), waiting at gate 3:
+        the mesh, rig and clips are kept, so it takes seconds."""
+        source = self._require(source_id)
+        outputs = dict(source.get("outputs") or {})
+        if not outputs.get("rig"):
+            raise Invalid("only assets rigged at gate 3 can have colour variants")
+        if source["status"] in ("queued", "running"):
+            raise Invalid("wait until the asset stops at a gate or is done")
+        outputs.pop("export", None)
+        outputs["rig"] = {k: v for k, v in outputs["rig"].items() if k != "sprites"}
+        skip = {"id", "created_at", "updated_at", "export_name", "fits", "autopilot_log", "batch_id", "notes"}
+        record = {k: v for k, v in source.items() if k not in skip}
+        approvals = {k: v for k, v in (source.get("approvals") or {}).items() if k in ("1", "2")}
+        record.update(name=name or f"{source['name']} variant", outputs=outputs, approvals=approvals,
+                      status="waiting", stage="rig", gate=3, step="Waiting at gate 3", progress=1.0, error=None,
+                      queued_at=now(), autopilot=False, training_candidate=False, training_candidate_set=False,
+                      variant_of={"id": source_id, "name": source["name"], **colours})
+        asset = self.db.insert("assets", record)
+        shutil.copytree(self.asset_dir(source_id), self.asset_dir(asset["id"]),
+                        ignore=shutil.ignore_patterns("export", "sprites", "fits", "unirig", "*_thumb.jpg"))
+        recolour = [self.asset_dir(asset["id"]) / rel for rel in (
+            (outputs.get("mesh") or {}).get("texture"), (outputs.get("mesh") or {}).get("glb"),
+            outputs["rig"].get("glb"), *((outputs.get("prompt") or {}).get("candidates") or [])) if rel]
+        for path in recolour:
+            if path.is_file():
+                variants.recolour_file(path, **colours)
+        self.publish_status(asset)
+        return asset
 
     # ---- autopilot -------------------------------------------------------------------
 
