@@ -124,11 +124,48 @@ export interface Profile extends ProfileSettings {
   name: string;
   project_id: string | null;
   reference_images: ReferenceImage[];
+  examples?: Examples;
   created_at: string;
   updated_at: string;
 }
 
 export type ProfileInput = ProfileSettings & { name: string; project_id: string | null };
+
+/** One subject of an example sheet: its image with and (LoRAs) without the style, under /api/examples/. */
+export interface ExampleItem {
+  name: string;
+  prompt: string;
+  with: string;
+  without?: string;
+}
+export interface Examples {
+  made_at: string;
+  weight?: number;
+  base_model?: BaseModel;
+  items: ExampleItem[];
+}
+
+/** Side work of the worker: an item fitted on a hero, an example sheet. */
+export interface Job {
+  id: string;
+  kind: "fit" | "lora_examples" | "profile_examples";
+  target_id: string;
+  params: Record<string, unknown>;
+  status: "queued" | "running" | "done" | "failed";
+  step: string;
+  progress: number;
+  error: string | null;
+}
+
+export interface Outfit {
+  id: string;
+  project_id: string;
+  name: string;
+  hero_id: string;
+  items: string[];
+}
+
+export const exampleUrl = (path: string) => `/api/examples/${path.split("/").map(encodeURIComponent).join("/")}`;
 
 export interface Lora {
   id: string;
@@ -141,6 +178,9 @@ export interface Lora {
   source_url: string;
   uploaded: boolean;
   file_exists: boolean;
+  examples?: Examples;
+  /** Your own example images (paths under /api/examples/). */
+  example_images?: string[];
 }
 
 export interface LoraFields {
@@ -278,6 +318,10 @@ export interface Asset {
     animated: string | null;
     zip: string | null;
     export_files: string[];
+    /** A small JPEG of the preview, for galleries. */
+    thumb?: string | null;
+    /** Gear and weapons fitted on other heroes: hero id -> animated GLB. */
+    fits?: Record<string, string>;
   };
   settings?: ProfileSettings;
 }
@@ -408,6 +452,23 @@ export const api = {
   updateLora: (id: string, input: Partial<LoraFields & { path: string }>) =>
     request<Lora>("PATCH", `/loras/${id}`, input),
   deleteLora: (id: string) => request<void>("DELETE", `/loras/${id}`),
+  loraExamples: (id: string, weight?: number) => request<Job>("POST", `/loras/${id}/examples`, { weight }),
+  profileExamples: (id: string) => request<Job>("POST", `/profiles/${id}/examples`),
+  addLoraImage: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<Lora>("POST", `/loras/${id}/example-images`, form);
+  },
+  removeLoraImage: (id: string, name: string) =>
+    request<Lora>("DELETE", `/loras/${id}/example-images/${encodeURIComponent(name)}`),
+  jobs: (filters: { target_id?: string; kind?: string; status?: string }) =>
+    request<Job[]>("GET", `/jobs${query(filters)}`),
+  fit: (assetId: string, wearerId: string) => request<Job>("POST", `/assets/${assetId}/fits`, { wearer_id: wearerId }),
+  outfits: (projectId?: string) => request<Outfit[]>("GET", `/outfits${query({ project_id: projectId })}`),
+  createOutfit: (input: Omit<Outfit, "id">) => request<Outfit>("POST", "/outfits", input),
+  updateOutfit: (id: string, input: Partial<Omit<Outfit, "id" | "project_id">>) =>
+    request<Outfit>("PATCH", `/outfits/${id}`, input),
+  deleteOutfit: (id: string) => request<void>("DELETE", `/outfits/${id}`),
 
   assets: (filters: AssetFilters) => request<Asset[]>("GET", `/assets${query(filters)}`),
   asset: (id: string) => request<Asset>("GET", `/assets/${id}`),

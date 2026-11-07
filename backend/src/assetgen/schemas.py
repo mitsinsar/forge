@@ -171,5 +171,26 @@ class Reject(Strict):
                           "these joints and add up over rejections; {} goes back to the detected joints.")
 
 
+class FitRequest(Strict):
+    wearer_id: str = Field(description="A rigged biped hero of the same project.")
+
+
+class ExamplesRequest(Strict):
+    weight: float | None = Field(None, ge=0.0, le=2.0, description="LoRAs: the weight to show it at (default 0.8).")
+
+
+class OutfitCreate(Strict):
+    project_id: str
+    name: str = Field(min_length=1, max_length=80)
+    hero_id: str
+    items: list[str] = Field(default_factory=list, description="Gear and weapon asset ids, one per slot.")
+
+
+class OutfitUpdate(Strict):
+    name: str | None = Field(None, min_length=1, max_length=80)
+    hero_id: str | None = None
+    items: list[str] | None = None
+
+
 class TrainingCandidate(Strict):
     value: bool

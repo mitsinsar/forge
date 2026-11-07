@@ -1,11 +1,14 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
-import type { AssetFilters, AssetStatus, Kind } from "../api/client";
+import { assetFileUrl, localUrl, type Asset, type AssetFilters, type AssetStatus, type Kind } from "../api/client";
 import { useAssets, useMeta, useProjects } from "../api/queries";
 import { AssetStatus as AssetStatusView } from "../components/AssetStatus";
 import { KIND_LABEL, STATUS_LABEL, label, timeAgo } from "../labels";
 import {
+  Badge,
   Box,
   EmptyState,
+  Grid,
+  MediaCard,
   ErrorNotice,
   Field,
   LinkButton,
@@ -16,10 +19,31 @@ import {
   Stack,
   Table,
   TableRow,
+  Tabs,
   Text,
 } from "../ui/kit";
 
 const STATUSES: AssetStatus[] = ["queued", "running", "waiting", "done", "failed"];
+
+/** The gallery picture: the picked preview (or the first candidate); Godot assets play their walk sprites
+ *  on hover. */
+function cardMedia(asset: Asset): { image: string | null; frames?: string[]; fps?: number } {
+  const image = localUrl(asset.urls?.thumb ?? null) ?? null;
+  const sprites = asset.outputs.rig?.sprites;
+  if (!sprites) return { image };
+  const direction = sprites.directions[0];
+  const byClip = sprites.files?.[direction] ?? {};
+  const clip = byClip.walk ? "walk" : byClip.idle ? "idle" : Object.keys(byClip)[0];
+  const frames = (clip ? byClip[clip] : []).map((f) => assetFileUrl(asset.id, f));
+  return { image: image ?? frames[0] ?? null, frames, fps: sprites.fps };
+}
+
+const STATUS_TONE: Partial<Record<AssetStatus, "warning" | "danger" | "success" | "accent">> = {
+  waiting: "warning",
+  failed: "danger",
+  done: "success",
+  running: "accent",
+};
 
 export function AssetsPage() {
   const [params, setParams] = useSearchParams();
@@ -29,6 +53,7 @@ export function AssetsPage() {
     kind: (params.get("kind") as Kind) || undefined,
     status: (params.get("status") as AssetStatus) || undefined,
   };
+  const view = params.get("view") === "table" ? "table" : "gallery";
   const meta = useMeta();
   const projects = useProjects();
   const assets = useAssets(filters);
@@ -53,6 +78,26 @@ export function AssetsPage() {
           </LinkButton>
         }
       />
+      <Row gap={3}>
+        <Tabs
+          label="View"
+          value={view}
+          onChange={(v) => setFilter("view", v === "gallery" ? "" : v)}
+          items={[
+            { value: "gallery", label: "Gallery" },
+            { value: "table", label: "Table" },
+          ]}
+        />
+        <Tabs
+          label="Show"
+          value={filters.status === "waiting" ? "mine" : "all"}
+          onChange={(v) => setFilter("status", v === "mine" ? "waiting" : "")}
+          items={[
+            { value: "all", label: "All" },
+            { value: "mine", label: "Needs me" },
+          ]}
+        />
+      </Row>
       <Row gap={3}>
         <Box minWidth={200}>
           <Field label="Project">
@@ -114,6 +159,23 @@ export function AssetsPage() {
             action={<LinkButton to="/new" variant="primary">New asset</LinkButton>}
           />
         )
+      ) : view === "gallery" ? (
+        <Grid min={190}>
+          {assets.data.map((asset) => (
+            <MediaCard
+              key={asset.id}
+              {...cardMedia(asset)}
+              title={asset.name}
+              subtitle={`${KIND_LABEL[asset.kind]} · ${label(asset.slot ?? asset.weapon_class ?? asset.archetype)} · ${projectName(asset.project_id)}`}
+              badges={
+                <Badge tone={STATUS_TONE[asset.status]} dot={asset.status === "running"} pulse={asset.status === "running"}>
+                  {asset.status === "waiting" && asset.gate ? `Gate ${asset.gate}` : STATUS_LABEL[asset.status]}
+                </Badge>
+              }
+              onClick={() => navigate(`/asset/${asset.id}`)}
+            />
+          ))}
+        </Grid>
       ) : (
         <Table head={["Name", "Kind", "Project", "Status", "Updated"]}>
           {assets.data.map((asset) => (

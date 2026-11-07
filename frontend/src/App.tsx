@@ -10,11 +10,13 @@ import { ProjectsPage } from "./pages/ProjectsPage";
 import { ProfilesPage } from "./pages/ProfilesPage";
 import { ProfileEditPage } from "./pages/ProfileEditPage";
 import { LorasPage } from "./pages/LorasPage";
+import { OutfitsPage } from "./pages/OutfitsPage";
 
 const NAV = [
   { to: "/", label: "Assets", end: true },
   { to: "/projects", label: "Projects" },
   { to: "/profiles", label: "Style profiles" },
+  { to: "/outfits", label: "Outfits" },
   { to: "/loras", label: "LoRA library" },
 ];
 
@@ -79,6 +81,7 @@ export function App() {
           <Route path="/profiles/new" element={<ProfileEditPage />} />
           <Route path="/profiles/:id" element={<ProfileEditPage />} />
           <Route path="/loras" element={<LorasPage />} />
+          <Route path="/outfits" element={<OutfitsPage />} />
           <Route
             path="*"
             element={<EmptyState title="Page not found" action={<LinkButton to="/">Back to assets</LinkButton>} />}

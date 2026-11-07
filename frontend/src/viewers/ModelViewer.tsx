@@ -35,9 +35,12 @@ interface Props {
   moved?: Record<string, Vec3>;
   editJoints?: boolean;
   onJointMove?: (name: string, head: Vec3) => void;
+  /** More GLBs shown with the model and playing the same clip: items fitted on it (an outfit). Their
+   *  copy of the body (meshes named `mannequin`) is hidden; one without the clip is hidden too. */
+  extras?: string[];
 }
 
-export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved, editJoints, onJointMove }: Props) {
+export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved, editJoints, onJointMove, extras }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<{
     model: THREE.Object3D | null;
@@ -48,7 +51,9 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
     controls?: OrbitControls;
     canvas?: HTMLCanvasElement;
     radius?: number;
+    extras?: Map<string, { model: THREE.Object3D; mixer: THREE.AnimationMixer; clips: THREE.AnimationClip[] }>;
   }>({ model: null, mixer: null, clips: [] });
+  const [extrasLoaded, setExtrasLoaded] = useState(0);
   const onJointMoveRef = useRef(onJointMove);
   useEffect(() => {
     onJointMoveRef.current = onJointMove;
@@ -99,7 +104,9 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
     let frame = 0;
     const tick = (time: number) => {
       timer.update(time);
-      sceneRef.current.mixer?.update(timer.getDelta());
+      const delta = timer.getDelta();
+      sceneRef.current.mixer?.update(delta);
+      sceneRef.current.extras?.forEach((extra) => extra.mixer.update(delta));
       controls.update();
       renderer.render(scene, camera);
       frame = requestAnimationFrame(tick);
@@ -191,11 +198,54 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
     });
   }, [lod, wireframe, loaded]);
 
+  // Extra GLBs (an outfit's items): loaded into the same scene at the model's place.
+  const extrasKey = (extras ?? []).join("|");
+  useEffect(() => {
+    const { scene, model } = sceneRef.current;
+    if (!scene || !model) return;
+    const current = sceneRef.current.extras ?? new Map();
+    sceneRef.current.extras = current;
+    const wanted = new Set(extras ?? []);
+    current.forEach((extra, key) => {
+      if (!wanted.has(key)) {
+        extra.mixer.stopAllAction();
+        scene.remove(extra.model);
+        current.delete(key);
+      }
+    });
+    let cancelled = false;
+    for (const extraUrl of wanted) {
+      if (current.has(extraUrl)) continue;
+      new GLTFLoader().load(extraUrl, (gltf) => {
+        if (cancelled || !sceneRef.current.extras) return;
+        const extra = gltf.scene;
+        extra.traverse((obj) => {
+          if (/^mannequin/i.test(obj.name)) obj.visible = false;
+        });
+        extra.position.copy(model.position);
+        scene.add(extra);
+        sceneRef.current.extras.set(extraUrl, { model: extra, mixer: new THREE.AnimationMixer(extra), clips: gltf.animations });
+        setExtrasLoaded((n) => n + 1);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extrasKey, loaded]);
+
   // Clip playback (held at the rest pose while joints are edited).
   useEffect(() => {
     const { mixer, clips, model } = sceneRef.current;
     if (!mixer || !model) return;
     mixer.stopAllAction();
+    const name = (clips.find((c) => c.name === clip) ?? clips[0])?.name;
+    sceneRef.current.extras?.forEach((extra) => {
+      extra.mixer.stopAllAction();
+      const own = extra.clips.find((c) => c.name === name);
+      extra.model.visible = !!own || !name;
+      if (own) extra.mixer.clipAction(own).reset().setLoop(THREE.LoopRepeat, Infinity).play();
+    });
     if (editJoints) {
       model.traverse((obj) => {
         if (obj instanceof THREE.SkinnedMesh) obj.skeleton.pose();
@@ -204,7 +254,7 @@ export function ModelViewer({ url, lod, clip, onClips, wireframe, joints, moved,
     }
     const found = clips.find((c) => c.name === clip) ?? clips[0];
     if (found) mixer.clipAction(found).reset().setLoop(THREE.LoopRepeat, Infinity).play();
-  }, [clip, loaded, editJoints]);
+  }, [clip, loaded, editJoints, extrasLoaded]);
 
   // Joint editor: a handle per joint and a line per bone, drawn through the mesh; click a handle to
   // move it with the arrows.

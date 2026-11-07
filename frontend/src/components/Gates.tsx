@@ -1,6 +1,6 @@
 // The three approval gates of an asset, plus its done and failed views.
 
-import { lazy, Suspense, useState, type ComponentProps } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, assetFileUrl, localUrl, type Asset, type Gate, type Grip, type RejectInput, type Socket } from "../api/client";
 import { keys, useApiMutation, useArchetypes } from "../api/queries";
@@ -24,27 +24,17 @@ import {
   SectionTitle,
   Select,
   Stack,
-  StageMessage,
   Tabs,
   Text,
   TextArea,
   Thumb,
 } from "../ui/kit";
 import { SpritePlayer } from "../viewers/SpritePlayer";
+import { ModelViewer } from "./Viewer";
 import type { Vec3 } from "../viewers/ModelViewer";
 
 const isWeaponKind = (kind: string) => kind === "weapon";
 
-// three.js is large; load the 3D viewer only when a gate shows it.
-const LazyModelViewer = lazy(() => import("../viewers/ModelViewer").then((m) => ({ default: m.ModelViewer })));
-
-function ModelViewer(props: ComponentProps<typeof LazyModelViewer>) {
-  return (
-    <Suspense fallback={<StageMessage>Loading viewer…</StageMessage>}>
-      <LazyModelViewer {...props} />
-    </Suspense>
-  );
-}
 
 // ---- shared: approve / reject bar ---------------------------------------------
 

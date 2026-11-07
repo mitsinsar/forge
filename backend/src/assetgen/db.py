@@ -19,6 +19,10 @@ TABLES: dict[str, tuple[str, ...]] = {
     "profiles": ("project_id", "name"),
     "loras": ("base_model", "name"),
     "assets": ("project_id", "kind", "status", "archetype", "training_candidate", "name", "queued_at"),
+    # Side work the worker runs between asset stages: item fits on a hero, example renders.
+    "jobs": ("kind", "status", "target_id", "queued_at"),
+    # Saved combinations of a hero and the gear and weapon it wears.
+    "outfits": ("project_id", "name"),
 }
 
 

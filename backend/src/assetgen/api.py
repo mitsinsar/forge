@@ -6,6 +6,7 @@ import asyncio
 import io
 import re
 import shutil
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -21,8 +22,9 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
 from .exporters import safe_name
 from .pipeline import Conflict, Invalid, Pipeline
 from .tools import check_tools
-from .schemas import (AssetCreate, Kind, Approve, LoraRegister, LoraUpdate, ProfileCreate, ProfileUpdate,
-                      ProjectCreate, ProjectUpdate, Reject, TrainingCandidate)
+from .schemas import (AssetCreate, Kind, Approve, ExamplesRequest, FitRequest, LoraRegister, LoraUpdate,
+                      OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
+                      TrainingCandidate)
 
 MAX_REFERENCE_IMAGES = 3
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -338,6 +340,9 @@ def asset_view(request: Request, asset: dict) -> dict:
         "mesh": url(mesh.get("glb")), "texture": url(mesh.get("texture")), "animated": url(rig.get("glb")),
         "zip": str(request.url_for("download_asset", asset_id=asset["id"])) if export.get("zip") else None,
         "export_files": [url(f"{export['folder']}/{f}") for f in export.get("files", [])] if export else [],
+        "thumb": str(request.url_for("read_asset_thumb", asset_id=asset["id"])) if prompt.get("candidates") else None,
+        # Gear and weapons fitted on other heroes (outfits): hero id -> animated GLB.
+        "fits": {hero: url(fit["glb"]) for hero, fit in (asset.get("fits") or {}).items()},
     }
     return view
 
@@ -503,6 +508,27 @@ def download_asset(request: Request, asset_id: str):
     return FileResponse(path, media_type="application/zip", filename=path.name)
 
 
+@router.get("/assets/{asset_id}/thumb", tags=["assets"],
+            summary="A small JPEG of the asset's preview (the picked candidate, or the first) for galleries")
+def read_asset_thumb(request: Request, asset_id: str):
+    pipeline = pipeline_of(request)
+    asset = _found(pipeline.db.get("assets", asset_id), "asset")
+    candidates = ((asset.get("outputs") or {}).get("prompt") or {}).get("candidates") or []
+    if not candidates:
+        raise HTTPException(404, "no preview yet")
+    chosen = asset.get("chosen_candidate") or 1
+    source = pipeline.asset_dir(asset_id) / candidates[min(chosen, len(candidates)) - 1]
+    if not source.is_file():
+        raise HTTPException(404, "no preview yet")
+    thumb = source.with_name(f"{source.stem}_thumb.jpg")
+    if not thumb.is_file() or thumb.stat().st_mtime < source.stat().st_mtime:
+        with Image.open(source) as image:
+            small = image.convert("RGB")
+            small.thumbnail((384, 384))
+            small.save(thumb, quality=85)
+    return FileResponse(thumb, media_type="image/jpeg")
+
+
 @router.get("/assets/{asset_id}/files/{path:path}", tags=["assets"],
             summary="Download a file the pipeline made (candidates, GLBs, sprites, export files)")
 def read_asset_file(request: Request, asset_id: str, path: str):
@@ -514,6 +540,134 @@ def read_asset_file(request: Request, asset_id: str, path: str):
         raise HTTPException(404, "file not found")
     media = "model/gltf-binary" if target.suffix == ".glb" else None
     return FileResponse(target, media_type=media)
+
+
+# ---- item fits, side jobs and examples --------------------------------------
+
+@router.post("/assets/{asset_id}/fits", tags=["assets"], status_code=202,
+             summary="Fit finished gear or a weapon on a rigged hero (queued job; kept per hero)")
+def fit_item(request: Request, asset_id: str, body: FitRequest):
+    pipeline = pipeline_of(request)
+    item = _found(pipeline.db.get("assets", asset_id), "asset")
+    if item["kind"] not in ("gear", "weapon"):
+        raise HTTPException(422, "only gear and weapons are fitted on a hero")
+    if not (item.get("outputs") or {}).get("mesh"):
+        raise HTTPException(409, "the item has no mesh yet: approve its gate 2 first")
+    if body.wearer_id not in {w["id"] for w in pipeline.wearers(item["project_id"])}:
+        raise HTTPException(422, "the wearer must be a rigged biped hero of the same project")
+    return pipeline.queue_job("fit", asset_id, {"wearer_id": body.wearer_id})
+
+
+@router.get("/jobs", tags=["jobs"], summary="List side jobs (item fits, example renders)")
+def list_jobs(target_id: str | None = None, kind: str | None = None, status: str | None = None,
+              db: Database = Depends(db_of)):
+    return db.list("jobs", order="queued_at DESC", target_id=target_id, kind=kind, status=status)[:100]
+
+
+@router.get("/jobs/{job_id}", tags=["jobs"], summary="Get a side job")
+def read_job(job_id: str, db: Database = Depends(db_of)):
+    return _found(db.get("jobs", job_id), "job")
+
+
+@router.post("/loras/{lora_id}/examples", tags=["loras"], status_code=202,
+             summary="Render the example sheet: three subjects with and without the LoRA (queued job)")
+def lora_examples(request: Request, lora_id: str, body: ExamplesRequest | None = None):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("loras", lora_id), "LoRA")
+    params = {"weight": body.weight} if body and body.weight is not None else {}
+    return pipeline.queue_job("lora_examples", lora_id, params)
+
+
+@router.post("/profiles/{profile_id}/examples", tags=["profiles"], status_code=202,
+             summary="Render the example sheet: three subjects in this style (queued job)")
+def profile_examples(request: Request, profile_id: str):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("profiles", profile_id), "profile")
+    return pipeline.queue_job("profile_examples", profile_id)
+
+
+@router.post("/loras/{lora_id}/example-images", tags=["loras"], status_code=201,
+             summary="Add your own example image to a LoRA (PNG, JPEG or WebP)")
+async def add_lora_image(request: Request, lora_id: str, file: UploadFile = File(...)):
+    pipeline = pipeline_of(request)
+    lora = _found(pipeline.db.get("loras", lora_id), "LoRA")
+    data = await file.read()
+    if len(data) > 30 * 1024 * 1024:
+        raise HTTPException(413, "the image is larger than 30 MB")
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            if opened.format not in ("PNG", "JPEG", "WEBP"):
+                raise HTTPException(422, "the image must be PNG, JPEG or WebP")
+            image = opened.convert("RGB")
+    except (OSError, Image.DecompressionBombError):
+        raise HTTPException(422, "the file is not a readable image") from None
+    name = f"{uuid.uuid4().hex[:12]}.jpg"
+    folder = pipeline.examples_dir("loras", lora_id) / "yours"
+    folder.mkdir(parents=True, exist_ok=True)
+    image.thumbnail((1024, 1024))
+    image.save(folder / name, quality=90)
+    images = [*(lora.get("example_images") or []), f"loras/{lora_id}/yours/{name}"]
+    return _lora_view(pipeline.db.update("loras", lora_id, {"example_images": images}))
+
+
+@router.delete("/loras/{lora_id}/example-images/{name}", tags=["loras"], summary="Remove one of your example images")
+def remove_lora_image(request: Request, lora_id: str, name: str):
+    pipeline = pipeline_of(request)
+    lora = _found(pipeline.db.get("loras", lora_id), "LoRA")
+    path = f"loras/{lora_id}/yours/{name}"
+    images = [i for i in lora.get("example_images") or [] if i != path]
+    (pipeline.examples_dir("loras", lora_id) / "yours" / Path(name).name).unlink(missing_ok=True)
+    return _lora_view(pipeline.db.update("loras", lora_id, {"example_images": images}))
+
+
+@router.get("/examples/{path:path}", tags=["loras"], summary="An example image (LoRA or style profile sheets)")
+def read_example(request: Request, path: str):
+    root = (pipeline_of(request).settings.data_dir / "examples").resolve()
+    target = (root / path).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise HTTPException(404, "file not found")
+    return FileResponse(target)
+
+
+# ---- outfits ----------------------------------------------------------------
+
+def _check_outfit(pipeline, project_id: str, hero_id: str | None, items: list[str] | None) -> None:
+    if hero_id is not None:
+        hero = _found(pipeline.db.get("assets", hero_id), "hero")
+        if hero["project_id"] != project_id or hero["kind"] != "hero":
+            raise HTTPException(422, "the hero must be a hero of the outfit's project")
+    for item_id in items or []:
+        item = _found(pipeline.db.get("assets", item_id), "item")
+        if item["project_id"] != project_id or item["kind"] not in ("gear", "weapon"):
+            raise HTTPException(422, "outfit items are gear and weapons of the outfit's project")
+
+
+@router.get("/outfits", tags=["outfits"], summary="List saved outfits")
+def list_outfits(project_id: str | None = None, db: Database = Depends(db_of)):
+    return db.list("outfits", project_id=project_id)
+
+
+@router.post("/outfits", tags=["outfits"], status_code=201, summary="Save an outfit (a hero and what it wears)")
+def create_outfit(request: Request, body: OutfitCreate):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("projects", body.project_id), "project")
+    _check_outfit(pipeline, body.project_id, body.hero_id, body.items)
+    return pipeline.db.insert("outfits", body.model_dump())
+
+
+@router.patch("/outfits/{outfit_id}", tags=["outfits"], summary="Change an outfit")
+def update_outfit(request: Request, outfit_id: str, body: OutfitUpdate):
+    pipeline = pipeline_of(request)
+    outfit = _found(pipeline.db.get("outfits", outfit_id), "outfit")
+    _check_outfit(pipeline, outfit["project_id"], body.hero_id, body.items)
+    return pipeline.db.update("outfits", outfit_id, body.model_dump(exclude_none=True))
+
+
+@router.delete("/outfits/{outfit_id}", tags=["outfits"], status_code=204, summary="Delete an outfit")
+def delete_outfit(outfit_id: str, db: Database = Depends(db_of)):
+    _found(db.get("outfits", outfit_id), "outfit")
+    db.delete("outfits", outfit_id)
+    return Response(status_code=204)
 
 
 # ---- live events ------------------------------------------------------------

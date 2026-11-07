@@ -28,7 +28,9 @@ After `npm run build`, `uv run assetgen` serves the app itself at http://127.0.0
 ## Screens
 
 * **Assets** — every asset with live status (queued, running with step and progress, waiting at
-  gate N, done, failed), filtered by project, kind and status.
+  gate N, done, failed), filtered by project, kind and status, as a gallery (each asset's preview
+  thumbnail; Godot assets play their walk sprites on hover) or a table. "Needs me" shows the
+  assets waiting at a gate.
 * **New asset** — project, kind, description, optional name, archetype override (characters
   only), slot (gear), weapon class (weapons) and style profile.
 * **Asset** — stepper for preview → mesh → animate → export and the current gate:
@@ -37,8 +39,13 @@ After `npm run build`, `uv run assetgen` serves the app itself at http://127.0.0
   for Godot projects and grip fields for weapons). Every gate can be rejected with a note, which
   reruns only that stage. Done shows the export folder, files, zip download, re-export and the
   training-candidate flag; failed shows the error and Retry.
-* **Projects**, **Style profiles** (all fields, reference images, LoRAs of the same base model)
-  and the **LoRA library** (upload or register by path).
+* **Outfits** — pick a rigged hero, then gear per slot and a weapon; the 3D view plays the hero
+  with every item fitted on it (an item not yet fitted on that hero is fitted by a worker job and
+  appears when ready). Outfits can be saved, loaded ("Wear") and deleted.
+* **Projects**, **Style profiles** (all fields, reference images, LoRAs of the same base model,
+  and an example sheet: a knight, a wolf and a sword in the profile's style) and the **LoRA
+  library** (upload or register by path; each LoRA's Examples show the same three subjects with
+  and without it at a chosen weight, plus your own example images).
 
 ## Layout
 
