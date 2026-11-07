@@ -141,6 +141,8 @@ class AssetCreate(Strict):
     archetype: str | None = Field(None, description="Override Qwen's archetype (heroes, monsters, bosses).")
     slot: Slot | None = Field(None, description="Gear only.")
     weapon_class: WeaponClass | None = Field(None, description="Weapons only.")
+    height: float | None = Field(None, ge=0.3, le=10.0, description="Characters only: height in metres "
+                                 "(default by kind: hero 1.8, monster 1.5, boss 2.7).")
     profile_id: str | None = Field(None, description="Defaults to the project's default profile.")
     overrides: ProfileSettings | None = Field(None, description="Per-asset overrides of profile fields.")
 
@@ -159,6 +161,10 @@ class Reject(Strict):
     note: str | None = Field(None, max_length=2000, description="Folded into the next attempt.")
     archetype: str | None = Field(None, description="Gate 1 only: switch archetype.")
     grip: Grip | None = Field(None, description="Gate 3, weapons only: adjust the grip.")
+    height: float | None = Field(None, ge=0.3, le=10.0,
+                                 description="Gate 2, characters only: rescale the mesh to this height in metres.")
+    wearer: str | None = Field(None, description="Gate 3, gear and weapons only: refit on this rigged biped "
+                                                  "hero of the project (its id); \"\" for the base mannequin.")
     joints: dict[str, list[float]] | None = Field(
         None, description="Gate 3, characters only: joints moved in the joint editor, by name, as rest positions "
                           "in the mesh's space (Blender axes: Z up, -Y front, metres). They replace UniRig's for "

@@ -4,6 +4,7 @@ Called by ``rig_animate.py`` when its arguments have ``attach``::
 
     {"mesh_glb": "mesh/mesh.glb", "base_body_blend": ".../biped/base_body.blend",
      "template_object": "biped_template",
+     "wearer_blend": ".../<hero>/rig/rigged.blend" | null,
      "clips": [{"name": "walk", "file": ".../clips/walk.glb", "loop": true}, ...],
      "attach": {"kind": "gear", "slot": "head"}
              | {"kind": "weapon", "weapon_class": "one_handed", "socket": "weapon_r",
@@ -27,6 +28,11 @@ bone so the grip frame sits on the bone's frame (+Y out of the fist on the thumb
 the fingers). A grip given at gate 3 (``grip_matrix``) replaces the detected one. Two-handed
 weapons also get a second grip, 12 cm towards the blade, for ``weapon_l``.
 
+**Wearer**: with ``wearer_blend`` the item is fitted on that character instead of the base body:
+its skinned mesh and armature are loaded from the scene its rig stage kept, its slot regions are
+worked out the same way (each vertex's strongest bone), and its own baked clips are played, so
+nothing is retargeted.
+
 The preview GLB has the body (named ``mannequin``, which the FBX export and the sprite render
 leave out or hide), the item and the armature with every clip.
 
@@ -46,7 +52,7 @@ from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 
 import rig_animate as rig
-from _common import progress, select_only
+from _common import progress, select_only, slot_groups
 
 MARGIN = 1.08        # the item covers its region by this much
 OFFSET = 0.008       # metres between the body and pushed-out gear
@@ -65,6 +71,33 @@ def load_base_body(blend: str, armature: str):
     body = bpy.data.objects.get("mannequin")
     if arm is None or body is None:
         raise ValueError(f"{blend} needs the objects {armature} and mannequin; rebuild the templates")
+    return arm, body
+
+
+def load_wearer(blend: str, armature: str, clips: list[str]):
+    """A rigged character's armature, its skinned mesh (as ``mannequin``, with slot regions) and its
+    baked clips, from the ``rigged.blend`` its rig stage kept."""
+    with bpy.data.libraries.load(blend, link=False) as (source, target):
+        target.objects = [name for name in source.objects if name in (armature, "mesh")]
+        target.actions = [name for name in source.actions if name in clips]
+    for obj in target.objects:
+        bpy.context.scene.collection.objects.link(obj)
+    # The appended objects themselves: names can clash with the item's (which is also "mesh").
+    arm = next((o for o in target.objects if o.type == "ARMATURE"), None)
+    body = next((o for o in target.objects if o.type == "MESH"), None)
+    if arm is None or body is None:
+        raise ValueError(f"{blend} has no {armature} and mesh; re-rig the wearer")
+    missing = [c for c in clips if c not in {a.name for a in target.actions}]
+    if missing:
+        raise ValueError(f"the wearer has no clip {', '.join(missing)}; re-rig it so it gets every clip")
+    for action in target.actions:
+        action.use_fake_user = True
+    body.name = body.data.name = "mannequin"
+    if arm.animation_data:
+        arm.animation_data.action = None
+    slot_groups(body, None)
+    if "weapon_r" not in arm.data.bones:
+        raise ValueError("the wearer's skeleton has no weapon sockets; re-rig it")
     return arm, body
 
 
@@ -419,7 +452,11 @@ def main(args: dict) -> dict:
     scene = bpy.context.scene
     scene.render.fps, scene.render.fps_base = rig.FPS, 1.0
     item = rig.load_lod0(args["mesh_glb"])
-    arm, body = load_base_body(args["base_body_blend"], args["template_object"])
+    wearer = args.get("wearer_blend")
+    if wearer:
+        arm, body = load_wearer(wearer, args["template_object"], [c["name"] for c in args["clips"]])
+    else:
+        arm, body = load_base_body(args["base_body_blend"], args["template_object"])
     result: dict = {}
     if attach["kind"] == "gear":
         progress(0.08, f"Fitting the {attach['slot']} gear on the base body")
@@ -444,11 +481,14 @@ def main(args: dict) -> dict:
                             "second_grip_matrix": as_rows(second) if second else None,
                             "manual": bool(manual), **measured}
 
-    reference, fitted_rest = rig.rest_directions(arm), rig.rest_rotations(arm)
-    clips = []
-    for index, clip in enumerate(args["clips"]):
-        progress(0.2 + 0.7 * index / max(len(args["clips"]), 1), f"Retargeting {clip['name']}")
-        clips.append(rig.retarget(arm, clip, 1.0, Vector(), reference, fitted_rest))
+    if wearer:  # its clips are already baked on its skeleton
+        clips = [{"name": c["name"], "duration": c["duration"], "loop": bool(c.get("loop"))} for c in args["clips"]]
+    else:
+        reference, fitted_rest = rig.rest_directions(arm), rig.rest_rotations(arm)
+        clips = []
+        for index, clip in enumerate(args["clips"]):
+            progress(0.2 + 0.7 * index / max(len(args["clips"]), 1), f"Retargeting {clip['name']}")
+            clips.append(rig.retarget(arm, clip, 1.0, Vector(), reference, fitted_rest))
 
     progress(0.92, "Writing the animated GLB")
     out = Path(args["out_glb"])

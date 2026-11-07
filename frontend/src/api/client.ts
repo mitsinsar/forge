@@ -220,6 +220,8 @@ export interface AssetOutputs {
     joints?: Record<string, { head: [number, number, number]; parent: string | null }>;
     /** Joints the user moved (they replace the detected ones on every re-rig). */
     joint_overrides?: string[];
+    /** Gear and weapons: the hero it was fitted on (null: the base mannequin). */
+    wearer?: { id: string; name: string } | null;
     /** Gear: how it was fitted on the base body. */
     gear?: { slot: string; scale: number; inside_before: number; inside_after: number; masked_faces: number };
     /** Weapons: what the grip detection measured. */
@@ -249,6 +251,10 @@ export interface Asset {
   slot: Slot | null;
   weapon_class: WeaponClass | null;
   grip: Grip | null;
+  /** Characters: the height asked for in metres (null: the kind's default). */
+  height?: number | null;
+  /** Gear and weapons: the hero they are fitted on (null: the base mannequin). */
+  wearer_id?: string | null;
   /** "upload" when made from the user's own image; missing on older assets. */
   source?: "generated" | "upload";
   status: AssetStatus;
@@ -284,6 +290,8 @@ export interface AssetInput {
   archetype?: string;
   slot?: Slot;
   weapon_class?: WeaponClass;
+  /** Characters: height in metres (default by kind). */
+  height?: number;
   profile_id?: string;
   /** Per-asset overrides of style profile fields. */
   overrides?: { budgets?: { triangles?: Partial<PerKind> }; mesh?: Partial<MeshQuality> };
@@ -299,6 +307,10 @@ export interface RejectInput {
   note?: string;
   archetype?: string;
   grip?: Grip;
+  /** Gate 2, characters: rescale to this height in metres. */
+  height?: number;
+  /** Gate 3, gear and weapons: refit on this rigged hero ("" for the base mannequin). */
+  wearer?: string;
   /** Gate 3, characters: moved joints (Blender axes); {} goes back to the detected ones. */
   joints?: Record<string, [number, number, number]>;
 }
@@ -409,6 +421,8 @@ export const api = {
   deleteAsset: (id: string) => request<void>("DELETE", `/assets/${id}`),
   approve: (id: string, gate: Gate, candidate?: number) =>
     request<Asset>("POST", `/assets/${id}/gates/${gate}/approve`, candidate ? { candidate } : {}),
+  wearers: (projectId: string) =>
+    request<{ id: string; name: string; height: number | null }[]>("GET", `/projects/${projectId}/wearers`),
   reject: (id: string, gate: Gate, input: RejectInput) =>
     request<Asset>("POST", `/assets/${id}/gates/${gate}/reject`, input),
   retry: (id: string) => request<Asset>("POST", `/assets/${id}/retry`),

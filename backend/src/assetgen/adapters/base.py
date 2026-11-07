@@ -68,9 +68,10 @@ class BlenderAdapter(Protocol):
     """Headless Blender (``blender -b -P script.py``)."""
 
     def cleanup_and_lods(self, *, raw_mesh: Path, kind: str, triangles: int, lod_ratios: list[float],
-                         out_dir: Path, progress: Progress, remove_floaters: bool = True) -> dict:
+                         out_dir: Path, progress: Progress, remove_floaters: bool = True,
+                         height: float | None = None) -> dict:
         """Cleans up (with ``remove_floaters``, also drops small pieces that do not touch the body), scales to the kind's standard size with the origin at the
-        feet, decimates to the budget and makes the LODs (``lod_ratios`` of
+        feet (``height``, when given, replaces the kind's size), decimates to the budget and makes the LODs (``lod_ratios`` of
         LOD0). Writes ``out_dir/mesh.glb`` with one node per level (``LOD0``,
         ``LOD1``...). Returns ``{"glb": path, "lods": [{"level", "ratio", "triangles"}]}``."""
 

@@ -54,10 +54,13 @@ class BlenderTools:
         return run_script(self.blender, script, args, work_dir=out_dir,
                           log_path=out_dir / f"blender_{Path(script).stem}.log", progress=progress)
 
-    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress, remove_floaters=True):
+    def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress, remove_floaters=True,
+                         height=None):
         out_dir = Path(out_dir)
         glb = out_dir / "mesh.glb"
         size, fit = MODEL_SIZES.get(kind, MODEL_SIZES["hero"])
+        if height:  # the asset's own height (characters)
+            size = float(height)
         result = self._run("cleanup_lods.py", {
             "raw_mesh": str(Path(raw_mesh).resolve()), "out_glb": str(glb.resolve()), "triangles": int(triangles),
             "lod_ratios": [float(r) for r in lod_ratios], "height": size, "fit": fit,
@@ -75,11 +78,19 @@ class BlenderTools:
         folder = ARCHETYPES_DIR / archetype["folder"]
         record = json.loads((folder / "clips.json").read_text(encoding="utf-8"))
         missing = [c for c in clips if not (folder / "clips" / f"{c}.glb").is_file()]
-        if missing:
+        if missing and not (attach and attach.get("wearer")):
             raise BlenderError(f"The {archetype['id']} archetype has no clip for: {', '.join(missing)}. Rebuild "
                                "the templates with blender_scripts/build_archetypes.py.")
         clip_args = [{"name": c, "file": str((folder / "clips" / f"{c}.glb").resolve()),
                       "loop": bool(record.get(c, {}).get("loop"))} for c in clips]
+        if attach and attach.get("wearer"):  # the wearer's own baked clips, with their lengths
+            wearer = attach["wearer"]
+            known = {c["name"]: c for c in wearer["clips"]}
+            missing = [c for c in clips if c not in known]
+            if missing:
+                raise BlenderError(f"The wearer {wearer['name']} has no clip for: {', '.join(missing)}. Re-rig it "
+                                   "so it gets every clip.")
+            clip_args = [known[c] for c in clips]
         if attach:
             body = folder / "base_body.blend"
             if not body.is_file():
@@ -87,7 +98,9 @@ class BlenderTools:
                                    "blender_scripts/build_archetypes.py.")
             result = self._run("rig_animate.py", {
                 "mesh_glb": str(Path(mesh_glb).resolve()), "base_body_blend": str(body.resolve()),
-                "template_object": f"{archetype['id']}_template", "clips": clip_args, "attach": attach,
+                "template_object": f"{archetype['id']}_template", "clips": clip_args,
+                "attach": {k: v for k, v in attach.items() if k != "wearer"},
+                "wearer_blend": attach["wearer"]["blend"] if attach.get("wearer") else None,
                 "out_glb": str(out_path.resolve()), "mask_json": str((out_path.parent / "body_mask.json").resolve())},
                 out_path.parent, progress)
             return {"glb": out_path, "clips": result["clips"],

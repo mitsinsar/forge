@@ -27,7 +27,8 @@ Steps:
    rotations make clips made on a different rest pose (the biped's clips have a T-pose rest,
    its template an A-pose) play correctly; copying only rotations keeps the asset's own bone
    lengths and stance, so nothing stretches.
-4. Export one GLB with the skinned mesh, the armature and one animation per clip.
+4. Export one GLB with the skinned mesh, the armature and one animation per clip, and keep the
+   scene as ``rigged.blend`` beside it (gear and weapons fitted on this character load it).
 
 Result: ``{"clips": [{"name", "duration", "loop"}], "scale", "skinning", "unweighted_before_fix",
 "cross_limb_weights_dropped", "joints_placed", "joints"}`` (``joints``: each deforming joint's
@@ -567,6 +568,9 @@ def main(args: dict) -> dict:
                               export_apply=False, export_animations=True, export_animation_mode="ACTIONS",
                               export_force_sampling=True, export_skins=True, export_def_bones=False,
                               export_materials="EXPORT")
+    # The exact scene (bones, skinned mesh, baked clips) for gear and weapons worn by this character.
+    mesh.name = mesh.data.name = "mesh"
+    bpy.ops.wm.save_as_mainfile(filepath=str(out.with_name("rigged.blend")), compress=True, copy=True)
     progress(1.0, "Animated result ready")
     joints = {b.name: {"head": [round(v, 5) for v in arm.matrix_world @ b.head_local],
                        "parent": b.parent.name if b.parent else None}

@@ -70,3 +70,43 @@ def select_only(objects, active=None) -> None:
     for obj in objects:
         obj.select_set(True)
     bpy.context.view_layer.objects.active = active or (objects[0] if objects else None)
+
+
+# A body's gear-slot regions (the biped base body's, or a wearer's): the bones whose vertices each
+# gear slot covers, by each vertex's strongest bone. "cape" is the back of the torso and thighs
+# instead (see slot_groups).
+SLOT_BONES = {
+    "head": ("Head", "neck_01"),
+    "chest": ("spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r", "upperarm_l", "upperarm_r"),
+    "legs": ("pelvis", "thigh_l", "thigh_r", "calf_l", "calf_r"),
+    "hands": ("hand_l", "hand_r", "lowerarm_l", "lowerarm_r"),
+    "feet": ("foot_l", "foot_r", "ball_l", "ball_r"),
+}
+FINGERS = ("index", "middle", "ring", "pinky", "thumb")  # their vertices count as the hand's
+CAPE_BONES = ("spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r", "pelvis", "thigh_l", "thigh_r")
+
+
+def slot_groups(body, joints: list) -> dict:
+    """Drops weights of bones not in ``joints`` (unless None) and adds a ``slot_<slot>`` vertex group
+    per gear slot. Returns the vertex count of each slot."""
+    for group in list(body.vertex_groups):
+        if group.name.startswith("slot_") or (joints is not None and group.name not in joints):
+            body.vertex_groups.remove(group)
+    names = {g.index: g.name for g in body.vertex_groups}
+    centre_y = sum(v.co.y for v in body.data.vertices) / max(len(body.data.vertices), 1)
+    members = {slot: [] for slot in [*SLOT_BONES, "cape"]}
+    for vertex in body.data.vertices:
+        if not vertex.groups:
+            continue
+        strongest = names[max(vertex.groups, key=lambda g: g.weight).group]
+        if strongest.split("_")[0] in FINGERS:
+            strongest = "hand_" + strongest[-1]
+        for slot, bones in SLOT_BONES.items():
+            if strongest in bones:
+                members[slot].append(vertex.index)
+        if strongest in CAPE_BONES and vertex.co.y > centre_y:  # the back (the front faces -Y)
+            members["cape"].append(vertex.index)
+    for slot, indices in members.items():
+        group = body.vertex_groups.new(name=f"slot_{slot}")
+        group.add(indices, 1.0, "REPLACE")
+    return {slot: len(indices) for slot, indices in members.items()}

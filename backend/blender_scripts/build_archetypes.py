@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bpy  # noqa: E402
 from mathutils import Matrix, Quaternion, Vector  # noqa: E402
 
-from _common import empty_scene, import_gltf, progress  # noqa: E402
+from _common import empty_scene, import_gltf, progress, slot_groups  # noqa: E402
 
 ARCHETYPES = Path(__file__).resolve().parents[1] / "src" / "assetgen" / "archetypes"
 FPS = 30
@@ -282,19 +282,6 @@ def joint_bounds(arm, pad: float = 0.1) -> dict:
     return {"min": [round(v - pad * size, 5) for v in lo], "max": [round(v + pad * size, 5) for v in hi]}
 
 
-# The base body's slot regions: the bones whose vertices each gear slot covers (by each vertex's
-# strongest bone). "cape" is the back of the torso and thighs instead (see slot_groups).
-SLOT_BONES = {
-    "head": ("Head", "neck_01"),
-    "chest": ("spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r", "upperarm_l", "upperarm_r"),
-    "legs": ("pelvis", "thigh_l", "thigh_r", "calf_l", "calf_r"),
-    "hands": ("hand_l", "hand_r", "lowerarm_l", "lowerarm_r"),
-    "feet": ("foot_l", "foot_r", "ball_l", "ball_r"),
-}
-FINGERS = ("index", "middle", "ring", "pinky", "thumb")  # their vertices count as the hand's
-CAPE_BONES = ("spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r", "pelvis", "thigh_l", "thigh_r")
-
-
 def add_sockets(arm, sockets: dict) -> None:
     """Weapon socket bones (not deforming) on the hands: the head in the palm, the bone pointing
     out of the fist on the thumb side (where a held blade points), its Z axis along the fingers."""
@@ -348,32 +335,6 @@ def make_base_body(arm, meshes):
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     body.name = body.data.name = "mannequin"
     return body
-
-
-def slot_groups(body, joints: list) -> dict:
-    """Drops weights of bones the template doesn't keep and adds a ``slot_<slot>`` vertex group per
-    gear slot. Returns the vertex count of each slot."""
-    for group in list(body.vertex_groups):
-        if group.name not in joints:
-            body.vertex_groups.remove(group)
-    names = {g.index: g.name for g in body.vertex_groups}
-    centre_y = sum(v.co.y for v in body.data.vertices) / max(len(body.data.vertices), 1)
-    members = {slot: [] for slot in [*SLOT_BONES, "cape"]}
-    for vertex in body.data.vertices:
-        if not vertex.groups:
-            continue
-        strongest = names[max(vertex.groups, key=lambda g: g.weight).group]
-        if strongest.split("_")[0] in FINGERS:
-            strongest = "hand_" + strongest[-1]
-        for slot, bones in SLOT_BONES.items():
-            if strongest in bones:
-                members[slot].append(vertex.index)
-        if strongest in CAPE_BONES and vertex.co.y > centre_y:  # the back (the front faces -Y)
-            members["cape"].append(vertex.index)
-    for slot, indices in members.items():
-        group = body.vertex_groups.new(name=f"slot_{slot}")
-        group.add(indices, 1.0, "REPLACE")
-    return {slot: len(indices) for slot, indices in members.items()}
 
 
 def save_base_body(arm, body, path: Path) -> None:
