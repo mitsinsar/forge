@@ -122,11 +122,12 @@ def pose_to_targets(arm, targets: dict) -> int:
             pose_bone.matrix = matrix
             bpy.context.view_layer.update()
             placed += 1
-        children = [c for c in pose_bone.children if c.name in targets]
-        if not children:
+        if not pose_bone.children:
             continue
         tail = pose_bone.tail.copy()
-        child = min(children, key=lambda c: (c.head - tail).length)  # the one the bone points at
+        child = min(pose_bone.children, key=lambda c: (c.head - tail).length)  # the one the bone points at
+        if child.name not in targets:
+            continue  # turning towards a side branch (a clavicle) would swing the main one (the neck)
         head = pose_bone.head.copy()
         current, wanted = child.head - head, Vector(targets[child.name]) - head
         if current.length < 1e-6 or wanted.length < 1e-6:
@@ -392,10 +393,58 @@ def rest_rotations(arm) -> dict:
     return {b.name: (arm.matrix_world @ b.matrix_local).to_3x3().normalized().to_quaternion() for b in arm.data.bones}
 
 
-def retarget(arm, clip: dict, scale: float, offset: Vector, corrections: dict) -> dict:
-    """Bakes ``clip`` onto ``arm``. Each bone turns as the clip's bone turns away from the
-    template's own reference pose (``corrections[bone]`` = reference rest⁻¹ · fitted rest), so
-    the asset keeps its bone lengths and stance; the hips also move by the clip's travel."""
+def rest_directions(arm) -> dict:
+    """Each bone's rest direction (head to tail) in world space."""
+    return {b.name: (arm.matrix_world.to_3x3() @ (b.tail_local - b.head_local)).normalized() for b in arm.data.bones}
+
+
+def natural_pose(idle: dict, reference: dict, fitted_dirs: dict) -> dict:
+    """The bones whose fitted direction is closer to the idle clip's first frame than to the
+    template's A-pose reference, with the idle rotation as their reference. A mesh made with its
+    arms hanging (not in the A-pose the prompts ask for) then keeps them where they are in idle,
+    instead of lowering them by the clip's A-pose-to-idle turn into its legs."""
+    chosen = {}
+    for name, (rotation, direction) in idle.items():
+        if name in reference and name in fitted_dirs:
+            if fitted_dirs[name].angle(direction, 0.0) < fitted_dirs[name].angle(reference[name], 0.0):
+                chosen[name] = rotation
+    return chosen
+
+
+def clip_first_pose(clip_file: str, scale: float, offset: Vector) -> dict:
+    """World rotation and direction of every bone of ``clip_file``'s armature on its first frame."""
+    objects = import_gltf(clip_file)
+    names = [o.name for o in objects]
+    source = next(o for o in objects if o.type == "ARMATURE")
+    source.scale = (scale, scale, scale)
+    source.location = offset
+    action = source.animation_data.action if source.animation_data else None
+    bpy.context.scene.frame_set(int(round(action.frame_range[0])) if action else 0)
+    bpy.context.view_layer.update()
+    pose = {}
+    for bone in source.pose.bones:
+        matrix = source.matrix_world @ bone.matrix
+        pose[bone.name] = (matrix.to_3x3().normalized().to_quaternion(),
+                           (source.matrix_world.to_3x3() @ (bone.tail - bone.head)).normalized())
+    for name in names:
+        obj = bpy.data.objects.get(name)
+        if obj is not None:
+            bpy.data.objects.remove(obj, do_unlink=True)
+    for block in list(bpy.data.actions):
+        if not block.use_fake_user:
+            bpy.data.actions.remove(block)
+    return pose
+
+
+def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fitted: dict,
+             natural: dict | None = None) -> dict:
+    """Bakes ``clip`` onto ``arm``. Each bone turns against its parent as the clip's bone turns
+    against its parent away from the template's reference pose (``reference``: bone directions
+    before fitting; the clip's rest differs by the template's A-pose, and its bone axes by how
+    the importer guessed them), starting from the fitted rest (``fitted``). So the asset keeps
+    its bone lengths, stance and arm angle (bulky arms don't swing into the body); the hips also
+    move by the clip's travel. ``natural`` replaces the reference rotation of bones whose mesh
+    already stands as the idle clip does (see ``natural_pose``)."""
     objects = import_gltf(clip["file"])
     imported = [o.name for o in objects]  # names: removed objects can't be asked for theirs
     source = next(o for o in objects if o.type == "ARMATURE")
@@ -415,6 +464,14 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, corrections: dict) -
     driven = {b.name for b in bones if b.name in source.pose.bones}
     movers = {b.name for b in bones if len(b.parent_recursive) <= 1 and b.name in driven}
     src_rest = {n: source.matrix_world @ source.data.bones[n].head_local for n in movers}
+    # The clip bone's orientation in the reference pose: its rest, turned onto the reference direction.
+    src_dirs = rest_directions(source)
+    src_rots = rest_rotations(source)
+    src_ref = {n: src_dirs[n].rotation_difference(reference[n]) @ src_rots[n] for n in driven}
+    for n, rotation in (natural or {}).items():  # bones whose mesh stands as in idle, not the A-pose
+        if n in src_ref:
+            src_ref[n] = rotation
+    src_parent = {n: (source.data.bones[n].parent.name if source.data.bones[n].parent else None) for n in driven}
     baked = bpy.data.actions.new(clip["name"])
     baked.use_fake_user = True  # kept for the export, which writes every saved action
     arm.animation_data_create()
@@ -425,6 +482,8 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, corrections: dict) -
     for frame in range(start, end + 1):
         bpy.context.scene.frame_set(frame)
         posed: dict[str, Matrix] = {}
+        src_pose = {n: (source.matrix_world @ source.pose.bones[n].matrix).to_3x3().normalized().to_quaternion()
+                    for n in driven}
         for bone in bones:
             name = bone.name
             parent = bone.parent.name if bone.parent else None
@@ -435,8 +494,19 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, corrections: dict) -
                 travel = source.matrix_world @ source.pose.bones[name].head - src_rest[name]
                 location = rest[name].translation + travel * ratio
             if name in driven:
-                turned = (source.matrix_world @ source.pose.bones[name].matrix).to_3x3().normalized().to_quaternion()
-                wanted = Matrix.LocRotScale(location, turned @ corrections[name], None)
+                # The clip bone's turn against its parent, compared with the reference pose ...
+                up = src_parent[name]
+                if up in driven:
+                    turn = (src_ref[up].inverted() @ src_ref[name]).inverted() @ (src_pose[up].inverted() @ src_pose[name])
+                else:
+                    turn = src_ref[name].inverted() @ src_pose[name]
+                # ... applied to the fitted bone against its own (posed) parent.
+                if parent:
+                    above = posed[parent].to_3x3().normalized().to_quaternion()
+                    rotation = above @ (fitted[parent].inverted() @ fitted[name]) @ turn
+                else:
+                    rotation = fitted[name] @ turn
+                wanted = Matrix.LocRotScale(location, rotation, None)
             else:
                 wanted = base.copy()
                 wanted.translation = location
@@ -471,19 +541,21 @@ def main(args: dict) -> dict:
     arm = append_template(args["template_blend"], args["template_object"])
     template = json.loads(Path(args["template_json"]).read_text(encoding="utf-8"))
     scale, offset = fit_template(arm, mesh, template, args.get("fit_axis", "longest"))
-    reference = rest_rotations(arm)  # the pose the clips' rotations are measured from
+    reference = rest_directions(arm)  # the pose the clips' rotations are measured from
     placed = pose_to_targets(arm, args.get("targets") or {})
-    fitted = rest_rotations(arm) if placed else reference
-    corrections = {n: reference[n].inverted() @ fitted[n] for n in fitted}
+    fitted = rest_rotations(arm)
 
     progress(0.1, "Skinning the mesh")
     method, missing, dropped = skin(mesh, arm, args.get("unirig_glb"), args.get("mapping"))
     cut = separate_touching_limbs(mesh, arm)
 
+    idle = next((c for c in args["clips"] if c["name"] == "idle"), None)
+    natural = natural_pose(clip_first_pose(idle["file"], scale, offset), reference, rest_directions(arm)) if idle else {}
+
     clips = []
     for index, clip in enumerate(args["clips"]):
         progress(0.2 + 0.7 * index / max(len(args["clips"]), 1), f"Retargeting {clip['name']}")
-        clips.append(retarget(arm, clip, scale, offset, corrections))
+        clips.append(retarget(arm, clip, scale, offset, reference, fitted, natural))
 
     progress(0.92, "Writing the animated GLB")
     out = Path(args["out_glb"])
@@ -494,7 +566,7 @@ def main(args: dict) -> dict:
                               export_force_sampling=True, export_skins=True, export_def_bones=False,
                               export_materials="EXPORT")
     progress(1.0, "Animated result ready")
-    return {"clips": clips, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped, "touching_limb_edges_cut": cut,
+    return {"clips": clips, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped, "touching_limb_edges_cut": cut, "idle_reference_bones": sorted(natural),
             "joints_placed": placed}
 
 
