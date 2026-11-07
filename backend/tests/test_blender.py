@@ -759,3 +759,21 @@ def test_a_placement_moves_the_weapon_on_its_socket(tmp_path):
     up = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0.1], [0, 0, 0, 1]]  # 10 cm up (Blender Z)
     moved = weapon_node("moved", {"placement": up})
     assert 0.09 < float(np.linalg.norm(moved - plain)) < 0.11  # moved 10 cm, still under the socket
+
+
+@needs_blender
+def test_a_shield_stands_upright_on_the_left_hand_facing_out(tmp_path):
+    mesh = tmp_path / "shield.glb"
+    builder = GlbBuilder()
+    material = builder.add_material("albedo", (0.5, 0.5, 0.5))
+    # glTF: Y up. A 60 cm tall, 45 cm wide board lying flat, with a boss bulging out of its front (+Z here).
+    parts = [Part((0, 0, 0), (0.225, 0.3, 0.015), 2), Part((0, 0, 0.04), (0.06, 0.06, 0.03), 1)]
+    builder.add_node("LOD0", builder.add_mesh("LOD0", build_mesh(parts, 4000), material))
+    builder.write(mesh)
+    result, gltf, _ = _attach(tmp_path, mesh, {"kind": "weapon", "weapon_class": "shield", "socket": "weapon_l",
+                                               "grip_matrix": None}, clips=("walk",))
+    assert result["weapon"]["handle_end"] == "back"
+    names = [n.get("name") for n in gltf["nodes"]]
+    assert names.index("weapon") in gltf["nodes"][names.index("weapon_l")].get("children", [])
+    record = json.loads((tmp_path / "rig" / "rig_animate.result.json").read_text())
+    assert record["weapon"]["thickness"] < 0.12

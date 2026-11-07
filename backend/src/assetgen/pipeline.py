@@ -92,8 +92,8 @@ class Pipeline:
         if asset["kind"] == "weapon":
             clips += [c for c in WEAPON_ATTACKS[asset["weapon_class"]] if c not in clips]
         elif self.paper_doll(asset):  # the body and gear layers play every weapon's attacks too
-            clips += [c for attacks in WEAPON_ATTACKS.values() for c in attacks if c not in clips]
-        return clips
+            clips += [c for attacks in WEAPON_ATTACKS.values() for c in attacks]
+        return list(dict.fromkeys(clips))  # once each (weapon classes share some attacks)
 
     @staticmethod
     def paper_doll(asset: dict) -> bool:
