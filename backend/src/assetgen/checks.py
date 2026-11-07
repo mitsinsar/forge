@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from .pose import arms_check, silhouette
+from .pose import arms_check, silhouette, touches_edge
 
 PASS, WARN, FAIL = "pass", "warn", "fail"
 ORDER = {PASS: 0, WARN: 1, FAIL: 2}
@@ -59,20 +59,29 @@ def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict |
     with Image.open(path) as image:
         image.thumbnail((256, 256))
         mask = silhouette(image)
+    edge = touches_edge(mask)
     sizes = _shapes(mask)
-    figures = sum(1 for s in sizes if sizes and s >= 0.2 * sizes[0])
-    if vision and vision.get("figures", 1) > figures:
-        figures = int(vision["figures"])
-    checks.append(check("figures", "One subject", FAIL if figures > 1 else PASS,
-                        f"{figures} separate figures or objects" if figures > 1 else "One figure"))
-    if sizes:
-        margin = 1
-        edges = (mask[:margin].any() or mask[-margin:].any() or mask[:, :margin].any() or mask[:, -margin:].any())
-        cut = edges or (vision is not None and not vision.get("whole_body", True))
-        checks.append(check("whole", "Nothing cut off", FAIL if cut else PASS,
-                            "Touches the image edge" if cut else "Whole in the frame"))
+    pieces = sum(1 for s in sizes if sizes and s >= 0.2 * sizes[0])
+    # The vision model counts figures; the silhouette splits on low contrast (dark clothes on a
+    # dark background), so on its own it only warns.
+    seen = int(vision.get("figures", 1)) if vision else None
+    if seen is not None and seen > 1:
+        checks.append(check("figures", "One subject", FAIL, f"{seen} separate figures or objects"))
+    elif seen is None and pieces > 1:
+        checks.append(check("figures", "One subject", WARN, f"The outline falls into {pieces} parts"))
     else:
+        checks.append(check("figures", "One subject", PASS, "One figure"))
+    # Cut off: the vision model says so; the silhouette (thrown off by vignettes) only warns
+    # when there is no vision model.
+    if vision is not None:
+        whole = vision.get("whole_body", True)
+        checks.append(check("whole", "Nothing cut off", PASS if whole else FAIL,
+                            "Whole in the frame" if whole else "Cut off by the image edge"))
+    elif not sizes:
         checks.append(check("whole", "Nothing cut off", FAIL, "No figure found on the background"))
+    else:
+        checks.append(check("whole", "Nothing cut off", WARN if edge else PASS,
+                            "Seems to touch the image edge" if edge else "Whole in the frame"))
     if posed_biped:
         arms = arms_check(path)
         status = PASS if arms["arms_clear"] else FAIL if arms["arms_clear"] is False else WARN

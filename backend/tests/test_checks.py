@@ -24,15 +24,21 @@ def test_props_two_figures_and_cut_off_bodies_fail(tmp_path):
                                                            "detail": "Holds a shield"}
     two = qc.candidate_checks(figure(tmp_path / "b.png", arms_out=True, extra_figure=True), kind="hero",
                               posed_biped=False, vision=None)
-    assert next(c for c in two if c["id"] == "figures")["status"] == qc.FAIL
+    assert next(c for c in two if c["id"] == "figures")["status"] == qc.WARN  # silhouette only: warns
+    seen = qc.candidate_checks(figure(tmp_path / "b.png", arms_out=True, extra_figure=True), kind="hero",
+                               posed_biped=False, vision={"held_item": False, "figures": 2, "whole_body": True})
+    assert next(c for c in seen if c["id"] == "figures")["status"] == qc.FAIL
     assert next(c for c in two if c["id"] == "props")["status"] == qc.WARN  # no vision model: not checked
 
     cut = tmp_path / "c.png"
     image = Image.new("RGB", (200, 200), (200, 200, 200))
-    ImageDraw.Draw(image).rectangle((80, 120, 120, 199), fill=(150, 20, 20))  # legs run off the bottom
+    ImageDraw.Draw(image).rectangle((92, 120, 108, 199), fill=(150, 20, 20))  # a leg runs off the bottom
     image.save(cut)
     assert next(c for c in qc.candidate_checks(cut, kind="weapon", posed_biped=False, vision=None)
-                if c["id"] == "whole")["status"] == qc.FAIL
+                if c["id"] == "whole")["status"] == qc.WARN  # the silhouette alone only warns
+    told = qc.candidate_checks(cut, kind="weapon", posed_biped=False,
+                               vision={"held_item": False, "figures": 1, "whole_body": False})
+    assert next(c for c in told if c["id"] == "whole")["status"] == qc.FAIL
 
 
 def test_mesh_and_rig_checks():
