@@ -75,7 +75,8 @@ class Hunyuan3DMesh:
 
     # ---- the job --------------------------------------------------------------
 
-    def _submit(self, cutout: Path, has_alpha: bool, hints: dict, quality: dict) -> str:
+    def _submit(self, cutout: Path, has_alpha: bool, hints: dict, quality: dict,
+                views: dict[str, Path] | None = None) -> str:
         seed = zlib.crc32(f"{hints.get('asset_id', '')}:{hints.get('attempt', 1)}".encode()) % (2 ** 32)
         body = {
             "image": base64.b64encode(cutout.read_bytes()).decode("ascii"),
@@ -85,6 +86,9 @@ class Hunyuan3DMesh:
             "seed": seed,
             **quality_params(quality),
         }
+        if views:  # multi-view: the shape comes from Hunyuan3D-2mv (local server patch)
+            body["mv_images"] = {name: base64.b64encode(Path(path).read_bytes()).decode("ascii")
+                                 for name, path in views.items()}
         answer = self._request("POST", "/send", body)
         uid = answer.get("uid")
         if not isinstance(uid, str) or not uid:
@@ -132,7 +136,8 @@ class Hunyuan3DMesh:
 
     # ---- the adapter ------------------------------------------------------------
 
-    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True, quality=None):
+    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True, quality=None,
+                      views=None):
         out_path = Path(out_path)
         directory = out_path.parent
         download = directory / DOWNLOAD_FILE
@@ -157,7 +162,7 @@ class Hunyuan3DMesh:
                 progress("Resuming the Hunyuan3D job", 0.1)
             else:
                 progress("Sending the image to Hunyuan3D", 0.05)
-                job = {"uid": self._submit(cutout, has_alpha, hints, quality or {}), "url": self.url,
+                job = {"uid": self._submit(cutout, has_alpha, hints, quality or {}, views), "url": self.url,
                        "sent_at": time.time()}
                 job_file.write_text(json.dumps(job), encoding="utf-8")
             glb = self._wait(job, job_file, progress)

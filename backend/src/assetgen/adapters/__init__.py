@@ -9,7 +9,10 @@ from .real import real_adapter_class
 
 def build_adapters(settings: Settings) -> Adapters:
     """The real adapter of every tool (the mesh tool chosen by ``mesh_tool``)."""
-    return Adapters(**{name: real_adapter_class(name, settings.mesh_tool)(settings) for name in ADAPTER_NAMES})
+    from .real.mvviews import MultiViewImages  # noqa: PLC0415
+
+    return Adapters(**{name: real_adapter_class(name, settings.mesh_tool)(settings) for name in ADAPTER_NAMES},
+                    views=MultiViewImages(settings))
 
 
 __all__ = ["Adapters", "build_adapters"]

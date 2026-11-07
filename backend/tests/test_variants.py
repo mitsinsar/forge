@@ -46,3 +46,42 @@ def test_a_variant_is_a_recoloured_copy_at_gate_3(client, settings, tmp_path):
 
     client.post(f"/api/assets/{variant['id']}/gates/3/approve", json={})
     assert wait_for(client, variant["id"], "done")["outputs"]["export"]["files"]
+
+
+def test_a_multi_view_mesh_draws_the_other_views_and_sends_them(client, settings, tmp_path, monkeypatch):
+    from PIL import Image as PILImage
+    pipeline = client.app.state.pipeline
+
+    class FakeViews:
+        def __init__(self):
+            self.calls = []
+
+        def render_views(self, *, front, prompt, seed, out_dir, progress):
+            self.calls.append(front)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            files = {}
+            for name in ("front", "right", "back", "left"):
+                files[name] = out_dir / f"{name}.png"
+                PILImage.new("RGB", (16, 16), (90, 90, 90)).save(files[name])
+            return files
+
+    views = FakeViews()
+    pipeline.adapters.views = views
+    sent = {}
+    original = pipeline.adapters.mesh.image_to_mesh
+
+    def mesh(**kwargs):
+        sent.update(kwargs.get("views") or {})
+        kwargs.pop("views", None)
+        return original(**kwargs)
+
+    monkeypatch.setattr(pipeline.adapters.mesh, "image_to_mesh", mesh)
+    project = make_project(client, "unity", tmp_path / "g")
+    asset = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "archetype": "biped",
+                                             "description": "a knight", "overrides": {"mesh": {"multi_view": True}}}).json()
+    wait_for(client, asset["id"], "waiting", gate=1)
+    client.post(f"/api/assets/{asset['id']}/gates/1/approve", json={"candidate": 1})
+    meshed = wait_for(client, asset["id"], "waiting", gate=2)
+    assert views.calls and views.calls[0].name == "front_input.png"
+    assert sorted(sent) == ["back", "left", "right"]  # the front image goes as the main image
+    assert [v.split("/")[-1] for v in meshed["outputs"]["mesh"]["views"]] == ["back.png", "front.png", "left.png", "right.png"]

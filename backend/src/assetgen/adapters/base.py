@@ -108,10 +108,11 @@ class BlenderAdapter(Protocol):
 
 class Adapters:
     def __init__(self, llm: LLMAdapter, image: ImageAdapter, mesh: MeshAdapter, rig: RigAdapter,
-                 blender: BlenderAdapter):
+                 blender: BlenderAdapter, views=None):
         self.llm = llm
         self.image = image
         self.mesh = mesh
         self.rig = rig
         self.blender = blender
+        self.views = views  # MV-Adapter, for multi-view meshes (optional)
 

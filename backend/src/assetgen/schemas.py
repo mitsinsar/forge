@@ -80,6 +80,8 @@ class MeshQuality(Strict):
     resolution: int | None = Field(None, ge=128, le=1024, description="Octree (marching cubes) resolution.")
     guidance: float | None = Field(None, ge=1, le=15, description="How closely the shape follows the image.")
     remove_floaters: bool | None = Field(None, description="Drop small pieces that do not touch the body.")
+    multi_view: bool | None = Field(None, description="Draw right, back and left views first (MV-Adapter) and "
+                                                      "build the shape from all four (Hunyuan3D-2mv).")
 
 
 class ProfileSettings(Strict):

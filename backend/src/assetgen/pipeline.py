@@ -20,6 +20,8 @@ import shutil
 import traceback
 from pathlib import Path
 
+from PIL import Image
+
 from .adapters import Adapters
 from .archetypes import get_archetype, load_archetypes
 from .config import Settings
@@ -29,9 +31,12 @@ from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import checks as qc
-from . import exporters, grips, pose, variants, watchdog
+from . import exporters, grips, imaging, pose, variants, watchdog
 
 log = logging.getLogger("assetgen.pipeline")
+
+# MV-Adapter's view names (seen from the character's right, back, left) to Hunyuan3D-2mv's.
+HUNYUAN_VIEW = {"front": "front", "right": "right", "back": "back", "left": "left"}
 
 # Added to the negative prompt when the pose guide is used.
 POSE_NEGATIVE = "hands touching the legs, arms against the body, hands on hips, arms crossed"
@@ -720,11 +725,15 @@ class Pipeline:
         texture = directory / "texture.png"
         delight = bool(settings.get("delight", True))
         quality = dict(settings.get("mesh") or {})
+        views = None
+        if quality.get("multi_view") and not (raw.is_file() and texture.is_file()):
+            views = self._mesh_views(asset, source, directory, lambda s, f: progress(s, 0.25 * f))
         if not (raw.is_file() and texture.is_file()):
             self.adapters.mesh.image_to_mesh(
                 image=source, texture_size=int(settings["budgets"]["texture"][asset["kind"]]), out_path=raw,
-                progress=lambda s, f: progress(s, 0.5 * f), hints=self._hints(asset), delight=delight,
-                quality=quality)
+                progress=lambda s, f: progress(s, (0.25 if views else 0.0) + (0.25 if views else 0.5) * f),
+                hints=self._hints(asset), delight=delight, quality=quality,
+                **({"views": {HUNYUAN_VIEW[v]: p for v, p in views.items() if v != "front"}} if views else {}))
         triangles = int(settings["budgets"]["triangles"][asset["kind"]])
         result = self.adapters.blender.cleanup_and_lods(
             raw_mesh=raw, kind=asset["kind"], triangles=triangles, lod_ratios=list(settings["budgets"]["lod_ratios"]),
@@ -733,6 +742,8 @@ class Pipeline:
         return {"glb": self._rel(asset["id"], result["glb"]), "texture": self._rel(asset["id"], texture),
                 "triangle_budget": triangles, "lods": result["lods"], "delight": delight, "quality": quality,
                 "removed": result.get("removed"), "stats": result.get("stats"),
+                "views": sorted(self._rel(asset["id"], p) for p in (directory / "views").glob("*.png")
+                                if p.stem in HUNYUAN_VIEW) if quality.get("multi_view") else None,
                 "checks": qc.mesh_checks(result.get("stats"))}
 
     def _stage_rig(self, asset: dict, directory: Path, progress) -> dict:
@@ -823,6 +834,21 @@ class Pipeline:
             grip.pop("second", None)
         self.db.update("assets", asset["id"], {"grip": grip})
         return grip
+
+    def _mesh_views(self, asset: dict, source: Path, directory: Path, progress) -> dict[str, Path]:
+        """Right, back and left views of the picked candidate (MV-Adapter), for a multi-view mesh."""
+        if self.adapters.views is None:
+            raise RuntimeError("multi-view meshes need MV-Adapter, which is not set up")
+        front = directory / "views" / "front_input.png"
+        front.parent.mkdir(parents=True, exist_ok=True)
+        if not front.is_file():
+            with Image.open(source) as image:
+                cut, _ = imaging.remove_background(image)
+            cut.save(front)
+        prompt = ((asset.get("outputs") or {}).get("prompt") or {}).get("prompt") or asset["description"]
+        self.adapters.image.unload()  # SDXL for the views needs the GPU memory ComfyUI holds
+        return self.adapters.views.render_views(front=front, prompt=prompt[:300], seed=seed_of(asset["id"], 1),
+                                                out_dir=directory / "views", progress=progress)
 
     def _render_sprites(self, asset: dict, settings: dict, animated: Path, clips: list[dict], progress) -> dict:
         """Renders the sprite frames into the asset's sprites folder (files already there are kept).

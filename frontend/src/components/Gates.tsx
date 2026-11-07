@@ -19,6 +19,7 @@ import {
   Grid,
   Input,
   LinkButton,
+  MediaCard,
   Notice,
   Row,
   SectionTitle,
@@ -371,6 +372,13 @@ export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
           <Checkbox checked={wireframe} onChange={setWireframe} label="Wireframe" />
         </Row>
         {url && <ModelViewer url={url} lod={lod} wireframe={wireframe} />}
+        {!!mesh?.views?.length && (
+          <Grid min={110}>
+            {mesh.views.map((v) => (
+              <MediaCard key={v} image={assetFileUrl(asset.id, v)} title={label(v.split("/").pop()!.replace(".png", ""))} />
+            ))}
+          </Grid>
+        )}
         <Text small faint>
           Drag to orbit, scroll to zoom.
           {mesh && ` LODs at ${mesh.lods.map((l) => `${Math.round(l.ratio * 100)}%`).join(" / ")}.`}

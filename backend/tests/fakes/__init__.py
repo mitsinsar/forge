@@ -175,7 +175,7 @@ def _parts_info(parts: list[Part]) -> list[dict]:
 class FakeMesh(FakeBase):
     """Builds an ellipsoid body in the colour of the picked candidate."""
 
-    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True, quality=None):
+    def image_to_mesh(self, *, image, texture_size, out_path, progress, hints, delight=True, quality=None, views=None):
         progress("Reconstructing shape", 0.1)
         self._wait()
         meta = {}

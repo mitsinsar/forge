@@ -42,6 +42,8 @@ export interface MeshQuality {
   guidance: number;
   /** Drop small pieces that float apart from the body. */
   remove_floaters: boolean;
+  /** Draw right, back and left views first (MV-Adapter) and build the shape from all four. */
+  multi_view?: boolean;
 }
 
 /** The most extra LOD levels a profile can hold (the backend's limit). */
@@ -268,6 +270,8 @@ export interface AssetOutputs {
   };
   mesh?: {
     checks?: Check[];
+    /** Multi-view meshes: the drawn views (front, right, back, left). */
+    views?: string[] | null;
     glb: string;
     texture: string;
     triangle_budget: number;

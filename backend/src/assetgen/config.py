@@ -57,6 +57,12 @@ class Settings:
     unirig_timeout: float = 900.0  # seconds one UniRig step may take (the first run downloads its checkpoints)
     unirig_tries: int = 3  # UniRig runs (other seeds) when the skeleton fits badly; the best is kept
     auto_retries: int = 2  # rounds of redrawing gate 1 candidates that fail their checks
+    # Multi-view meshes: MV-Adapter draws the other views (see adapters/real/mvviews.py).
+    mvadapter_root: Path = Path("C:/tools/MV-Adapter")
+    mvadapter_python: Path = Path("C:/tools/MV-Adapter/.venv/Scripts/python.exe")
+    mvadapter_models: Path = Path("C:/tools/MV-Adapter-models")
+    mvadapter_sdxl: str = ""  # empty: ComfyUI's models/checkpoints/sd_xl_base_1.0.safetensors
+    mvadapter_timeout: float = 900.0
     # How to restart a tool that crashed: {tool: {command, cwd, port}} (see watchdog.py).
     restart: dict = field(default_factory=dict)
     python_path: Path = Path("python")

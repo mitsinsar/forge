@@ -54,6 +54,7 @@ export function NewAssetPage() {
   const [weaponClass, setWeaponClass] = useState<WeaponClass | "">("");
   const [height, setHeight] = useState("");
   const [autopilot, setAutopilot] = useState(false);
+  const [multiView, setMultiView] = useState(false);
   const [count, setCount] = useState("1");
   const [vary, setVary] = useState(true);
   const many = Math.max(1, Math.min(20, Number.parseInt(count, 10) || 1));
@@ -122,10 +123,13 @@ export function NewAssetPage() {
         height: isCharacter(kind) && Number(height) > 0 ? Number(height) : undefined,
         profile_id: profileId || undefined,
         overrides:
-          triangleLimit > 0 || chosenMesh
+          triangleLimit > 0 || chosenMesh || multiView
             ? {
                 ...(triangleLimit > 0 ? { budgets: { triangles: { [kind]: triangleLimit } } } : {}),
-                ...(chosenMesh ? { mesh: { steps: chosenMesh.steps, resolution: chosenMesh.resolution } } : {}),
+                ...(chosenMesh || multiView
+                  ? { mesh: { ...(chosenMesh ? { steps: chosenMesh.steps, resolution: chosenMesh.resolution } : {}),
+                              ...(multiView ? { multi_view: true } : {}) } }
+                  : {}),
               }
             : undefined,
         autopilot,
@@ -326,6 +330,11 @@ export function NewAssetPage() {
               </Field>
             </Grid>
             <Stack gap={2}>
+              <Checkbox
+                label="Multi-view mesh: draw the back and sides first, so the back isn't guessed (slower)"
+                checked={multiView}
+                onChange={setMultiView}
+              />
               <Checkbox
                 label="Autopilot: approve each gate by itself when nothing failed its checks (it stops where something did)"
                 checked={autopilot}
