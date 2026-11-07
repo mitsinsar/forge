@@ -730,5 +730,7 @@ def test_a_twisted_knee_faces_the_new_way_and_every_clip_reports_its_drift(tmp_p
     turned = np.array(twisted["joints"]["calf_l"]["front"])
     assert abs(float(turned @ front)) < 0.1  # turned a quarter: facing sideways now
     assert np.allclose(twisted["joints"]["calf_r"]["front"], plain["joints"]["calf_r"]["front"], atol=1e-3)
+    # Only the knee turns: the foot below keeps its frame (no carried twist).
+    assert np.allclose(twisted["joints"]["foot_l"]["front"], plain["joints"]["foot_l"]["front"], atol=1e-3)
     (walk,) = plain["clips"]
     assert walk["follow"]["bone"] and 0 <= walk["follow"]["degrees"] < 20

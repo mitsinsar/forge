@@ -151,10 +151,16 @@ def pose_to_targets(arm, targets: dict, twists: dict | None = None) -> int:
                 turn = current.rotation_difference(wanted).to_matrix().to_4x4()
                 pose_bone.matrix = Matrix.Translation(head) @ turn @ Matrix.Translation(-head) @ pose_bone.matrix
                 bpy.context.view_layer.update()
-        if abs(twists.get(name, 0.0)) > 1e-3:  # about the bone's own axis: children's heads stay put
+        if abs(twists.get(name, 0.0)) > 1e-3:  # about the bone's own axis
+            # Only this bone turns: the bones below keep their place and frame (a twisted
+            # collarbone must not carry the arm, hand and weapon socket round with it).
+            below = {c.name: c.matrix.copy() for c in pose_bone.children}
             head, axis = pose_bone.head.copy(), (pose_bone.tail - pose_bone.head).normalized()
             spin = Matrix.Rotation(math.radians(twists[name]), 4, axis)
             pose_bone.matrix = Matrix.Translation(head) @ spin @ Matrix.Translation(-head) @ pose_bone.matrix
+            bpy.context.view_layer.update()
+            for child_name, matrix in below.items():
+                arm.pose.bones[child_name].matrix = matrix
             bpy.context.view_layer.update()
     bpy.ops.pose.armature_apply(selected=False)
     bpy.ops.object.mode_set(mode="OBJECT")

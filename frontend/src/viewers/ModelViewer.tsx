@@ -7,6 +7,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { Button } from "../ui/kit";
+import { HAS_FACING } from "./joints";
 
 /** A joint of the rig, in the mesh's space with Blender axes (Z up, -Y front), as the backend sends it. */
 export type Vec3 = [number, number, number];
@@ -38,6 +39,7 @@ const COLOURS = {
   unknown: 0x9aa0b4, // a bone that points forward itself (a foot): no "forward" to compare with
 };
 const FACING_OK = THREE.MathUtils.degToRad(25);
+
 
 /** Where a joint on a bone along ``axis`` should face: the character's forward (+Z), made square
  *  to the bone. Null when the bone itself points (nearly) forward. */
@@ -435,7 +437,7 @@ export function ModelViewer({
     };
     const facings = new Map<string, THREE.Group>();
     for (const name of names) {
-      if (!joints[name].front || !joints[name].axis) continue;
+      if (!joints[name].front || !joints[name].axis || !HAS_FACING.test(name)) continue;
       const group = arrow(COLOURS.facing, 0.95);
       overlay.add(group);
       facings.set(name, group);
@@ -614,7 +616,7 @@ export function ModelViewer({
         handle.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, axis, front));
       }
     });
-    const picked = pickedName ? joints[pickedName] : undefined;
+    const picked = pickedName && HAS_FACING.test(pickedName) ? joints[pickedName] : undefined;
     const forward = picked?.axis ? facingTarget(toThree(picked.axis).normalize()) : null;
     editor.ghost.visible = !!forward;
     if (forward && pickedName) {

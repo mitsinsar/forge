@@ -384,6 +384,15 @@ class Pipeline:
         (out.parent / "clips.json").write_text(json.dumps(result["clips"]), encoding="utf-8")
         return {"clips": result["clips"]}
 
+    def _drop_fits_on(self, hero_id: str) -> None:
+        """Gear and weapons fitted on this hero were fitted on its old skeleton and clips: dropped
+        when it is rigged again (outfits fit them anew)."""
+        for item in self.db.list("assets"):
+            fits = item.get("fits") or {}
+            if hero_id in fits:
+                shutil.rmtree(self.asset_dir(item["id"]) / "fits" / hero_id, ignore_errors=True)
+                self.db.update("assets", item["id"], {"fits": {k: v for k, v in fits.items() if k != hero_id}})
+
     def _job_fit(self, job: dict, progress) -> dict:
         """Fits a finished gear or weapon asset on a rigged hero (or the test dummy, ``dummy``), kept
         per hero under ``fits/<hero>``."""
@@ -811,6 +820,8 @@ class Pipeline:
         output["stretch"] = result.get("stretch")
         output["checks"] = qc.rig_checks(skeleton=None if attach else skeleton, stretch=result.get("stretch"),
                                          gear=result.get("gear"), clips=None if attach else result["clips"])
+        if not attach:
+            self._drop_fits_on(asset["id"])
         if result.get("joints"):
             output["joints"] = result["joints"]
             output["joint_overrides"] = sorted(asset.get("joint_overrides") or {})
