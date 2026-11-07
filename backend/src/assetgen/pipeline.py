@@ -442,6 +442,7 @@ class Pipeline:
             gate = GATE_OF_STAGE[stage]
             self.update(asset_id, outputs=all_outputs, status="waiting", gate=gate,
                         step=f"Waiting at gate {gate}", progress=1.0)
+            self.autopilot(asset_id)
         else:
             changes = {"outputs": all_outputs, "status": "done", "gate": None, "step": "Done", "progress": 1.0}
             if not asset.get("training_candidate_set"):
@@ -568,6 +569,51 @@ class Pipeline:
     def _posed_biped(asset: dict) -> bool:
         """Biped characters (not gear or weapons, which are drawn alone) get the A-pose guide and check."""
         return asset["kind"] in ("hero", "monster", "boss") and asset.get("archetype") == "biped"
+
+    # ---- autopilot -------------------------------------------------------------------
+
+    def autopilot(self, asset_id: str) -> None:
+        """With autopilot on, approves the gate the asset waits at when its checks found nothing that
+        failed (gate 1: the best candidate). Otherwise it stops there for the user, and says why."""
+        asset = self.db.get("assets", asset_id)
+        if not asset or not asset.get("autopilot") or asset["status"] != "waiting":
+            return
+        gate = asset["gate"]
+        outputs = asset.get("outputs") or {}
+        candidate = None
+        if gate == 1:
+            ranked = sorted(outputs.get("prompt", {}).get("candidate_checks") or [],
+                            key=lambda c: (qc.ORDER[c["status"]], c["candidate"]))
+            usable = [c for c in ranked if c["status"] != qc.FAIL]
+            if not usable:
+                self._autopilot_stop(asset, gate, "every candidate failed its checks")
+                return
+            candidate = usable[0]["candidate"]
+            reason = f"picked candidate {candidate} ({'all checks passed' if usable[0]['status'] == qc.PASS else 'checks: look'})"
+        else:
+            checks = outputs.get({2: "mesh", 3: "rig"}[gate], {}).get("checks") or []
+            failed = [c for c in checks if c["status"] == qc.FAIL]
+            if failed:
+                self._autopilot_stop(asset, gate, "; ".join(f"{c['label']}: {c['detail']}" for c in failed))
+                return
+            reason = "checks passed" if qc.worst(checks) == qc.PASS else "checks: look, nothing failed"
+        self._autopilot_log(asset, gate, "approved", reason)
+        self.approve(asset_id, gate, candidate)
+
+    def _autopilot_log(self, asset: dict, gate: int, action: str, reason: str) -> None:
+        entries = [*(asset.get("autopilot_log") or []), {"gate": gate, "action": action, "reason": reason, "at": now()}]
+        self.db.update("assets", asset["id"], {"autopilot_log": entries})
+
+    def _autopilot_stop(self, asset: dict, gate: int, reason: str) -> None:
+        self._autopilot_log(asset, gate, "stopped", reason)
+        self.update(asset["id"], step=f"Autopilot stopped at gate {gate}: {reason}")
+
+    def set_autopilot(self, asset_id: str, value: bool) -> dict:
+        self._require(asset_id)
+        self.update(asset_id, autopilot=bool(value))
+        if value:
+            self.autopilot(asset_id)
+        return self._require(asset_id)
 
     def _candidate_checks(self, asset: dict, paths: list[Path]) -> list[dict]:
         """Gate 1's checks for each candidate (``checks.candidate_checks``); the vision model is asked

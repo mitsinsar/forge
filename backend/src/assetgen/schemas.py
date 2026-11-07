@@ -145,6 +145,17 @@ class AssetCreate(Strict):
                                  "(default by kind: hero 1.8, monster 1.5, boss 2.7).")
     profile_id: str | None = Field(None, description="Defaults to the project's default profile.")
     overrides: ProfileSettings | None = Field(None, description="Per-asset overrides of profile fields.")
+    autopilot: bool = Field(False, description="Approve each gate by itself when nothing failed its checks.")
+
+
+class BatchCreate(Strict):
+    asset: AssetCreate = Field(description="What every asset of the batch is made from.")
+    count: int = Field(ge=1, le=20)
+    vary: bool = Field(False, description="Have the LLM write a different description for each asset.")
+
+
+class Toggle(Strict):
+    value: bool
 
 
 class Approve(Strict):

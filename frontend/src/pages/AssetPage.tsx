@@ -148,6 +148,7 @@ export function AssetPage() {
       <Stepper steps={steps(a, shown, setViewing)} />
       <ErrorNotice error={asset.error} />
       {body}
+      <AutopilotCard asset={a} />
       <AssetDetails asset={a} projectName={project?.name} profileName={profile?.name} />
       <ConfirmDialog
         open={deleting}
@@ -160,5 +161,38 @@ export function AssetPage() {
         onConfirm={() => remove.mutate(undefined, { onSuccess: () => navigate("/") })}
       />
     </Stack>
+  );
+}
+
+/** Autopilot: on or off, and what it did at each gate. */
+function AutopilotCard({ asset }: { asset: Asset }) {
+  const toggle = useApiMutation((value: boolean) => api.setAutopilot(asset.id, value), [keys.assets, keys.asset(asset.id)]);
+  if (asset.status === "done" && !asset.autopilot_log?.length) return null;
+  return (
+    <Card
+      title="Autopilot"
+      subtitle="Approves each gate by itself when nothing failed its checks, and stops where something did."
+      actions={
+        asset.status !== "done" && (
+          <Button size="sm" variant={asset.autopilot ? "secondary" : "primary"} busy={toggle.isPending}
+                  onClick={() => toggle.mutate(!asset.autopilot)}>
+            {asset.autopilot ? "Turn off" : "Turn on"}
+          </Button>
+        )
+      }
+    >
+      <Stack gap={2}>
+        {!asset.autopilot_log?.length && <Text small muted>{asset.autopilot ? "On. Nothing decided yet." : "Off."}</Text>}
+        {asset.autopilot_log?.map((entry) => (
+          <Row key={entry.at} gap={2}>
+            <Badge tone={entry.action === "approved" ? "success" : "warning"}>
+              Gate {entry.gate} · {entry.action}
+            </Badge>
+            <Text small muted>{entry.reason}</Text>
+          </Row>
+        ))}
+        <ErrorNotice error={toggle.error} />
+      </Stack>
+    </Card>
   );
 }

@@ -306,6 +306,11 @@ export interface Asset {
   grip: Grip | null;
   /** Characters: the height asked for in metres (null: the kind's default). */
   height?: number | null;
+  autopilot?: boolean;
+  /** What autopilot did at each gate, and why. */
+  autopilot_log?: { gate: number; action: "approved" | "stopped"; reason: string; at: string }[];
+  /** Assets made together by one batch share this id. */
+  batch_id?: string | null;
   /** Gear and weapons: the hero they are fitted on (null: the base mannequin). */
   wearer_id?: string | null;
   /** "upload" when made from the user's own image; missing on older assets. */
@@ -349,6 +354,8 @@ export interface AssetInput {
   weapon_class?: WeaponClass;
   /** Characters: height in metres (default by kind). */
   height?: number;
+  /** Approve each gate by itself when nothing failed its checks. */
+  autopilot?: boolean;
   profile_id?: string;
   /** Per-asset overrides of style profile fields. */
   overrides?: { budgets?: { triangles?: Partial<PerKind> }; mesh?: Partial<MeshQuality> };
@@ -358,6 +365,7 @@ export interface AssetFilters {
   project_id?: string;
   kind?: Kind;
   status?: AssetStatus;
+  batch_id?: string;
 }
 
 export interface RejectInput {
@@ -486,6 +494,9 @@ export const api = {
   assets: (filters: AssetFilters) => request<Asset[]>("GET", `/assets${query(filters)}`),
   asset: (id: string) => request<Asset>("GET", `/assets/${id}`),
   createAsset: (input: AssetInput) => request<Asset>("POST", "/assets", input),
+  createBatch: (asset: AssetInput, count: number, vary: boolean) =>
+    request<Asset[]>("POST", "/assets/batch", { asset, count, vary }),
+  setAutopilot: (id: string, value: boolean) => request<Asset>("PUT", `/assets/${id}/autopilot`, { value }),
   createAssetFromImage: (input: AssetInput, file: File) => {
     const form = new FormData();
     form.append("file", file);

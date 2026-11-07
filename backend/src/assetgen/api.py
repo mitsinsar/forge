@@ -22,7 +22,7 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
 from .exporters import safe_name
 from .pipeline import Conflict, Invalid, Pipeline
 from .tools import check_tools
-from .schemas import (AssetCreate, Kind, Approve, ExamplesRequest, FitRequest, LoraRegister, LoraUpdate,
+from .schemas import (AssetCreate, BatchCreate, Kind, Approve, ExamplesRequest, Toggle, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
                       TrainingCandidate)
 
@@ -353,12 +353,15 @@ def list_assets(request: Request, project_id: str | None = None,
                 status: Literal["queued", "running", "waiting", "done", "failed"] | None = None,
                 archetype: str | None = None, training_candidate: bool | None = None,
                 q: str | None = Query(None, description="Text in the name or description"),
+                batch_id: str | None = Query(None, description="Only the assets of this batch"),
                 db: Database = Depends(db_of)):
     assets = db.list("assets", order="created_at DESC", project_id=project_id, kind=kind, status=status,
                      archetype=archetype, training_candidate=training_candidate)
     if q:
         needle = q.lower()
         assets = [a for a in assets if needle in a["name"].lower() or needle in a["description"].lower()]
+    if batch_id:
+        assets = [a for a in assets if a.get("batch_id") == batch_id]
     return [asset_view(request, a) for a in assets]
 
 
@@ -397,7 +400,37 @@ async def create_asset_from_image(request: Request, file: UploadFile = File(...,
     return _create_asset(request, body, source=image)
 
 
-def _create_asset(request: Request, body: AssetCreate, source: Image.Image | None = None) -> dict:
+@router.post("/assets/batch", tags=["assets"], status_code=201,
+             summary="Create several assets from one description (optionally varied by the LLM), as one batch")
+def create_batch(request: Request, body: BatchCreate):
+    pipeline = pipeline_of(request)
+    descriptions = [body.asset.description] * body.count
+    if body.vary and body.count > 1:
+        try:
+            descriptions = pipeline.adapters.llm.vary(description=body.asset.description, kind=body.asset.kind,
+                                                       count=body.count)
+        except Exception as exc:  # noqa: BLE001 - the user sees why
+            raise HTTPException(502, f"The LLM could not write the variations: {exc}") from exc
+    batch_id = uuid.uuid4().hex[:12]
+    base = (body.asset.name or "").strip()
+    created = []
+    for number, description in enumerate(descriptions, start=1):
+        asset = body.asset.model_copy(update={"description": description[:2000],
+                                              "name": f"{base} {number}" if base else None})
+        created.append(_create_asset(request, asset, batch_id=batch_id))
+    return created
+
+
+@router.put("/assets/{asset_id}/autopilot", tags=["assets"],
+            summary="Turn autopilot on or off (on: approves the current gate now if its checks allow)")
+def set_autopilot(request: Request, asset_id: str, body: Toggle):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("assets", asset_id), "asset")
+    return asset_view(request, pipeline.set_autopilot(asset_id, body.value))
+
+
+def _create_asset(request: Request, body: AssetCreate, source: Image.Image | None = None,
+                  batch_id: str | None = None) -> dict:
     pipeline = pipeline_of(request)
     db = pipeline.db
     project = _found(db.get("projects", body.project_id), "project")
@@ -424,7 +457,7 @@ def _create_asset(request: Request, body: AssetCreate, source: Image.Image | Non
         "name": (body.name or "").strip() or _default_name(body.description), "description": body.description,
         "archetype_override": body.archetype, "archetype": body.archetype, "slot": body.slot,
         "weapon_class": body.weapon_class, "grip": None, "overrides": overrides, "height": body.height,
-        "wearer_id": None,
+        "wearer_id": None, "autopilot": body.autopilot, "batch_id": batch_id,
         "status": "queued", "stage": "prompt", "gate": None, "step": "Waiting for the worker", "progress": 0.0,
         "error": None, "notes": [], "attempts": {}, "approvals": {}, "chosen_candidate": None, "outputs": {},
         "training_candidate": False, "training_candidate_set": False, "queued_at": now(),
