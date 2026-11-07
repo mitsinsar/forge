@@ -1,6 +1,6 @@
-# assetgen — web frontend
+# Forge web app
 
-React + Vite + TypeScript app for the asset generator. It talks to the FastAPI backend in
+React + Vite + TypeScript app for Forge. It talks to the FastAPI backend in
 `../backend` (all routes under `/api`, live events over the `/api/ws` WebSocket).
 
 ## Run
@@ -42,6 +42,9 @@ After `npm run build`, `uv run assetgen` serves the app itself at http://127.0.0
 * **Checks and autopilot** — every gate shows its quality checks (each candidate gets a badge
   with its first problem). New asset has Autopilot, How many and Vary (a batch); the asset page
   shows the autopilot log and a switch, plus Colour variant and More like this.
+* **Setup** — every service with Restart (or Start) and Stop, then each part Forge needs (language model,
+  ComfyUI, Hunyuan3D, UniRig, Blender, optional MV-Adapter) checked live, with numbered install steps and
+  commands to copy. The header's tool badges open it (a red one restarts its tool on a click).
 * **Outfits** — pick a rigged hero or the **Test dummy** (the base mannequin, always there), then gear per slot and a weapon; the 3D view plays the hero
   with every item fitted on it (an item not yet fitted on that hero is fitted by a worker job and
   appears when ready). Outfits can be saved, loaded ("Wear") and deleted.

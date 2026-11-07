@@ -1,1 +1,1 @@
-"""Asset generator backend."""
+"""Forge backend (the assetgen package)."""

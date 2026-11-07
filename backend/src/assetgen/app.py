@@ -25,12 +25,15 @@ try:
 except PackageNotFoundError:  # running from a source tree
     VERSION = "0.0.0"
 
-DESCRIPTION = """Local backend of the asset generator: a text description becomes a game-ready,
-animated asset through three approval gates (preview image, mesh, animated result), then is exported
-into a Unity or Godot project.
+DESCRIPTION = """Forge's local API: a text description becomes a game-ready, animated asset through
+three approval gates (preview image, mesh, animated result), then is exported into a Unity or Godot
+project. Everything the web app does goes through these routes, so scripts and other tools can drive
+Forge the same way.
 
-ComfyUI, Hunyuan3D, Blender, UniRig and Qwen sit behind adapters; `GET /api/tools` shows which
-answer. Live progress comes over the WebSocket at `/api/ws`.
+ComfyUI, Hunyuan3D, Blender, UniRig and the language model sit behind adapters; `GET /api/tools`
+shows which answer, `POST /api/tools/{tool}/restart` and `/stop` restart or stop one, and
+`GET /api/setup` says what is missing and how to install it. Live progress comes over the
+WebSocket at `/api/ws`.
 """
 
 
@@ -57,7 +60,7 @@ def create_app(settings: Settings | None = None, adapters: Adapters | None = Non
             await pipeline.stop()
             db.close()
 
-    app = FastAPI(title="Asset generator", version=VERSION, description=DESCRIPTION, lifespan=lifespan)
+    app = FastAPI(title="Forge", version=VERSION, description=DESCRIPTION, lifespan=lifespan)
     # JSON and the app's scripts shrink to a fraction; images and models are left alone (already packed).
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.include_router(router)

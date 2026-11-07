@@ -23,6 +23,7 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
 from .exporters import safe_name
 from .pipeline import DUMMY, Conflict, Invalid, Pipeline
 from . import delivery, storage, watchdog
+from .setup_guide import setup_report
 from .tools import check_tools
 from .schemas import (AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
@@ -129,6 +130,24 @@ async def restart_tool(request: Request, tool: str):
         return {"tool": tool, "result": await asyncio.to_thread(watchdog.restart_tool, settings, tool)}
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
+@router.post("/tools/{tool}/stop", tags=["tools"],
+             summary="Stop a tool (frees its GPU memory) with its stop command or port from assetgen.toml")
+async def stop_tool(request: Request, tool: str):
+    settings = pipeline_of(request).settings
+    if not watchdog.stoppable(settings, tool):
+        raise HTTPException(422, f"no way to stop {tool}: add a stop command or port to [restart.{tool}] in assetgen.toml")
+    try:
+        return {"tool": tool, "result": await asyncio.to_thread(watchdog.stop_tool, settings, tool)}
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/setup", tags=["tools"],
+            summary="What Forge needs on this machine: each part's checks and the steps to install what is missing")
+def setup(request: Request):
+    return setup_report(pipeline_of(request).settings)
 
 
 @router.get("/storage", tags=["tools"], summary="Disk use of the data folder, and what can be cleaned")

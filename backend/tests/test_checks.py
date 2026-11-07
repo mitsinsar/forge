@@ -160,3 +160,35 @@ def test_follows_the_animation():
     bad = qc.rig_checks(skeleton=None, stretch=None, clips=[clip("walk", "calf_r", 24.0), clip("run", "foot_l", 13.0)])
     assert bad[0]["status"] == qc.FAIL and bad[0]["detail"].startswith("Legs lean sideways off the clip: walk calf r 24°")
     assert qc.rig_checks(skeleton=None, stretch=None, clips=[{"name": "walk", "follow": None}]) == []
+
+
+def test_tools_can_be_stopped_and_the_setup_report_lists_every_part(client, monkeypatch):
+    from assetgen import watchdog
+    settings = client.app.state.pipeline.settings
+    settings.restart = {"llm": {"command": ["lms", "server", "start"], "stop": ["lms", "server", "stop"]},
+                        "image": {"command": ["python", "main.py"], "port": 8188}}
+    ran = []
+    monkeypatch.setattr(watchdog.subprocess, "run", lambda command, **kw: ran.append(command))
+    monkeypatch.setattr(watchdog, "_stop_port", lambda port: ran.append(["port", port]))
+    monkeypatch.setattr(watchdog, "_check", lambda tool, s: (False, "down"))
+    assert client.post("/api/tools/llm/stop").json() == {"tool": "llm", "result": "stopped"}
+    assert client.post("/api/tools/image/stop").status_code == 200
+    assert ran == [["lms", "server", "stop"], ["port", 8188]]  # its own command, else its port
+    assert client.post("/api/tools/mesh/stop").status_code == 422  # nothing says how
+    tools = {t["tool"]: t for t in client.get("/api/tools").json()}
+    assert tools["llm"]["stoppable"] and tools["image"]["stoppable"] and not tools["mesh"]["stoppable"]
+
+    parts = client.get("/api/setup").json()
+    assert [p["id"] for p in parts] == ["llm", "image", "mesh", "rig", "blender", "multiview"]
+    mesh = next(p for p in parts if p["id"] == "mesh")
+    assert mesh["required"] and any("hunyuan3d-2.1.patch" in (s["command"] or "") for s in mesh["steps"])
+    assert not next(p for p in parts if p["id"] == "multiview")["required"]
+    assert all(p["steps"] and p["checks"] for p in parts)
+
+
+def test_install_md_is_generated_from_the_setup_guide():
+    from pathlib import Path
+    from assetgen.setup_guide import install_markdown
+    install = Path(__file__).resolve().parents[2] / "INSTALL.md"
+    assert install.read_text(encoding="utf-8") == install_markdown(), (
+        "INSTALL.md is out of date: cd backend; uv run python -m assetgen.setup_guide > ../INSTALL.md")

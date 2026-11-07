@@ -12,6 +12,7 @@ import { ProfilesPage } from "./pages/ProfilesPage";
 import { ProfileEditPage } from "./pages/ProfileEditPage";
 import { LorasPage } from "./pages/LorasPage";
 import { OutfitsPage } from "./pages/OutfitsPage";
+import { SetupPage } from "./pages/SetupPage";
 
 const NAV = [
   { to: "/", label: "Assets", end: true },
@@ -19,6 +20,7 @@ const NAV = [
   { to: "/profiles", label: "Style profiles" },
   { to: "/outfits", label: "Outfits" },
   { to: "/loras", label: "LoRA library" },
+  { to: "/setup", label: "Setup" },
 ];
 
 /** One badge per external tool: green when it answers, red when it does not (or is not built yet). */
@@ -40,7 +42,9 @@ function ToolHealth() {
             {badge}
           </button>
         ) : (
-          <span key={t.tool} title={t.detail}>{badge}</span>
+          <NavLink key={t.tool} to="/setup" className="badge-button" title={`${t.detail}. Open Setup to restart or stop it.`}>
+            {badge}
+          </NavLink>
         );
       })}
     </>
@@ -54,7 +58,7 @@ export function App() {
       <header className="topbar">
         <NavLink to="/" className="topbar__brand">
           <img src="/favicon.svg" alt="" />
-          Forge of Figures
+          Forge
         </NavLink>
         <nav className="topbar__nav">
           {NAV.map((item) => (
@@ -92,6 +96,7 @@ export function App() {
           <Route path="/profiles/:id" element={<ProfileEditPage />} />
           <Route path="/loras" element={<LorasPage />} />
           <Route path="/outfits" element={<OutfitsPage />} />
+          <Route path="/setup" element={<SetupPage />} />
           <Route
             path="*"
             element={<EmptyState title="Page not found" action={<LinkButton to="/">Back to assets</LinkButton>} />}

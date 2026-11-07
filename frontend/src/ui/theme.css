@@ -934,3 +934,35 @@ code,
 .badge-button:disabled {
   cursor: progress;
 }
+
+/* ---- Setup steps and commands --------------------------------------------- */
+
+.code-block {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
+.code-block pre {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  padding-right: 5.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.code-block .btn {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+}
+.setup-steps {
+  margin: var(--space-3) 0 0;
+  padding-left: 1.4rem;
+  display: grid;
+  gap: var(--space-3);
+}
+details > summary {
+  cursor: pointer;
+}

@@ -65,6 +65,18 @@ export interface ProfileSettings {
   budgets: Budgets;
 }
 
+/** One part Forge needs on the machine (GET /api/setup): live checks and install steps. */
+export interface SetupPart {
+  id: string;
+  name: string;
+  role: string;
+  required: boolean;
+  ok: boolean;
+  settings: Record<string, string>;
+  checks: { label: string; ok: boolean; detail: string; optional: boolean }[];
+  steps: { text: string; command: string | null }[];
+}
+
 export interface ToolStatus {
   tool: string;
   name: string;
@@ -72,6 +84,8 @@ export interface ToolStatus {
   detail: string;
   /** assetgen.toml says how to restart it. */
   restartable?: boolean;
+  /** assetgen.toml says how to stop it (a stop command or its port). */
+  stoppable?: boolean;
 }
 
 export interface StorageReport {
@@ -483,6 +497,8 @@ export const api = {
   meta: () => request<Meta>("GET", "/meta"),
   tools: () => request<ToolStatus[]>("GET", "/tools"),
   restartTool: (tool: string) => request<{ tool: string; result: string }>("POST", `/tools/${tool}/restart`),
+  stopTool: (tool: string) => request<{ tool: string; result: string }>("POST", `/tools/${tool}/stop`),
+  setup: () => request<SetupPart[]>("GET", "/setup"),
   storage: () => request<StorageReport>("GET", "/storage"),
   cleanStorage: (categories: string[]) => request<StorageReport>("POST", "/storage/clean", { categories }),
   archetypes: () => request<Archetype[]>("GET", "/archetypes"),
