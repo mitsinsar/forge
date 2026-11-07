@@ -83,7 +83,8 @@ PROFILE_DEFAULTS: dict = {
     # The image-to-mesh run (gate 2). steps and resolution trade time for detail; guidance
     # is how closely the shape follows the image; remove_floaters drops the small loose
     # pieces image-to-3D models leave floating around the body.
-    "mesh": {"steps": 20, "resolution": 512, "guidance": 5.5, "remove_floaters": True},
+    # The defaults are Hunyuan3D 2.1's own (50 steps, octree 384, guidance 5.0).
+    "mesh": {"steps": 50, "resolution": 384, "guidance": 5.0, "remove_floaters": True},
     "candidates": 4,
     "clips": list(STANDARD_CLIPS),
     "biped_extra_clips": list(BIPED_EXTRA_CLIPS),

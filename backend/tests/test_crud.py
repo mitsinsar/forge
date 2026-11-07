@@ -84,12 +84,12 @@ def test_profile_mesh_quality_and_lods(client, tmp_path):
     project = make_project(client, "unity", tmp_path)
     pid = project["default_profile_id"]
     profile = client.get(f"/api/profiles/{pid}").json()
-    assert profile["mesh"] == {"steps": 20, "resolution": 512, "guidance": 5.5, "remove_floaters": True}
+    assert profile["mesh"] == {"steps": 50, "resolution": 384, "guidance": 5.0, "remove_floaters": True}
 
     patched = client.patch(f"/api/profiles/{pid}", json={
         "mesh": {"steps": 40, "remove_floaters": False},
         "budgets": {"lod_ratios": [0.75, 0.5, 0.3, 0.15, 0.08]}}).json()
-    assert patched["mesh"] == {"steps": 40, "resolution": 512, "guidance": 5.5, "remove_floaters": False}
+    assert patched["mesh"] == {"steps": 40, "resolution": 384, "guidance": 5.0, "remove_floaters": False}
     assert patched["budgets"]["lod_ratios"] == [0.75, 0.5, 0.3, 0.15, 0.08]
     for bad in ({"mesh": {"steps": 0}}, {"mesh": {"resolution": 4096}}, {"mesh": {"guidance": 0.5}},
                 {"budgets": {"lod_ratios": [1.5]}}, {"budgets": {"lod_ratios": [0.5] * 9}}):
@@ -99,7 +99,7 @@ def test_profile_mesh_quality_and_lods(client, tmp_path):
     db = client.app.state.pipeline.db
     db._conn.execute("UPDATE profiles SET data = json_remove(data, '$.mesh') WHERE id = ?", (pid,))
     assert "mesh" not in db.get("profiles", pid)
-    assert client.get(f"/api/profiles/{pid}").json()["mesh"]["resolution"] == 512
+    assert client.get(f"/api/profiles/{pid}").json()["mesh"]["resolution"] == 384
     client.patch(f"/api/profiles/{pid}", json={"mesh": {"remove_floaters": False}})
 
     # Per asset: the overrides reach the mesh stage.

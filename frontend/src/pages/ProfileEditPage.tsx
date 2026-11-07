@@ -145,7 +145,7 @@ function MeshQualityFields({ mesh, onChange }: { mesh: MeshQuality; onChange: (m
         <Field label="Steps" hint="Diffusion steps (1–100). More is slower and more detailed.">
           {(id) => <NumberInput id={id} value={mesh.steps} min={1} max={100} onChange={(n) => onChange({ ...mesh, steps: n })} />}
         </Field>
-        <Field label="Surface resolution" hint="Finer surfaces show more detail but need more VRAM. Modly's Hunyuan3D Mini offers 256, 380 and 512.">
+        <Field label="Surface resolution" hint="Finer surfaces show more detail but need more GPU memory. Hunyuan3D 2.1 uses 384 by itself.">
           {(id) => (
             <Select
               id={id}
