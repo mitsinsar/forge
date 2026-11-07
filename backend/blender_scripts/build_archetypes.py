@@ -165,11 +165,9 @@ def clear_pose(arm) -> None:
     bpy.context.view_layer.update()
 
 
-def apply_a_pose(arm) -> None:
-    """Turns the T-pose rest of the biped into the A-pose the prompts ask for (arms 45 degrees down)."""
+def pose_a(arm) -> None:
+    """Poses the biped's arms 45 degrees down from its T-pose (the A-pose the prompts ask for)."""
     clear_pose(arm)
-    bpy.context.view_layer.objects.active = arm
-    bpy.ops.object.mode_set(mode="POSE")
     for side, angle in (("l", 45.0), ("r", -45.0)):
         bone = arm.pose.bones.get(f"upperarm_{side}")
         if bone is None:
@@ -178,8 +176,28 @@ def apply_a_pose(arm) -> None:
         turn = Matrix.Translation(head) @ Matrix.Rotation(math.radians(angle), 4, "Y") @ Matrix.Translation(-head)
         bone.matrix = turn @ bone.matrix
         bpy.context.view_layer.update()
+
+
+def apply_a_pose(arm) -> None:
+    """Makes the A-pose the armature's rest pose."""
+    pose_a(arm)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="POSE")
     bpy.ops.pose.armature_apply(selected=False)
     bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def posed_mesh_bounds(meshes) -> dict:
+    """Bounds of the meshes as the armature currently deforms them."""
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    points = []
+    for mesh in meshes:
+        evaluated = mesh.evaluated_get(depsgraph)
+        data = evaluated.to_mesh()
+        points += [evaluated.matrix_world @ v.co for v in data.vertices]
+        evaluated.to_mesh_clear()
+    return {"min": [round(min(p[i] for p in points), 5) for i in range(3)],
+            "max": [round(max(p[i] for p in points), 5) for i in range(3)]}
 
 
 def keep_only_joints(arm, joints: list[str]) -> None:
@@ -249,6 +267,31 @@ def name_animation(path: Path, name: str) -> None:
     path.write_bytes(struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body)
 
 
+def mesh_bounds(meshes) -> dict:
+    points = [m.matrix_world @ v.co for m in meshes for v in m.data.vertices]
+    return {"min": [round(min(p[i] for p in points), 5) for i in range(3)],
+            "max": [round(max(p[i] for p in points), 5) for i in range(3)]}
+
+
+def joint_bounds(arm, pad: float = 0.1) -> dict:
+    points = [arm.matrix_world @ p for b in arm.data.bones for p in (b.head_local, b.tail_local)]
+    lo = [min(p[i] for p in points) for i in range(3)]
+    hi = [max(p[i] for p in points) for i in range(3)]
+    size = max(h - l for l, h in zip(lo, hi))
+    return {"min": [round(v - pad * size, 5) for v in lo], "max": [round(v + pad * size, 5) for v in hi]}
+
+
+def write_skeleton_json(arm, bounds: dict, path: Path) -> None:
+    """skeleton.json: each joint's head, tail and parent in the template's rest pose, and the
+    bounds of the mesh the template was made for (Blender axes: Z up, front towards -Y, metres).
+    The rig stage scales the template to an asset by comparing these bounds with the asset's."""
+    joints = {b.name: {"head": [round(v, 5) for v in arm.matrix_world @ b.head_local],
+                       "tail": [round(v, 5) for v in arm.matrix_world @ b.tail_local],
+                       "parent": b.parent.name if b.parent else None} for b in arm.data.bones}
+    path.write_text(json.dumps({"axes": "blender: Z up, -Y front, metres", "mesh_bounds": bounds,
+                                "joints": joints}, indent=1) + "\n", encoding="utf-8")
+
+
 def save_skeleton(arm, path: Path) -> None:
     """skeleton.blend: only the armature, in its rest pose, no animation."""
     for obj in list(bpy.data.objects):
@@ -274,7 +317,9 @@ def build_from_pack(arch_id: str, spec: dict, out: Path) -> dict:
     reset()
     objects = import_gltf(str(ARCHETYPES / spec["file"]))
     arm = armature_of(objects)
-    meshes = [o for o in objects if o.type == "MESH"]
+    # Only meshes skinned to the armature: some packs carry loose props (an icosphere in UAL).
+    meshes = [o for o in objects if o.type == "MESH"
+              and (o.parent is arm or any(m.type == "ARMATURE" and m.object is arm for m in o.modifiers))]
     joints = template_joints(arm, meshes)
     actions = {a.name: a for a in bpy.data.actions}
 
@@ -292,12 +337,20 @@ def build_from_pack(arch_id: str, spec: dict, out: Path) -> dict:
         record[clip] = {"source": source, "stand_in": stand_in, "loop": clip in LOOPING,
                         "in_place_drift_removed_m": round(drift, 3), **info}
 
+    if spec.get("a_pose"):
+        pose_a(arm)  # measure the mesh in the rest pose the template will have
+        bounds = posed_mesh_bounds(meshes)
+    else:
+        clear_pose(arm)
+        bounds = mesh_bounds(meshes)
     for mesh in meshes:
         bpy.data.objects.remove(mesh, do_unlink=True)
+    clear_pose(arm)
     keep_only_joints(arm, joints)
     if spec.get("a_pose"):
         apply_a_pose(arm)
     arm.name = arm.data.name = f"{arch_id}_template"
+    write_skeleton_json(arm, bounds, out / "skeleton.json")
     save_skeleton(arm, out / "skeleton.blend")
     return {"joints": joints, "clips": record, "source": spec}
 
@@ -501,6 +554,8 @@ def build_procedural(arch_id: str, spec: dict, out: Path) -> dict:
         info = export_clip(arm, action, clip, clips_out / f"{clip}.glb")
         record[clip] = {"source": "procedural", "stand_in": False, "loop": loop, **info}
     joints = [bone.name for bone in arm.data.bones]
+    clear_pose(arm)
+    write_skeleton_json(arm, joint_bounds(arm), out / "skeleton.json")
     save_skeleton(arm, out / "skeleton.blend")
     return {"joints": joints, "clips": record, "source": spec}
 

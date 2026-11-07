@@ -35,7 +35,7 @@ stage needs its tool running; the header of the web app (`GET /api/tools`) shows
 | ComfyUI (image) | prompt (skipped for an uploaded image) | ComfyUI at `comfyui_url` with the workflow's models |
 | Hunyuan3D or Modly (mesh) | mesh | `mesh_tool = "hunyuan3d"`: `api_server.py` at `hunyuan3d_url`; `mesh_tool = "modly"`: the Modly app at `modly_url` |
 | Blender | mesh, rig (sprites), export | Blender 4.5 LTS at `blender_path` |
-| UniRig (rig) | rig | **not built yet** (ticket #11): the rig stage fails with that message, so assets stop after gate 2 |
+| UniRig (rig) | rig | UniRig at `unirig_path` with its own Python at `python_path` (setup below) |
 
 A stage whose tool is down fails with a readable error; fix the tool and press Retry.
 
@@ -178,11 +178,27 @@ It rewrites the templates, `clips.json`, `LICENCES.md` and the `joints`, `clips`
 source fields of `archetype.json`. Which source clip feeds each of our clips is the `SOURCES`
 table at the top of the script; swapping a pack (Truebones, Mixamo) means changing that table.
 
-### UniRig (rig, gate 3): installed, adapter not built yet
+### UniRig (rig, gate 3)
 
 [UniRig](https://github.com/VAST-AI-Research/UniRig) predicts a skeleton and skin weights for a
-mesh. Its adapter is ticket #11 (the archetype templates, #10, are built); until then the rig stage
-fails with "not built yet". On the RTX 5090 machine it is installed at `C:\tools\UniRig`
+mesh. The rig stage works like this:
+
+1. `adapters/real/unirig.py` writes LOD0 to `rig/unirig/input.glb` and runs UniRig's skeleton,
+   skin and merge steps (kept files are reused on a retry; output goes to `unirig.log`). Each step
+   may take `unirig_timeout` seconds.
+2. It fits the archetype's template skeleton (`archetypes/<id>/skeleton.json`) to the predicted
+   one by limb chains: both are scaled into their mesh bounds, short side branches are dropped,
+   limb ends are paired, and the template joints get target positions. `fit_score` is the share
+   of template limbs found, minus 0.25 per long extra limb (wings on a biped). Below 0.6 the fit
+   falls back, and gate 3 warns. The result is `rig/skeleton.json`.
+3. `blender_scripts/rig_animate.py` scales the template to the mesh, moves its joints to the
+   targets, and skins the mesh: UniRig's weights mapped to the template joints, or (on a fallback)
+   Blender's automatic weights, then a voxel-proxy weight transfer, then the nearest bone for
+   anything left. The template skeleton is always the final rig, so every clip fits it.
+4. Each clip in `archetypes/<id>/clips/` is retargeted with world-space Copy Transforms and baked;
+   the GLB has one named animation per clip.
+
+Gear and weapons are not fitted yet (ticket #12). On the RTX 5090 machine UniRig is installed at `C:\tools\UniRig`
 (commit `6793c66`) with its own Python 3.11 environment, the paths `unirig_path` and
 `python_path` in `assetgen.toml` point at:
 
@@ -262,6 +278,7 @@ modly_poll = 2
 blender_path = "blender"
 unirig_path = "UniRig"
 python_path = "python"
+unirig_timeout = 900           # seconds one UniRig step may take
 frontend_dir = "../frontend/dist" # built web app served at / (default: the repo's frontend/dist)
 ```
 
@@ -331,8 +348,8 @@ scripts in `blender_scripts/` as `blender -b --factory-startup -P <script> -- <a
   reuse them.
 
 Blender's output is kept as `blender_<script>.log` in the stage folder, its `PROGRESS` lines become
-the asset's progress, and a failure puts the log's last lines in the asset's error. Skinning and clip retargeting
-(`rig_and_animate`) come with the rig adapter in ticket #11.
+the asset's progress, and a failure puts the log's last lines in the asset's error. `rig_animate.py` (rig stage) skins the
+mesh to the template skeleton and retargets the clips; see "UniRig" above.
 
 ## Jobs and files
 

@@ -50,6 +50,7 @@ class Settings:
     modly_poll: float = 2.0
     blender_path: Path = Path("blender")
     unirig_path: Path = Path("UniRig")
+    unirig_timeout: float = 900.0  # seconds one UniRig step may take (the first run downloads its checkpoints)
     python_path: Path = Path("python")
     # The built web app (npm run build in frontend/), served at / when it exists.
     frontend_dir: Path = Path(__file__).resolve().parents[3] / "frontend" / "dist"

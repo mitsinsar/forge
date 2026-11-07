@@ -1,5 +1,5 @@
 """Stages resume after a restart, per-asset overrides reach the outputs, settings load,
-and the rig stage fails clearly until UniRig is built."""
+and a failed rig stage shows on the asset."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from assetgen.adapters import PendingRig
 from assetgen.config import load_settings
 from assetgen.db import Database
 from conftest import make_app, make_project, wait_for
@@ -77,8 +76,13 @@ def test_settings_from_file_and_env(tmp_path, monkeypatch):
         load_settings()
 
 
-def test_the_rig_stage_fails_clearly_until_unirig_is_built(settings, tmp_path):
-    with TestClient(make_app(settings, rig=PendingRig())) as client:
+class BrokenRig:
+    def predict_skeleton(self, **kwargs):
+        raise RuntimeError("UniRig's skeleton step failed (exit code 1).")
+
+
+def test_a_failed_rig_stage_shows_on_the_asset(settings, tmp_path):
+    with TestClient(make_app(settings, rig=BrokenRig())) as client:
         project = make_project(client, "unity", tmp_path / "g")
         asset = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero",
                                                  "description": "a knight"}).json()
@@ -87,4 +91,4 @@ def test_the_rig_stage_fails_clearly_until_unirig_is_built(settings, tmp_path):
         wait_for(client, asset["id"], "waiting", gate=2)
         client.post(f"/api/assets/{asset['id']}/gates/2/approve")
         failed = wait_for(client, asset["id"], "failed")
-        assert failed["stage"] == "rig" and "ticket #11" in failed["error"]
+        assert failed["stage"] == "rig" and "UniRig's skeleton step failed" in failed["error"]
