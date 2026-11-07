@@ -49,10 +49,11 @@ class ComfyUIError(RuntimeError):
 #   lora: the loader node class. LoraLoader patches model and CLIP; LoraLoaderModelOnly the model only.
 #   reference: "ipadapter" (ComfyUI_IPAdapter_plus nodes, patch the sampler's model),
 #              "redux" (Flux Redux, core nodes, patch the sampler's positive conditioning) or None.
+#   pose: whether the pose guide (an OpenPose ControlNet, ``pose_controlnet``) works with it.
 BASE_MODELS: dict[str, dict] = {
-    "sdxl": {"label": "SDXL", "lora": "LoraLoader", "reference": "ipadapter"},
-    "flux": {"label": "Flux", "lora": "LoraLoader", "reference": "redux"},
-    "qwen-image": {"label": "Qwen-Image", "lora": "LoraLoaderModelOnly", "reference": None},
+    "sdxl": {"label": "SDXL", "lora": "LoraLoader", "reference": "ipadapter", "pose": True},
+    "flux": {"label": "Flux", "lora": "LoraLoader", "reference": "redux", "pose": False},
+    "qwen-image": {"label": "Qwen-Image", "lora": "LoraLoaderModelOnly", "reference": None, "pose": False},
 }
 
 # Reference-image settings (style references, so they guide the look, not the pose).
@@ -71,6 +72,7 @@ CLASS_FOLDERS = {"CLIPVisionLoader": "clip_vision", "IPAdapterUnifiedLoader": "i
 
 DEFAULT_WORKFLOWS_DIR = Path(__file__).resolve().parents[4] / "workflows"
 HTTP_TIMEOUT = 30.0
+HISTORY_TRIES, HISTORY_WAIT = 10, 0.5  # seconds between asks for a finished run's history
 
 
 def load_workflow(directory: Path, base_model: str) -> dict:
@@ -181,6 +183,18 @@ class WorkflowBuilder:
                 "strength": REDUX["strength"], "strength_type": "multiply"}, f"reference {index} apply"), 0]
         sampler["inputs"]["positive"] = conditioning
 
+    def add_pose_guide(self, image: str, controlnet: str, strength: float) -> None:
+        """An OpenPose ControlNet on the sampler's conditioning, holding the figure in ``image``'s
+        pose for the first 80 % of the steps (the last ones refine detail freely)."""
+        sampler = self.node("sampler")
+        loader = self.add("ControlNetLoader", {"control_net_name": controlnet}, "pose controlnet")
+        loaded = self.add("LoadImage", {"image": image}, "pose guide")
+        apply = self.add("ControlNetApplyAdvanced", {
+            "positive": sampler["inputs"]["positive"], "negative": sampler["inputs"]["negative"],
+            "control_net": [loader, 0], "image": [loaded, 0], "strength": float(strength),
+            "start_percent": 0.0, "end_percent": 0.8}, "pose apply")
+        sampler["inputs"]["positive"], sampler["inputs"]["negative"] = [apply, 0], [apply, 1]
+
     def _image_batch(self, images: list[str]) -> list:
         loaded = [[self.add("LoadImage", {"image": image}, f"reference {i}"), 0] for i, image in enumerate(images, 1)]
         batch = loaded[0]
@@ -197,6 +211,8 @@ class ComfyUIImage:
         self.workflows_dir = Path(settings.comfyui_workflows_dir) if settings.comfyui_workflows_dir \
             else DEFAULT_WORKFLOWS_DIR
         self.timeout = float(settings.comfyui_timeout)
+        self.pose_controlnet = settings.pose_controlnet
+        self.pose_strength = float(settings.pose_strength)
         self.client_id = uuid.uuid4().hex
 
     # ---- HTTP ----------------------------------------------------------------
@@ -322,6 +338,8 @@ class ComfyUIImage:
             used = ", ".join(f"{lora['name']} ({float(lora['weight']):g})" for lora in loras)
             say(f"LoRAs: {used}.")
         self._add_references(builder, model, [Path(p) for p in reference_images], say)
+        if hints.get("pose_guide"):
+            self._add_pose_guide(builder, model, Path(hints["pose_guide"]), say)
 
         done_before = count - len(missing)
         with self._socket() as socket:
@@ -339,6 +357,26 @@ class ComfyUIImage:
                 temporary.replace(paths[number - 1])
         progress("Candidates ready", 1.0)
         return paths
+
+    def _add_pose_guide(self, builder: WorkflowBuilder, model: dict, image: Path, say) -> None:
+        if not self.pose_controlnet:
+            return
+        if not model["pose"]:
+            say(f"No pose guide for {model['label']} (only SDXL has one), so the A-pose is asked for in "
+                "the prompt only.")
+            return
+        try:
+            info = self._json("GET", "/object_info/ControlNetLoader") or {}
+            installed = info["ControlNetLoader"]["input"]["required"]["control_net_name"][0]
+        except (KeyError, IndexError, TypeError):
+            installed = []
+        if self.pose_controlnet not in installed:
+            say(f"The pose guide was skipped: ComfyUI has no ControlNet {self.pose_controlnet} in "
+                "models/controlnet (see backend/README.md, \"Pose guide\").")
+            return
+        builder.add_pose_guide(self.upload_image(image), self.pose_controlnet, self.pose_strength)
+        say("Pose guide: the figure is held in a wide A-pose (OpenPose ControlNet), so the arms stay "
+            "clear of the body.")
 
     def _add_references(self, builder: WorkflowBuilder, model: dict, images: list[Path], say) -> None:
         images = [p for p in images if p.is_file()]
@@ -443,10 +481,15 @@ class ComfyUIImage:
         return self._download(prompt_id, find_node(workflow, "save"))
 
     def _download(self, prompt_id: str, save_node: str) -> bytes:
-        history = (self._json("GET", f"/history/{prompt_id}") or {}).get(prompt_id) or {}
-        outputs = history.get("outputs") or {}
-        images = (outputs.get(save_node) or {}).get("images") or next(
-            (o["images"] for o in outputs.values() if o.get("images")), [])
+        # ComfyUI can report success a moment before it writes the run's history: ask a few times.
+        for attempt in range(HISTORY_TRIES):
+            history = (self._json("GET", f"/history/{prompt_id}") or {}).get(prompt_id) or {}
+            outputs = history.get("outputs") or {}
+            images = (outputs.get(save_node) or {}).get("images") or next(
+                (o["images"] for o in outputs.values() if o.get("images")), [])
+            if images:
+                break
+            time.sleep(HISTORY_WAIT)
         if not images:
             raise ComfyUIError("ComfyUI finished but returned no image.")
         image = images[0]

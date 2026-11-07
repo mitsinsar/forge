@@ -264,6 +264,8 @@ comfyui_url = "http://127.0.0.1:8188"
 comfyui_dir = ""               # ComfyUI folder (with models/); LoRAs it lacks are copied to models/loras
 comfyui_timeout = 600          # seconds one candidate may take in ComfyUI before the stage fails
 comfyui_workflows_dir = ""     # API-format workflows per base model (empty: backend/workflows)
+pose_controlnet = "openpose_sdxl_xinsir.safetensors"   # pose guide model in models/controlnet (empty: off)
+pose_strength = 0.8            # how strongly the pose guide holds the A-pose
 qwen_url = "http://127.0.0.1:11434/v1"   # Ollama; LM Studio: "http://127.0.0.1:1234/v1"
 qwen_model = "qwen3"                       # LM Studio: the model id it lists, e.g. "qwen3-14b"
 hunyuan3d_url = "http://127.0.0.1:8081"
@@ -315,6 +317,28 @@ How a render goes:
 * Clear stage errors: ComfyUI not reachable, a missing model file (with the folder it goes in, from
   ComfyUI's validation answer), a missing node, an error while running, and a candidate taking longer
   than `comfyui_timeout` (the prompt is then removed from ComfyUI's queue and interrupted).
+
+### Pose guide and the arms check (biped characters)
+
+Image-to-3D models fuse body parts that touch: hands resting on the thighs become one piece with
+them, and the rig can only cut them apart roughly. So heroes, monsters and bosses on the biped
+archetype are drawn in a wide A-pose (arms 45 degrees down, hands clear of the hips):
+
+* The prompt stage writes `prompt/pose_guide.png`, an OpenPose skeleton in that pose
+  (`src/assetgen/pose.py`), and adds "hands touching the legs, arms against the body..." to the
+  negative prompt.
+* On SDXL the guide goes through an OpenPose ControlNet (`ControlNetLoader` and
+  `ControlNetApplyAdvanced` on the sampler's conditioning, strength `pose_strength`, for the first
+  80 % of the steps). The model is [xinsir/controlnet-openpose-sdxl-1.0](https://huggingface.co/xinsir/controlnet-openpose-sdxl-1.0)
+  (`diffusion_pytorch_model.safetensors`, 2.5 GB), saved as
+  `models/controlnet/openpose_sdxl_xinsir.safetensors`. Without it, or on Flux and Qwen-Image, the
+  stage log says the guide was skipped and only the prompt asks for the pose.
+* Gate 1 checks each candidate's silhouette (`pose.arms_check`, also on uploaded images): in a
+  clear A-pose most rows from the chest to the hips cross three separate parts (arm, body, arm).
+  Candidates below 60 % are marked "Arms touch body". The result is the prompt stage's
+  `pose_check`.
+
+Gear and weapons are drawn alone, so they get neither.
 
 The adapter finds the nodes it fills by title, so a workflow can be rebuilt in ComfyUI and exported
 with "Save (API)" as long as it keeps these node titles: `model` (MODEL loader, or the checkpoint

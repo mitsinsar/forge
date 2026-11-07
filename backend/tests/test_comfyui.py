@@ -289,3 +289,52 @@ def test_failed_comfyui_fails_the_preview_stage(tmp_path, monkeypatch):
                                                    "description": "a knight"})
         asset = wait_for(client, created.json()["id"], "failed")
         assert "Could not reach ComfyUI" in asset["error"]
+
+
+POSE_MODEL = "openpose_sdxl_xinsir.safetensors"
+
+
+def render_posed(image: ComfyUIImage, tmp_path, *, base_model="sdxl", log=None):
+    from assetgen.pose import guide_image
+    guide = guide_image(tmp_path / "pose_guide.png", size=64)
+    return image.render_candidates(
+        prompt="a knight", negative_prompt="", base_model=base_model, loras=[], reference_images=[], count=1,
+        seed=1, out_dir=tmp_path / "prompt", progress=lambda s, f: None,
+        hints={"asset_id": "abc", "pose_guide": str(guide)}, log=log)
+
+
+def test_sdxl_pose_guide_holds_the_conditioning(fake_comfy, tmp_path):
+    server = fake_comfy(models=ALL_MODELS | {POSE_MODEL})
+    lines = []
+    render_posed(adapter(server.url, tmp_path), tmp_path, log=lines.append)
+    workflow = server.prompts[0]
+    (loader,) = node_of(workflow, "ControlNetLoader")
+    assert loader["inputs"]["control_net_name"] == POSE_MODEL
+    (apply,) = node_of(workflow, "ControlNetApplyAdvanced")
+    apply_id = next(k for k, n in workflow.items() if n is apply)
+    sampler = node_of(workflow, "KSampler")[0]["inputs"]
+    assert sampler["positive"] == [apply_id, 0] and sampler["negative"] == [apply_id, 1]
+    assert apply["inputs"]["positive"] == ["6", 0] and apply["inputs"]["strength"] == 0.8
+    assert len(server.uploads) == 1 and node_of(workflow, "LoadImage")[0]["inputs"]["image"] in server.uploads
+    assert any(line.startswith("Pose guide:") for line in lines)
+
+
+def test_pose_guide_skipped_without_the_controlnet_or_on_other_models(fake_comfy, tmp_path):
+    server = fake_comfy()  # no openpose model
+    lines = []
+    render_posed(adapter(server.url, tmp_path), tmp_path, log=lines.append)
+    assert node_of(server.prompts[0], "ControlNetLoader") == []
+    assert any("pose guide was skipped" in line and POSE_MODEL in line for line in lines)
+
+    server = fake_comfy(models=ALL_MODELS | {POSE_MODEL})
+    lines = []
+    render_posed(adapter(server.url, tmp_path / "flux"), tmp_path / "flux", base_model="flux", log=lines.append)
+    assert node_of(server.prompts[0], "ControlNetLoader") == []
+    assert any("No pose guide for Flux" in line for line in lines)
+
+
+def test_history_written_after_the_success_message_is_waited_for(fake_comfy, tmp_path, monkeypatch):
+    monkeypatch.setattr("assetgen.adapters.real.comfyui.HISTORY_WAIT", 0.01)
+    server = fake_comfy(history_late=3)
+    (path,) = render(adapter(server.url, tmp_path), tmp_path, count=1)
+    assert path.is_file()

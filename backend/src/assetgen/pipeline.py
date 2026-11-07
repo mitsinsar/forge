@@ -27,9 +27,12 @@ from .db import Database, now
 from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
-from . import exporters
+from . import exporters, pose
 
 log = logging.getLogger("assetgen.pipeline")
+
+# Added to the negative prompt when the pose guide is used.
+POSE_NEGATIVE = "hands touching the legs, arms against the body, hands on hips, arms crossed"
 
 
 class Conflict(Exception):
@@ -349,7 +352,8 @@ class Pipeline:
             shutil.copy2(self.source_image(asset["id"]), candidate)
             return {"source": "upload", "expansion": expansion, "prompt": "", "negative_prompt": "",
                     "base_model": None, "loras": [], "attempt": attempt, "log": [],
-                    "candidates": [self._rel(asset["id"], candidate)]}
+                    "candidates": [self._rel(asset["id"], candidate)],
+                    "pose_check": self._pose_check(asset, [candidate])}
         prompt = ", ".join(p for p in (expansion["prompt"], settings.get("prompt_suffix")) if p)
         negative = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
         loras = self._profile_loras(settings)
@@ -359,13 +363,36 @@ class Pipeline:
             progress(step, 0.1 + 0.9 * fraction)
 
         stage_log: list[str] = []
+        hints = self._hints(asset)
+        if self._posed_biped(asset):
+            hints["pose_guide"] = str(pose.guide_image(directory / "pose_guide.png"))
+            negative = ", ".join(p for p in (negative, POSE_NEGATIVE) if p)
         paths = self.adapters.image.render_candidates(
             prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
             reference_images=references, count=int(settings["candidates"]), seed=seed_of(asset["id"], attempt),
-            out_dir=directory, progress=scaled, hints=self._hints(asset), log=stage_log.append)
+            out_dir=directory, progress=scaled, hints=hints, log=stage_log.append)
         return {"expansion": expansion, "prompt": prompt, "negative_prompt": negative,
                 "base_model": settings["base_model"], "loras": loras, "attempt": attempt,
-                "log": stage_log, "candidates": [self._rel(asset["id"], p) for p in paths]}
+                "log": stage_log, "candidates": [self._rel(asset["id"], p) for p in paths],
+                "pose_check": self._pose_check(asset, paths)}
+
+    @staticmethod
+    def _posed_biped(asset: dict) -> bool:
+        """Biped characters (not gear or weapons, which are drawn alone) get the A-pose guide and check."""
+        return asset["kind"] in ("hero", "monster", "boss") and asset.get("archetype") == "biped"
+
+    def _pose_check(self, asset: dict, paths: list[Path]) -> list[dict] | None:
+        """Gate 1's arms check for each candidate of a biped character (see ``pose.arms_check``)."""
+        if not self._posed_biped(asset):
+            return None
+        result = []
+        for number, path in enumerate(paths, start=1):
+            try:
+                check = pose.arms_check(Path(path))
+            except OSError:
+                check = {"arms_clear": None, "clear_share": 0.0}
+            result.append({"candidate": number, **check})
+        return result
 
     def _profile_loras(self, settings: dict) -> list[dict]:
         result = []
