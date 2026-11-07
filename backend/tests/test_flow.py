@@ -45,7 +45,11 @@ def test_unity_hero_end_to_end(client, tmp_path):
     assert abs(lods[2]["triangles"] / lods[0]["triangles"] - 0.2) < 0.1
 
     clips = [c["name"] for c in asset["outputs"]["rig"]["clips"]]
-    assert clips == ["idle", "walk", "run", "attack_1", "attack_2", "hit", "death", "cast", "skill"]
+    # A biped hero is a paper-doll body: it also plays every weapon class's attacks.
+    from assetgen.defaults import WEAPON_ATTACKS
+    attacks = list(dict.fromkeys(c for clips in WEAPON_ATTACKS.values() for c in clips))
+    assert clips == ["idle", "walk", "run", "attack_1", "attack_2", "hit", "death", "cast", "skill",
+                     *[c for c in attacks if c not in ("attack_1", "attack_2")]]
     assert asset["outputs"]["rig"]["rig_type"] == "Humanoid"
 
     folder = game / "Assets" / "Generated" / "hero" / "Ember_Knight"
@@ -53,7 +57,7 @@ def test_unity_hero_end_to_end(client, tmp_path):
                  "Textures/Ember_Knight_Albedo.png", "Textures/Ember_Knight_Albedo.png.meta"):
         assert (folder / name).is_file(), name
     sidecar = json.loads((folder / "asset.json").read_text())
-    assert sidecar["rig"] == "Humanoid" and len(sidecar["lods"]) == 3 and len(sidecar["clips"]) == 9
+    assert sidecar["rig"] == "Humanoid" and len(sidecar["lods"]) == 3 and len(sidecar["clips"]) == len(clips)
     assert sidecar["prefab"] == "Ember_Knight.prefab"
     assert sidecar["material"]["file"] == "Materials/Ember_Knight.mat"  # made by the import script
     # the editor import script came with the export

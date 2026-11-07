@@ -84,9 +84,11 @@ class BlenderAdapter(Protocol):
 
     def render_sprites(self, *, animated_glb: Path, clips: list[dict], directions: list[str],
                        camera_preset: str, frame_size: int, supersample: int, fps: int, look: str,
-                       palette_size: int, out_dir: Path, progress: Progress) -> dict[str, dict[str, list[Path]]]:
+                       palette_size: int, out_dir: Path, progress: Progress,
+                       framing: dict | None = None) -> dict[str, dict[str, list[Path]]]:
         """Eevee orthographic render with toon or pixel shading at
-        ``supersample``x, downscaled to ``frame_size``. Returns
+        ``supersample``x, downscaled to ``frame_size``. ``framing`` (``{"span",
+        "height"}``) fixes the camera so layered assets line up. Returns
         ``{direction: {clip: [frame paths]}}``."""
 
     def export_fbx(self, *, animated_glb: Path, mesh_glb: Path, lods: list[dict], rig_type: str,

@@ -167,6 +167,11 @@ attack.
   grip goes to `asset.json`. The Godot render keeps the mannequin as a holdout: invisible, but it
   still hides what is behind it, so the slot's or weapon's layer composites over the body layer in
   `PaperDoll`.
+* **Paper doll**: biped heroes, gear and weapons share one sprite framing (`PAPER_DOLL_FRAMING` in
+  `defaults.py`: a 4.8 m ortho scale centred 0.9 m up, which holds the 1.8 m body swinging a 1 m
+  weapon), and biped heroes and gear also play every weapon class's attacks, so their layers
+  line up frame for frame. Checked in Godot 4.7.2 with a knight, a helmet and a sword stacked as
+  three `AnimatedSprite2D` layers.
 
 ### Archetype templates (the rig stage's skeletons and clips)
 

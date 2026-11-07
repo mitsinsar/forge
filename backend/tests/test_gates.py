@@ -182,3 +182,17 @@ def test_biped_characters_get_the_pose_guide_and_arms_check(client, settings, tm
                     "waiting", gate=1)
     assert gear["outputs"]["prompt"]["pose_check"] is None
     assert "pose_guide" not in client.app.state.pipeline.adapters.image.last_hints
+
+
+def test_paper_doll_assets_share_clips_and_framing(client, settings, tmp_path):
+    from assetgen.defaults import PAPER_DOLL_FRAMING, WEAPON_ATTACKS
+    pipeline = client.app.state.pipeline
+    profile = pipeline.asset_settings({"profile_id": None, "overrides": {}})
+    attacks = {c for clips in WEAPON_ATTACKS.values() for c in clips}
+    hero = {"kind": "hero", "archetype": "biped"}
+    helmet = {"kind": "gear", "archetype": "biped", "slot": "head"}
+    wolf = {"kind": "monster", "archetype": "quadruped"}
+    assert attacks <= set(pipeline.clips_for(hero, profile)) == set(pipeline.clips_for(helmet, profile))
+    assert not attacks & set(pipeline.clips_for(wolf, profile))
+    assert pipeline.paper_doll(hero) and pipeline.paper_doll(helmet) and not pipeline.paper_doll(wolf)
+    assert PAPER_DOLL_FRAMING["span"] > 1.8 * 2  # a 1.8 m body with a 1 m weapon swung out

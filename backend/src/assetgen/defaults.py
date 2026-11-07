@@ -40,6 +40,10 @@ CAMERA_DIRECTIONS: dict[str, list[str]] = {
 # face, 90 shows it facing screen right) and the camera's tilt per preset.
 DIRECTION_YAW: dict[str, float] = {"down": 0, "down_right": 45, "right": 90, "up_right": 135, "up": 180,
                                    "up_left": 225, "left": 270, "down_left": 315}
+# Paper-doll framing: biped heroes, gear and weapons render with this one camera framing (ortho
+# scale, and the height its centre looks at, in metres) so their Godot layers stack. It holds the
+# 1.8 m base body swinging a 1 m weapon.
+PAPER_DOLL_FRAMING = {"span": 4.8, "height": 0.9}
 CAMERA_TILT: dict[str, float] = {"side": 0, "three_quarter": 30, "topdown_4": 50, "topdown_8": 50}
 CAMERA_MIRRORED: dict[str, dict[str, str]] = {
     "side": {"left": "right"},

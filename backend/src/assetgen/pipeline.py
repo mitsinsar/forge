@@ -24,7 +24,7 @@ from .adapters import Adapters
 from .archetypes import get_archetype, load_archetypes
 from .config import Settings
 from .db import Database, now
-from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
+from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_DOLL_FRAMING, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import exporters, grips, pose
@@ -81,7 +81,15 @@ class Pipeline:
             clips += [c for c in settings["biped_extra_clips"] if c not in clips]
         if asset["kind"] == "weapon":
             clips += [c for c in WEAPON_ATTACKS[asset["weapon_class"]] if c not in clips]
+        elif self.paper_doll(asset):  # the body and gear layers play every weapon's attacks too
+            clips += [c for attacks in WEAPON_ATTACKS.values() for c in attacks if c not in clips]
         return clips
+
+    @staticmethod
+    def paper_doll(asset: dict) -> bool:
+        """Assets whose Godot layers stack in one PaperDoll: biped heroes, gear and weapons. They share
+        the sprite framing and the clip set."""
+        return asset["kind"] in ("gear", "weapon") or (asset["kind"] == "hero" and asset.get("archetype") == "biped")
 
     @staticmethod
     def preview_clips(asset: dict, clips: list[str]) -> list[str]:
@@ -495,7 +503,8 @@ class Pipeline:
             animated_glb=animated, clips=clips, directions=CAMERA_DIRECTIONS[preset],
             camera_preset=preset, frame_size=frame_size, supersample=int(render["supersample"]),
             fps=fps, look=render["look"], palette_size=int(render["palette_size"]),
-            out_dir=self.stage_dir(asset["id"], "sprites"), progress=progress)
+            out_dir=self.stage_dir(asset["id"], "sprites"), progress=progress,
+            framing=dict(PAPER_DOLL_FRAMING) if self.paper_doll(asset) else None)
         return {"frames": frames, "camera_preset": preset, "directions": CAMERA_DIRECTIONS[preset],
                 "mirrored": CAMERA_MIRRORED[preset], "fps": fps, "frame_size": frame_size,
                 "files": {d: {c: [self._rel(asset["id"], p) for p in paths] for c, paths in by_clip.items()}
