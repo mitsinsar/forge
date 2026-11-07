@@ -3,6 +3,7 @@
 import {
   useEffect,
   useId,
+  useState,
   type ButtonHTMLAttributes,
   type CSSProperties,
   type InputHTMLAttributes,
@@ -599,6 +600,64 @@ export function Thumb({
     <button type="button" className="thumb" aria-pressed={!!selected} onClick={onClick}>
       {content}
     </button>
+  );
+}
+
+// ---- MediaCard (gallery cards: assets, outfit items, example images) ---------
+
+/** A picture card for galleries. With `frames` the picture plays them while hovered (a sprite loop). */
+export function MediaCard({
+  image,
+  frames,
+  fps = 12,
+  title,
+  subtitle,
+  badges,
+  selected,
+  onClick,
+  empty = "No picture yet",
+}: {
+  image?: string | null;
+  frames?: string[];
+  fps?: number;
+  title: ReactNode;
+  subtitle?: ReactNode;
+  badges?: ReactNode;
+  selected?: boolean;
+  onClick?: () => void;
+  empty?: ReactNode;
+}) {
+  const [hover, setHover] = useState(false);
+  const [frame, setFrame] = useState(0);
+  const playing = hover && !!frames?.length;
+  useEffect(() => {
+    if (!playing) return;
+    const timer = setInterval(() => setFrame((n) => n + 1), 1000 / fps);
+    return () => clearInterval(timer);
+  }, [playing, fps]);
+  const shown = playing ? frames![frame % frames!.length] : image ?? frames?.[0];
+  const body = (
+    <>
+      <span className="media-card__picture">
+        {shown ? <img src={shown} alt="" loading="lazy" /> : <span className="media-card__empty">{empty}</span>}
+        {badges && <span className="media-card__badges">{badges}</span>}
+      </span>
+      <span className="media-card__text">
+        <span className="media-card__title">{title}</span>
+        {subtitle && <span className="media-card__subtitle">{subtitle}</span>}
+      </span>
+    </>
+  );
+  const events = { onMouseEnter: () => setHover(true), onMouseLeave: () => (setHover(false), setFrame(0)) };
+  return onClick ? (
+    <button type="button" className={cx("media-card", selected && "media-card--selected")} aria-pressed={selected}
+            onClick={onClick} {...events}>
+      {body}
+    </button>
+  ) : (
+    <div className={cx("media-card", "media-card--static", selected && "media-card--selected")} {...events}>
+      {body}
+    </div>
   );
 }
 

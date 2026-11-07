@@ -194,6 +194,25 @@ attack.
   line up frame for frame. Checked in Godot 4.7.2 with a knight, a helmet and a sword stacked as
   three `AnimatedSprite2D` layers.
 
+### Side jobs: outfits and example sheets
+
+Besides asset stages, the single worker runs side jobs (`jobs` table, `GET /api/jobs`), oldest
+first with the stages, so the GPU is never shared:
+
+* `fit` (`POST /api/assets/{id}/fits` with `wearer_id`): finished gear or a weapon (gate 2 approved)
+  fitted on another rigged hero, exactly as at gate 3, kept per hero in `fits/<hero>/animated.glb`
+  (`asset.fits`, `urls.fits`). The Outfits screen uses them to swap items between heroes; the
+  item's own gate and export are untouched. Outfits are saved in the `outfits` table
+  (`/api/outfits`).
+* `lora_examples` (`POST /api/loras/{id}/examples`, optional `weight`, default 0.8) and
+  `profile_examples` (`POST /api/profiles/{id}/examples`): the example subjects in `defaults.py`
+  (`EXAMPLE_SUBJECTS`: a knight, a wolf and a sword, one seed) rendered with and without the LoRA,
+  or in the profile's style (its model, LoRAs, prompt suffix, negative and references). Written to
+  `data/examples/` and served at `/api/examples/...`. Your own LoRA images:
+  `POST /api/loras/{id}/example-images`.
+
+`GET /api/assets/{id}/thumb` is a cached 384 px JPEG of the preview, for galleries.
+
 ### Archetype templates (the rig stage's skeletons and clips)
 
 Each archetype folder in `src/assetgen/archetypes/<id>/` holds:

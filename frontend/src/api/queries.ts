@@ -1,6 +1,7 @@
 // All server state lives in TanStack Query; the WebSocket (live.ts) keeps it fresh.
 
 import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { Job } from "./client";
 import { api, type AssetFilters, type BaseModel } from "./client";
 
 export const queryClient = new QueryClient({
@@ -20,7 +21,29 @@ export const keys = {
   assets: ["assets"] as const,
   assetList: (filters: AssetFilters) => ["assets", "list", filters] as const,
   asset: (id: string) => ["asset", id] as const,
+  jobs: (targetId: string, kind?: string) => ["jobs", targetId, kind ?? ""] as const,
+  outfits: (projectId?: string) => ["outfits", projectId ?? ""] as const,
 };
+
+/** The latest side job of this kind for a target, polled while it waits or runs. When it finishes,
+ *  ``onDone`` runs (to reload what it made). */
+export function useLatestJob(targetId: string, kind: Job["kind"], onDone?: () => void) {
+  const client = useQueryClient();
+  return useQuery({
+    queryKey: keys.jobs(targetId, kind),
+    queryFn: async () => {
+      const [job] = await api.jobs({ target_id: targetId, kind });
+      const previous = client.getQueryData<Job | null>(keys.jobs(targetId, kind));
+      if (job && previous && previous.id === job.id && previous.status !== job.status &&
+          (job.status === "done" || job.status === "failed")) onDone?.();
+      return job ?? null;
+    },
+    refetchInterval: (query) => {
+      const job = query.state.data as Job | null | undefined;
+      return job && (job.status === "queued" || job.status === "running") ? 1500 : false;
+    },
+  });
+}
 
 export const useMeta = () => useQuery({ queryKey: keys.meta, queryFn: api.meta, staleTime: Infinity });
 /** Whether the tools in real mode answer; checked again every 30 seconds. */

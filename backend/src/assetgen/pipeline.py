@@ -24,6 +24,7 @@ from .adapters import Adapters
 from .archetypes import get_archetype, load_archetypes
 from .config import Settings
 from .db import Database, now
+from .defaults import (EXAMPLE_LORA_WEIGHT, EXAMPLE_NEGATIVE, EXAMPLE_SEED, EXAMPLE_SUBJECTS)
 from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_DOLL_FRAMING, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
@@ -254,6 +255,8 @@ class Pipeline:
         # Resume: anything that was running when the server stopped goes back in the queue.
         for asset in self.db.list("assets", status="running"):
             self.db.update("assets", asset["id"], {"status": "queued", "step": "Resuming after restart"})
+        for job in self.db.list("jobs", status="running"):
+            self.db.update("jobs", job["id"], {"status": "queued", "step": "Resuming after restart"})
         self._task = asyncio.create_task(self._loop(), name="assetgen-worker")
 
     async def stop(self) -> None:
@@ -264,18 +267,151 @@ class Pipeline:
             except asyncio.CancelledError:
                 pass
 
-    def _next(self) -> dict | None:
-        queued = self.db.list("assets", order="queued_at", status="queued")
-        return queued[0] if queued else None
+    def _next(self) -> tuple[str, dict] | None:
+        """The oldest queued asset stage or job (one worker: the GPU is never shared)."""
+        queued = [("asset", a) for a in self.db.list("assets", order="queued_at", status="queued")[:1]]
+        queued += [("job", j) for j in self.db.list("jobs", order="queued_at", status="queued")[:1]]
+        return min(queued, key=lambda item: item[1]["queued_at"]) if queued else None
 
     async def _loop(self) -> None:
         while True:
-            asset = self._next()
-            if asset is None:
+            item = self._next()
+            if item is None:
                 self._wake.clear()
                 await self._wake.wait()
                 continue
-            await self.run_one(asset["id"])
+            kind, record = item
+            if kind == "asset":
+                await self.run_one(record["id"])
+            else:
+                await self.run_job(record["id"])
+
+    # ---- side jobs: item fits and example renders ---------------------------------
+
+    def queue_job(self, kind: str, target_id: str, params: dict | None = None) -> dict:
+        """Queues a job (``fit``, ``lora_examples``, ``profile_examples``); an identical one already
+        waiting or running is returned instead of a second one."""
+        params = params or {}
+        for job in self.db.list("jobs", kind=kind, target_id=target_id):
+            if job["status"] in ("queued", "running") and job.get("params") == params:
+                return job
+        job = self.db.insert("jobs", {"kind": kind, "target_id": target_id, "params": params, "status": "queued",
+                                      "step": "Waiting for the worker", "progress": 0.0, "error": None,
+                                      "result": None, "queued_at": now()})
+        self._publish_job(job)
+        self._wake.set()
+        return job
+
+    def _publish_job(self, job: dict) -> None:
+        self.hub.publish({"type": "job", "job": job, "at": now()})
+
+    def _job_update(self, job_id: str, **changes) -> dict:
+        job = self.db.update("jobs", job_id, changes)
+        if job:
+            self._publish_job(job)
+        return job
+
+    async def run_job(self, job_id: str) -> None:
+        job = self.db.get("jobs", job_id)
+        if job is None or job["status"] != "queued":
+            return
+        self._job_update(job_id, status="running", step="Starting", progress=0.0, error=None)
+
+        def progress(step: str, fraction: float) -> None:
+            self._job_update(job_id, step=step, progress=max(0.0, min(1.0, float(fraction))))
+
+        try:
+            result = await asyncio.to_thread(getattr(self, f"_job_{job['kind']}"), job, progress)
+        except Exception as exc:  # noqa: BLE001 - reported on the job
+            log.exception("job %s (%s) failed", job_id, job["kind"])
+            self._job_update(job_id, status="failed", step="Failed", error=f"{exc}")
+            return
+        self._job_update(job_id, status="done", step="Done", progress=1.0, result=result, finished_at=now())
+
+    def _job_fit(self, job: dict, progress) -> dict:
+        """Fits a finished gear or weapon asset on a rigged hero, kept per hero under ``fits/<hero>``."""
+        item = self._require(job["target_id"])
+        wearer = self._wearer_info(job["params"]["wearer_id"])
+        if not (item.get("outputs") or {}).get("mesh"):
+            raise RuntimeError("the item has no mesh yet: approve its gate 2 first")
+        directory = self.asset_dir(item["id"]) / "fits" / wearer["id"]
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(parents=True)
+        attach = self._attach_for(item)
+        attach["wearer"] = wearer
+        archetype = get_archetype("biped")
+        clips = self.clips_for(item, self.asset_settings(item))
+        result = self.adapters.blender.rig_and_animate(
+            mesh_glb=self.stage_dir(item["id"], "mesh") / "mesh.glb",
+            skeleton={"joints": archetype["joints"], "fit_score": 1.0, "fallback": False}, archetype=archetype,
+            clips=clips, attach=attach, out_path=directory / "animated.glb", progress=progress)
+        fit = {"glb": self._rel(item["id"], result["glb"]), "clips": result["clips"],
+               "wearer": {"id": wearer["id"], "name": wearer["name"]}, "at": now(),
+               **{k: v for k, v in (result.get("gear") or {}).items()}}
+        item = self._require(item["id"])
+        self.db.update("assets", item["id"], {"fits": {**(item.get("fits") or {}), wearer["id"]: fit}})
+        self.publish_status(self._require(item["id"]))
+        return fit
+
+    def examples_dir(self, owner: str, owner_id: str) -> Path:
+        return self.settings.data_dir / "examples" / owner / owner_id
+
+    def _render_examples(self, owner: str, owner_id: str, variants: dict, progress) -> list[dict]:
+        """Renders every example subject once per variant (``{"with": render_args, "without": ...}``),
+        same seed throughout. Returns ``[{"name", "prompt", <variant>: path under examples/}]``."""
+        root = self.examples_dir(owner, owner_id)
+        shutil.rmtree(root, ignore_errors=True)
+        items = []
+        total = len(EXAMPLE_SUBJECTS) * len(variants)
+        done = 0
+        for subject in EXAMPLE_SUBJECTS:
+            item = {"name": subject["name"], "prompt": subject["prompt"]}
+            for variant, render in variants.items():
+                out = root / f"{subject['name']}_{variant}"
+                prompt = ", ".join(p for p in (subject["prompt"], render.get("suffix")) if p)
+                negative = ", ".join(p for p in (EXAMPLE_NEGATIVE, render.get("negative")) if p)
+                (path,) = self.adapters.image.render_candidates(
+                    prompt=prompt, negative_prompt=negative, base_model=render["base_model"],
+                    loras=render.get("loras", []), reference_images=render.get("references", []), count=1,
+                    seed=EXAMPLE_SEED, out_dir=out,
+                    progress=lambda s, f, d=done: progress(f"{subject['name']} ({variant}): {s}", (d + f) / total),
+                    hints={**subject["hints"], "asset_id": f"example_{owner_id}_{subject['name']}_{variant}",
+                           "name": subject["name"]})
+                final = root / f"{subject['name']}_{variant}.png"
+                shutil.move(str(path), final)
+                shutil.rmtree(out, ignore_errors=True)
+                item[variant] = final.relative_to(self.settings.data_dir / "examples").as_posix()
+                done += 1
+            items.append(item)
+        self.adapters.image.unload()
+        return items
+
+    def _job_lora_examples(self, job: dict, progress) -> dict:
+        lora = self.db.get("loras", job["target_id"])
+        if lora is None:
+            raise RuntimeError("the LoRA is gone")
+        weight = float(job["params"].get("weight", EXAMPLE_LORA_WEIGHT))
+        entry = {"id": lora["id"], "name": lora["name"], "path": lora["path"], "weight": weight}
+        items = self._render_examples("loras", lora["id"], {
+            "with": {"base_model": lora["base_model"], "loras": [entry]},
+            "without": {"base_model": lora["base_model"]}}, progress)
+        examples = {"made_at": now(), "weight": weight, "items": items}
+        self.db.update("loras", lora["id"], {"examples": examples})
+        return examples
+
+    def _job_profile_examples(self, job: dict, progress) -> dict:
+        profile = self.db.get("profiles", job["target_id"])
+        if profile is None:
+            raise RuntimeError("the style profile is gone")
+        settings = self.asset_settings({"profile_id": profile["id"], "overrides": {}})
+        references = [self.settings.uploads_dir / "references" / r["file"] for r in settings["reference_images"]]
+        items = self._render_examples("profiles", profile["id"], {
+            "with": {"base_model": settings["base_model"], "loras": self._profile_loras(settings),
+                     "suffix": settings.get("prompt_suffix"), "negative": settings.get("negative_prompt"),
+                     "references": references}}, progress)
+        examples = {"made_at": now(), "base_model": settings["base_model"], "items": items}
+        self.db.update("profiles", profile["id"], {"examples": examples})
+        return examples
 
     async def run_one(self, asset_id: str) -> None:
         asset = self.db.get("assets", asset_id)
@@ -462,18 +598,10 @@ class Pipeline:
         archetype = get_archetype(asset["archetype"])
         mesh = self.stage_dir(asset["id"], "mesh") / "mesh.glb"
         clips = self.clips_for(asset, settings)
-        attach = None
-        if asset["kind"] in ("gear", "weapon"):
+        attach = self._attach_for(asset)
+        if attach:
             # Fitted on the base body, which is the template itself: nothing to predict.
             skeleton = {"joints": archetype["joints"], "fit_score": 1.0, "fallback": False}
-            if asset["kind"] == "gear":
-                attach = {"kind": "gear", "slot": asset["slot"]}
-            else:
-                grip = asset.get("grip") or dict(DEFAULT_GRIPS[asset["weapon_class"]])
-                manual = grip.get("source") == "manual"
-                attach = {"kind": "weapon", "weapon_class": asset["weapon_class"], "grip": grip,
-                          "socket": grip.get("socket") or DEFAULT_GRIPS[asset["weapon_class"]]["socket"],
-                          "grip_matrix": grips.to_blender(grip["position"], grip["rotation"]) if manual else None}
         else:
             skeleton = self.adapters.rig.predict_skeleton(
                 mesh=mesh, archetype=archetype, out_dir=directory, progress=lambda s, f: progress(s, 0.3 * f))
@@ -514,14 +642,27 @@ class Pipeline:
                 if a["kind"] == "hero" and a.get("archetype") == "biped" and (a.get("outputs") or {}).get("rig")
                 and (self.asset_dir(a["id"]) / "rig" / "rigged.blend").is_file()]
 
+    def _attach_for(self, asset: dict) -> dict | None:
+        """How gear or a weapon goes on a body (None for characters)."""
+        if asset["kind"] == "gear":
+            return {"kind": "gear", "slot": asset["slot"]}
+        if asset["kind"] == "weapon":
+            grip = asset.get("grip") or dict(DEFAULT_GRIPS[asset["weapon_class"]])
+            manual = grip.get("source") == "manual"
+            return {"kind": "weapon", "weapon_class": asset["weapon_class"], "grip": grip,
+                    "socket": grip.get("socket") or DEFAULT_GRIPS[asset["weapon_class"]]["socket"],
+                    "grip_matrix": grips.to_blender(grip["position"], grip["rotation"]) if manual else None}
+        return None
+
     def _wearer(self, asset: dict) -> dict | None:
-        """The rigged hero gear or a weapon is fitted on (None: the base mannequin)."""
-        if not asset.get("wearer_id"):
-            return None
-        wearer = self.db.get("assets", asset["wearer_id"])
-        blend = self.asset_dir(asset["wearer_id"]) / "rig" / "rigged.blend"
+        """The rigged hero gear or a weapon is fitted on at gate 3 (None: the base mannequin)."""
+        return self._wearer_info(asset["wearer_id"]) if asset.get("wearer_id") else None
+
+    def _wearer_info(self, wearer_id: str) -> dict:
+        wearer = self.db.get("assets", wearer_id)
+        blend = self.asset_dir(wearer_id) / "rig" / "rigged.blend"
         if wearer is None or not (wearer.get("outputs") or {}).get("rig") or not blend.is_file():
-            raise RuntimeError("the wearer is gone or no longer rigged; pick another wearer at gate 3, or re-rig it")
+            raise RuntimeError("the wearer is gone or no longer rigged; pick another wearer, or re-rig it")
         return {"id": wearer["id"], "name": wearer["name"], "blend": str(blend.resolve()),
                 "clips": wearer["outputs"]["rig"]["clips"]}
 

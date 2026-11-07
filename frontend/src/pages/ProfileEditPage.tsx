@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, localUrl, MAX_EXTRA_LODS, type Kind, type MeshQuality, type Meta, type PerKind, type Profile, type ProfileInput } from "../api/client";
-import { keys, useApiMutation, useLoras, useMeta, useProfile, useProjects } from "../api/queries";
+import { useQueryClient } from "@tanstack/react-query";
+import { api, exampleUrl, localUrl, MAX_EXTRA_LODS, type Kind, type MeshQuality, type Meta, type PerKind, type Profile, type ProfileInput } from "../api/client";
+import { keys, useApiMutation, useLatestJob, useLoras, useMeta, useProfile, useProjects } from "../api/queries";
+import { ExampleSheet, JobProgress } from "../components/Examples";
 import { KIND_LABEL, label, MESH_PRESETS, MESH_RESOLUTIONS, meshPreset, options } from "../labels";
 import {
   Badge,
@@ -17,6 +19,7 @@ import {
   Input,
   LinkButton,
   Loading,
+  MediaCard,
   Notice,
   PageHeader,
   Row,
@@ -166,6 +169,32 @@ function MeshQualityFields({ mesh, onChange }: { mesh: MeshQuality; onChange: (m
   );
 }
 
+/** This profile's example sheet: three subjects rendered in its style (saved settings only). */
+function ProfileExamples({ profile }: { profile: Profile }) {
+  const client = useQueryClient();
+  const job = useLatestJob(profile.id, "profile_examples", () =>
+    client.invalidateQueries({ queryKey: keys.profile(profile.id) }));
+  const make = useApiMutation(() => api.profileExamples(profile.id), [keys.jobs(profile.id, "profile_examples")]);
+  const busy = job.data?.status === "queued" || job.data?.status === "running";
+  return (
+    <Card
+      title="Examples"
+      subtitle="A knight, a wolf and a sword in this style, with its saved model, LoRAs, prompt and references."
+      actions={
+        <Button size="sm" variant="primary" busy={make.isPending || busy} onClick={() => make.mutate(undefined)}>
+          {profile.examples ? "Make new examples" : "Make examples"}
+        </Button>
+      }
+    >
+      <Stack gap={3}>
+        <JobProgress job={job.data} />
+        <ErrorNotice error={make.error} />
+        <ExampleSheet examples={profile.examples} />
+      </Stack>
+    </Card>
+  );
+}
+
 function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profile: Profile | null; meta: Meta }) {
   const navigate = useNavigate();
   const projects = useProjects();
@@ -297,6 +326,11 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
                 return (
                   <Row key={l.id} gap={3} justify="between">
                     <Row gap={2}>
+                      {(l.examples?.items[0]?.with ?? l.example_images?.[0]) && (
+                        <Box width={44}>
+                          <MediaCard image={exampleUrl((l.examples?.items[0]?.with ?? l.example_images?.[0])!)} title="" />
+                        </Box>
+                      )}
                       <Checkbox checked={!!entry} onChange={(on) => toggleLora(l.id, on)} label={l.name} />
                       {l.tags.map((t) => <Badge key={t}>{t}</Badge>)}
                       {!l.commercial_use && <Badge tone="warning">Not for commercial use</Badge>}
@@ -312,6 +346,8 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
             </Stack>
           )}
         </Card>
+
+        {profile && <ProfileExamples profile={profile} />}
 
         <Card title="Reference images" subtitle={`Up to ${meta.max_reference_images}. They steer the style of the previews.`}>
           <Stack gap={3}>

@@ -40,6 +40,21 @@ CAMERA_DIRECTIONS: dict[str, list[str]] = {
 # face, 90 shows it facing screen right) and the camera's tilt per preset.
 DIRECTION_YAW: dict[str, float] = {"down": 0, "down_right": 45, "right": 90, "up_right": 135, "up": 180,
                                    "up_left": 225, "left": 270, "down_left": 315}
+# Example renders for LoRAs and style profiles: the same three subjects and seed every time, so
+# sheets compare. ``hints`` say what each subject is (the test doubles draw from them).
+EXAMPLE_SUBJECTS = [
+    {"name": "knight", "prompt": "a knight in plate armour, full body, standing in A-pose, facing the camera, "
+                                 "plain light-grey background, even studio lighting",
+     "hints": {"kind": "hero", "archetype": "biped"}},
+    {"name": "wolf", "prompt": "a grey wolf, full body, side view, plain light-grey background, even studio lighting",
+     "hints": {"kind": "monster", "archetype": "quadruped"}},
+    {"name": "sword", "prompt": "a steel longsword, upright, side-on, centred, plain light-grey background",
+     "hints": {"kind": "weapon", "archetype": "biped", "weapon_class": "one_handed"}},
+]
+EXAMPLE_NEGATIVE = "blurry, cropped, text, watermark, extra limbs, several subjects"
+EXAMPLE_SEED = 20261107
+EXAMPLE_LORA_WEIGHT = 0.8
+
 # Paper-doll framing: biped heroes, gear and weapons render with this one camera framing (ortho
 # scale, and the height its centre looks at, in metres) so their Godot layers stack. It holds the
 # 1.8 m base body swinging a 1 m weapon.

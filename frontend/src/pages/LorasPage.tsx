@@ -1,9 +1,12 @@
 import { useState } from "react";
-import { api, type BaseModel, type Lora } from "../api/client";
-import { keys, useApiMutation, useLoras, useMeta } from "../api/queries";
+import { useQueryClient } from "@tanstack/react-query";
+import { api, exampleUrl, type BaseModel, type Lora } from "../api/client";
+import { keys, useApiMutation, useLatestJob, useLoras, useMeta } from "../api/queries";
+import { ExampleSheet, JobProgress } from "../components/Examples";
 import { label, options } from "../labels";
 import {
   Badge,
+  Box,
   Button,
   Checkbox,
   ConfirmDialog,
@@ -15,8 +18,10 @@ import {
   Grid,
   Input,
   Loading,
+  MediaCard,
   PageHeader,
   Row,
+  SectionTitle,
   Select,
   Stack,
   Table,
@@ -26,6 +31,60 @@ import {
 } from "../ui/kit";
 
 const splitTags = (text: string) => text.split(",").map((t) => t.trim()).filter(Boolean);
+
+/** A LoRA's first example (or your first image), for the table. */
+const loraPicture = (l: Lora) => l.examples?.items[0]?.with ?? l.example_images?.[0];
+
+function ExamplesDialog({ lora, onClose }: { lora: Lora; onClose: () => void }) {
+  const client = useQueryClient();
+  const reload = () => client.invalidateQueries({ queryKey: keys.loras });
+  const job = useLatestJob(lora.id, "lora_examples", reload);
+  const [weight, setWeight] = useState(String(lora.examples?.weight ?? 0.8));
+  const make = useApiMutation((w: number) => api.loraExamples(lora.id, w), [keys.jobs(lora.id, "lora_examples")]);
+  const add = useApiMutation((file: File) => api.addLoraImage(lora.id, file), [keys.loras]);
+  const remove = useApiMutation((name: string) => api.removeLoraImage(lora.id, name), [keys.loras]);
+  const busy = job.data?.status === "queued" || job.data?.status === "running";
+  return (
+    <Dialog open title={`Examples · ${lora.name}`} onClose={onClose} wide>
+      <Stack gap={4}>
+        <Text small muted>
+          A knight, a wolf and a sword on {label(lora.base_model)}, with and without this LoRA. About half a minute
+          per image; the worker runs it between asset stages.
+        </Text>
+        <Row align="top">
+          <Box width={140}>
+            <Field label="Weight">
+              {(id) => <Input id={id} type="number" min={0} max={2} step={0.1} value={weight} onChange={(e) => setWeight(e.target.value)} />}
+            </Field>
+          </Box>
+          <Button variant="primary" busy={make.isPending || busy} disabled={!lora.file_exists}
+                  onClick={() => make.mutate(Number(weight) || 0.8)}>
+            {lora.examples ? "Make new examples" : "Make examples"}
+          </Button>
+        </Row>
+        <JobProgress job={job.data} />
+        <ErrorNotice error={make.error} />
+        <ExampleSheet examples={lora.examples} compare />
+        <SectionTitle>Your images</SectionTitle>
+        <Grid min={140}>
+          {(lora.example_images ?? []).map((path) => (
+            <Stack key={path} gap={1}>
+              <MediaCard image={exampleUrl(path)} title="Your image" />
+              <Button size="sm" variant="ghost" onClick={() => remove.mutate(path.split("/").pop()!)}>Remove</Button>
+            </Stack>
+          ))}
+        </Grid>
+        <Field label="Add an image" hint="PNG, JPEG or WebP: something you made with this LoRA, or its page's samples.">
+          {(id) => (
+            <Input id={id} type="file" accept="image/png,image/jpeg,image/webp"
+                   onChange={(e) => e.target.files?.[0] && add.mutate(e.target.files[0])} />
+          )}
+        </Field>
+        <ErrorNotice error={add.error ?? remove.error} />
+      </Stack>
+    </Dialog>
+  );
+}
 
 function LoraDialog({ lora, onClose }: { lora: Lora | null; onClose: () => void }) {
   const meta = useMeta();
@@ -119,6 +178,7 @@ function LoraDialog({ lora, onClose }: { lora: Lora | null; onClose: () => void 
 export function LorasPage() {
   const loras = useLoras();
   const [editing, setEditing] = useState<Lora | "new" | null>(null);
+  const [showing, setShowing] = useState<Lora | null>(null);
   const [deleting, setDeleting] = useState<Lora | null>(null);
   const remove = useApiMutation((id: string) => api.deleteLora(id), [keys.loras, keys.profiles]);
 
@@ -139,9 +199,16 @@ export function LorasPage() {
           action={<Button variant="primary" onClick={() => setEditing("new")}>Add LoRA</Button>}
         />
       ) : (
-        <Table head={["Name", "Base model", "Tags", "Licence", "File", ""]}>
+        <Table head={["", "Name", "Base model", "Tags", "Licence", "File", ""]}>
           {loras.data.map((l) => (
             <TableRow key={l.id}>
+              <td style={{ width: 72 }}>
+                {loraPicture(l) ? (
+                  <MediaCard image={exampleUrl(loraPicture(l)!)} title="" onClick={() => setShowing(l)} />
+                ) : (
+                  <Button size="sm" variant="ghost" onClick={() => setShowing(l)}>No examples</Button>
+                )}
+              </td>
               <td>
                 <Stack gap={1}>
                   <Text strong>{l.name}</Text>
@@ -166,6 +233,7 @@ export function LorasPage() {
               </td>
               <td>
                 <Row justify="end">
+                  <Button size="sm" onClick={() => setShowing(l)}>Examples</Button>
                   <Button size="sm" onClick={() => setEditing(l)}>Edit</Button>
                   <Button size="sm" variant="danger" onClick={() => { remove.reset(); setDeleting(l); }}>Delete</Button>
                 </Row>
@@ -175,6 +243,9 @@ export function LorasPage() {
         </Table>
       )}
       {editing && <LoraDialog lora={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
+      {showing && (
+        <ExamplesDialog lora={loras.data?.find((l) => l.id === showing.id) ?? showing} onClose={() => setShowing(null)} />
+      )}
       <ConfirmDialog
         open={!!deleting}
         title={`Delete ${deleting?.name}?`}
