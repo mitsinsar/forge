@@ -16,8 +16,11 @@ Steps:
 2. Skin LOD0 to it: UniRig's weights (from its merged GLB, its bones renamed to the matched
    template joints, copied vertex by vertex from the nearest UniRig vertex; weight on bones more
    than two steps in the tree from the vertex's nearest bone is dropped, since UniRig bleeds
-   weight between limbs that touch) when given; else Blender's automatic weights; vertices
-   either leaves unweighted go to their nearest bone.
+   weight between limbs that touch; without a predicted neck or head, the head's spine weight
+   moves to the template's head bone) when given; else Blender's automatic weights; vertices
+   either leaves unweighted go to their nearest bone. Then the mesh is cut where faces that
+   follow far-apart bones meet (hands fused to the thighs), so those parts separate when they
+   move instead of stretching.
 3. For every clip: import the clip's armature at the same scale and place, copy each bone's
    world rotation onto the template bone (Copy Rotation, world space), bake that into a new
    action named after the clip, then move the hips by the clip's travel from its rest. World
@@ -38,6 +41,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import bmesh  # noqa: E402
 import bpy  # noqa: E402
 from mathutils import Matrix, Vector  # noqa: E402
 from mathutils.kdtree import KDTree  # noqa: E402
@@ -265,12 +269,39 @@ def nearest_bone(point, segments) -> str:
     return best
 
 
+def head_weights(mesh, arm, used: set[str]) -> int:
+    """When UniRig found no neck or head bone, its upper-spine bone carries the head and the head
+    can't follow the clips' head motion. Moves the spine weight of vertices above the middle of
+    the template's neck to its head bone. Returns how many vertices moved."""
+    neck, head = arm.data.bones.get("neck_01"), arm.data.bones.get("Head")
+    if neck is None or head is None or used & {"neck_01", "Head"}:
+        return 0
+    cut_z = (neck.head_local.z + head.head_local.z) / 2
+    spine = {b.name for b in neck.parent_recursive}
+    groups = {g.index: g.name for g in mesh.vertex_groups}
+    target = mesh.vertex_groups.get("Head") or mesh.vertex_groups.new(name="Head")
+    moved = 0
+    for vertex in mesh.data.vertices:
+        if vertex.co.z < cut_z:
+            continue
+        share = 0.0
+        for g in list(vertex.groups):
+            if groups.get(g.group) in spine and g.weight > 0:
+                share += g.weight
+                mesh.vertex_groups[g.group].remove([vertex.index])
+        if share > 0:
+            target.add([vertex.index], share, "ADD")
+            moved += 1
+    return moved
+
+
 def skin(mesh, arm, unirig_glb: str | None, mapping: dict | None) -> tuple[str, int, int]:
     method = "unirig"
     dropped = 0
     if unirig_glb and mapping:
         try:
             dropped = unirig_weights(mesh, arm, unirig_glb, mapping)
+            head_weights(mesh, arm, set(mapping.values()))
         except Exception as exc:  # noqa: BLE001 - fall back to Blender's own weights
             print(f"UniRig weights not used: {exc}", flush=True)
             method = "automatic"
@@ -286,6 +317,74 @@ def skin(mesh, arm, unirig_glb: str | None, mapping: dict | None) -> tuple[str, 
     if missing:
         nearest_bone_weights(mesh, arm, only_unweighted=True)
     return method, missing, dropped
+
+
+def bone_hops(arm) -> dict[str, dict[str, int]]:
+    """Steps between every two bones in the tree."""
+    links: dict[str, set[str]] = {b.name: set() for b in arm.data.bones}
+    for bone in arm.data.bones:
+        if bone.parent:
+            links[bone.name].add(bone.parent.name)
+            links[bone.parent.name].add(bone.name)
+    hops = {}
+    for start in links:
+        seen, frontier, step = {start: 0}, [start], 0
+        while frontier:
+            step += 1
+            frontier = [n for f in frontier for n in links[f] if n not in seen]
+            for n in frontier:
+                seen[n] = step
+        hops[start] = seen
+    return hops
+
+
+def separate_touching_limbs(mesh, arm, far: int = 4) -> int:
+    """Image-to-3D meshes fuse body parts that touch (hands resting on the thighs). Faces that
+    follow bones more than ``far`` steps apart in the tree (a hand and a thigh) are cut apart, and
+    each cut vertex keeps only the weights that fit its side, so the parts separate when they
+    move instead of stretching a sheet of faces between them. Returns the number of cut edges."""
+    hops = bone_hops(arm)
+    names = {g.index: g.name for g in mesh.vertex_groups}
+
+    def apart(a: str, b: str) -> bool:
+        return a in hops and b in hops and hops[a].get(b, 99) > far
+
+    bm = bmesh.new()
+    bm.from_mesh(mesh.data)
+    layer = bm.verts.layers.deform.verify()
+    dominant = {}
+    for face in bm.faces:
+        sums: dict[int, float] = {}
+        for vert in face.verts:
+            for group, weight in vert[layer].items():
+                sums[group] = sums.get(group, 0.0) + weight
+        dominant[face.index] = names.get(max(sums, key=sums.get)) if sums else None
+    cut = [e for e in bm.edges if len(e.link_faces) == 2
+           and dominant[e.link_faces[0].index] and dominant[e.link_faces[1].index]
+           and apart(dominant[e.link_faces[0].index], dominant[e.link_faces[1].index])]
+    if not cut:
+        bm.free()
+        return 0
+    face_bone = {f: dominant[f.index] for f in bm.faces}
+    bmesh.ops.split_edges(bm, edges=cut)
+    for vert in bm.verts:
+        sides = [face_bone.get(f) for f in vert.link_faces if face_bone.get(f)]
+        if not sides:
+            continue
+        weights = vert[layer]
+        keep = {g: w for g, w in weights.items()
+                if names.get(g) and not any(apart(names[g], side) for side in sides)}
+        if not keep:
+            index = mesh.vertex_groups[sides[0]].index if sides[0] in mesh.vertex_groups else None
+            keep = {index: 1.0} if index is not None else dict(weights.items())
+        total = sum(keep.values()) or 1.0
+        weights.clear()
+        for g, w in keep.items():
+            weights[g] = w / total
+    bm.to_mesh(mesh.data)
+    bm.free()
+    mesh.data.update()
+    return len(cut)
 
 
 def rest_rotations(arm) -> dict:
@@ -379,6 +478,7 @@ def main(args: dict) -> dict:
 
     progress(0.1, "Skinning the mesh")
     method, missing, dropped = skin(mesh, arm, args.get("unirig_glb"), args.get("mapping"))
+    cut = separate_touching_limbs(mesh, arm)
 
     clips = []
     for index, clip in enumerate(args["clips"]):
@@ -394,7 +494,7 @@ def main(args: dict) -> dict:
                               export_force_sampling=True, export_skins=True, export_def_bones=False,
                               export_materials="EXPORT")
     progress(1.0, "Animated result ready")
-    return {"clips": clips, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped,
+    return {"clips": clips, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped, "touching_limb_edges_cut": cut,
             "joints_placed": placed}
 
 
