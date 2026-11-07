@@ -119,7 +119,12 @@ def mesh_checks(stats: dict | None, kind: str = "hero") -> list[dict]:
 STANDARD_CLIPS = ("idle", "walk", "run", "attack_1", "attack_2", "hit", "death")
 
 
-def rig_checks(*, skeleton: dict | None, stretch: dict | None, gear: dict | None = None) -> list[dict]:
+FOLLOW_WARN = 12.0  # degrees a leg may lean sideways off the clip (against the first frame) before a warning...
+FOLLOW_FAIL = 20.0  # ...and before a failure (a knee bending sideways drifts about 25)
+
+
+def rig_checks(*, skeleton: dict | None, stretch: dict | None, gear: dict | None = None,
+               clips: list[dict] | None = None) -> list[dict]:
     checks = []
     if skeleton and skeleton.get("unirig_file"):
         fit = float(skeleton.get("fit_score", 0))
@@ -133,12 +138,22 @@ def rig_checks(*, skeleton: dict | None, stretch: dict | None, gear: dict | None
             detail += ": " + ", ".join(p for p in parts if p)
         checks.append(check("fit", "Skeleton fits", FAIL if fit < 0.6 else WARN if fit < 0.9 else PASS, detail))
     if stretch:
-        clips = {c: s for c, s in stretch.items() if c in STANDARD_CLIPS} or stretch
-        bad = sorted(clips, key=clips.get, reverse=True)
-        top = clips[bad[0]] if bad else 0.0
+        shares = {c: s for c, s in stretch.items() if c in STANDARD_CLIPS} or stretch
+        bad = sorted(shares, key=shares.get, reverse=True)
+        top = shares[bad[0]] if bad else 0.0
         status = FAIL if top > 0.12 else WARN if top > 0.06 else PASS
-        detail = ", ".join(f"{c} {round(clips[c] * 100)} %" for c in bad[:3])
+        detail = ", ".join(f"{c} {round(shares[c] * 100)} %" for c in bad[:3])
         checks.append(check("stretch", "Little stretching", status, f"Most stretched: {detail}"))
+    follows = [c for c in (clips or []) if c.get("follow")]
+    if follows:
+        standard = [c for c in follows if c["name"] in STANDARD_CLIPS] or follows
+        bad = sorted(standard, key=lambda c: c["follow"]["degrees"], reverse=True)
+        top = bad[0]["follow"]["degrees"]
+        status = FAIL if top > FOLLOW_FAIL else WARN if top > FOLLOW_WARN else PASS
+        named = ", ".join(f"{c['name']} {c['follow']['bone'].replace('_', ' ')} {round(c['follow']['degrees'])}°"
+                          for c in bad[:3])
+        checks.append(check("follow", "Follows the animation", status,
+                            f"Legs lean sideways off the clip: {named}" if status != PASS else f"Legs within {round(top)}° of the clip"))
     if gear:
         inside = int(gear.get("inside_after", 0))
         checks.append(check("clipping", "Nothing inside the body", WARN if inside > 0 else PASS,

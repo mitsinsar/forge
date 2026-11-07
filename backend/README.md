@@ -149,6 +149,14 @@ it, optionally mirrored to the other side. **Re-rig with these joints** sends th
 rejection (`joints`); they replace UniRig's targets for those joints, also when its fit fell back,
 add up over rejections (`joint_overrides` on the asset) and `{}` goes back to the detected joints.
 
+Each joint also reports its bone's direction (`axis`) and which way it faces (`front`: the side a
+knee cap or the chest is on). The editor draws `front` as a short green line from each joint, and
+**Twist** turns the picked joint about its own bone in 5° steps (mirrored: the other side turns the
+opposite way, so both knees turn out together). Twists are sent as `twists` (degrees by joint),
+kept as `joint_twists` and applied after the joints are placed; `joints: {}` clears them too. The
+viewer's **Front / Left / Back / Right / Top** buttons look straight along an axis, **Flat**
+removes the perspective, and the editor has a wireframe switch.
+
 ### Character height
 
 Characters are scaled to their kind's height in the clean-up (hero 1.8 m, monster 1.5 m, boss
@@ -284,7 +292,10 @@ first with the stages, so the GPU is never shared:
   fitted on another rigged hero, exactly as at gate 3, kept per hero in `fits/<hero>/animated.glb`
   (`asset.fits`, `urls.fits`). The Outfits screen uses them to swap items between heroes; the
   item's own gate and export are untouched. Outfits are saved in the `outfits` table
-  (`/api/outfits`).
+  (`/api/outfits`). `wearer_id: "dummy"` fits on the **test dummy**, the biped base body.
+* `dummy` (started by `GET /api/dummy`): builds the test dummy once, the base body with every biped
+  clip, in `data/dummy/biped/animated.glb` (`GET /api/dummy/animated.glb`). Outfits can use it as
+  the hero (`hero_id: "dummy"`).
 * `lora_examples` (`POST /api/loras/{id}/examples`, optional `weight`, default 0.8) and
   `profile_examples` (`POST /api/profiles/{id}/examples`): the example subjects in `defaults.py`
   (`EXAMPLE_SUBJECTS`: a knight, a wolf and a sword, one seed) rendered with and without the LoRA,
@@ -351,15 +362,22 @@ mesh. The rig stage works like this:
    may take `unirig_timeout` seconds.
 2. It fits the archetype's template skeleton (`archetypes/<id>/skeleton.json`) to the predicted
    one by limb chains: both are scaled into their mesh bounds, short side branches are dropped,
-   limb ends are paired, and the template joints get target positions. `fit_score` is the share
-   of template limbs found, minus 0.25 per long extra limb (wings on a biped). Below 0.6 the fit
-   falls back, and gate 3 warns. The result is `rig/skeleton.json`.
+   limb ends are paired, and the template joints get target positions. Fingers are details: a
+   biped's limb ends are its head, hands and feet; UniRig's finger clusters count as the hand, and
+   a fist's single chain puts the wrist where the template's hand starts. `fit_score` is the share
+   of limbs found, times how close the fitted bones are to the template's proportions and how alike
+   the left and right bone lengths are, minus 0.25 per long extra limb (wings on a biped). Below
+   0.6 the fit falls back; the gate 3 check passes from 0.9. The result is `rig/skeleton.json`.
 3. `blender_scripts/rig_animate.py` scales the template to the mesh, moves its joints to the
    targets, and skins the mesh: UniRig's weights mapped to the template joints, or (on a fallback)
    Blender's automatic weights, then a voxel-proxy weight transfer, then the nearest bone for
    anything left. The template skeleton is always the final rig, so every clip fits it.
-4. Each clip in `archetypes/<id>/clips/` is retargeted with world-space Copy Transforms and baked;
-   the GLB has one named animation per clip.
+4. Each clip in `archetypes/<id>/clips/` is retargeted and baked: every bone turns against its
+   parent as the clip's bone does, in a frame lined up with the clip bone's (any twist about the
+   bone that fitting left is taken out, so knees and elbows bend in the clip's plane; the user's
+   own twists stay). The GLB has one named animation per clip. Gate 3's **Follows the animation**
+   check compares how far each leg leans sideways with the clip's, against the first frame
+   (warning above 12°, failure above 20°).
 
 Gear and weapons skip UniRig: they are fitted on the base body (see "Gear and weapons" below). On the RTX 5090 machine UniRig is installed at `C:\tools\UniRig`
 (commit `6793c66`) with its own Python 3.11 environment, the paths `unirig_path` and

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import re
 import shutil
 import uuid
@@ -20,7 +21,7 @@ from .db import Database, new_id, now
 from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, GEAR_SLOTS, KINDS,
                        SPRITE_LOOKS, STAGES, WEAPON_ATTACKS, WEAPON_CLASSES, deep_merge, profile_defaults)
 from .exporters import safe_name
-from .pipeline import Conflict, Invalid, Pipeline
+from .pipeline import DUMMY, Conflict, Invalid, Pipeline
 from . import delivery, storage, watchdog
 from .tools import check_tools
 from .schemas import (AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
@@ -537,8 +538,10 @@ def reject_gate(request: Request, asset_id: str, gate: int, body: Reject | None 
     grip = body.grip.model_dump(exclude_none=True) if body.grip else None
     if body.joints and any(len(p) != 3 for p in body.joints.values()):
         raise HTTPException(422, "each joint needs three coordinates")
+    if body.twists and any(abs(v) > 180 for v in body.twists.values()):
+        raise HTTPException(422, "a twist is between -180 and 180 degrees")
     asset = _run(lambda: pipeline.reject(asset_id, gate, body.note, body.archetype, grip, body.joints,
-                                         height=body.height, wearer=body.wearer))
+                                         height=body.height, wearer=body.wearer, twists=body.twists))
     return asset_view(request, asset)
 
 
@@ -610,6 +613,27 @@ def read_asset_file(request: Request, asset_id: str, path: str,
 
 # ---- item fits, side jobs and examples --------------------------------------
 
+@router.get("/dummy", tags=["assets"],
+            summary="The test dummy (the biped base body with every clip): ready, or the job building it")
+def read_dummy(request: Request):
+    pipeline = pipeline_of(request)
+    glb = pipeline.dummy_glb()
+    clips_file = glb.parent / "clips.json"
+    if glb.is_file() and clips_file.is_file():
+        return {"id": DUMMY, "name": "Test dummy", "height": 1.8, "ready": True,
+                "url": str(request.url_for("read_dummy_glb")) + f"?v={int(glb.stat().st_mtime)}",
+                "clips": json.loads(clips_file.read_text(encoding="utf-8"))}
+    return {"id": DUMMY, "name": "Test dummy", "height": 1.8, "ready": False, "job": pipeline.queue_job("dummy", DUMMY)}
+
+
+@router.get("/dummy/animated.glb", tags=["assets"], summary="The test dummy's animated GLB")
+def read_dummy_glb(request: Request):
+    glb = pipeline_of(request).dummy_glb()
+    if not glb.is_file():
+        raise HTTPException(404, "the test dummy is not built yet: GET /api/dummy builds it")
+    return delivery.send(request, glb, "model/gltf-binary")
+
+
 @router.post("/assets/{asset_id}/fits", tags=["assets"], status_code=202,
              summary="Fit finished gear or a weapon on a rigged hero (queued job; kept per hero)")
 def fit_item(request: Request, asset_id: str, body: FitRequest):
@@ -619,8 +643,8 @@ def fit_item(request: Request, asset_id: str, body: FitRequest):
         raise HTTPException(422, "only gear and weapons are fitted on a hero")
     if not (item.get("outputs") or {}).get("mesh"):
         raise HTTPException(409, "the item has no mesh yet: approve its gate 2 first")
-    if body.wearer_id not in {w["id"] for w in pipeline.wearers(item["project_id"])}:
-        raise HTTPException(422, "the wearer must be a rigged biped hero of the same project")
+    if body.wearer_id != DUMMY and body.wearer_id not in {w["id"] for w in pipeline.wearers(item["project_id"])}:
+        raise HTTPException(422, "the wearer must be a rigged biped hero of the same project, or the test dummy")
     return pipeline.queue_job("fit", asset_id, {"wearer_id": body.wearer_id})
 
 
@@ -698,7 +722,7 @@ def read_example(request: Request, path: str):
 # ---- outfits ----------------------------------------------------------------
 
 def _check_outfit(pipeline, project_id: str, hero_id: str | None, items: list[str] | None) -> None:
-    if hero_id is not None:
+    if hero_id is not None and hero_id != DUMMY:
         hero = _found(pipeline.db.get("assets", hero_id), "hero")
         if hero["project_id"] != project_id or hero["kind"] != "hero":
             raise HTTPException(422, "the hero must be a hero of the outfit's project")

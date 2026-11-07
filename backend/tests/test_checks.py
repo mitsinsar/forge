@@ -149,3 +149,14 @@ def test_storage_report_and_clean(client, settings, tmp_path):
     cleaned = client.post("/api/storage/clean", json={"categories": ["orphans"]}).json()
     assert cleaned["freed_bytes"] == 5000 and not orphan.exists()
     assert client.post("/api/tools/mesh/restart").status_code == 422  # no restart command set
+
+
+def test_follows_the_animation():
+    def clip(name, bone, degrees):
+        return {"name": name, "follow": {"bone": bone, "degrees": degrees}}
+
+    good = qc.rig_checks(skeleton=None, stretch=None, clips=[clip("walk", "calf_l", 6.0), clip("idle", "hand_r", 2.0)])
+    assert good[0]["id"] == "follow" and good[0]["status"] == qc.PASS
+    bad = qc.rig_checks(skeleton=None, stretch=None, clips=[clip("walk", "calf_r", 24.0), clip("run", "foot_l", 13.0)])
+    assert bad[0]["status"] == qc.FAIL and bad[0]["detail"].startswith("Legs lean sideways off the clip: walk calf r 24°")
+    assert qc.rig_checks(skeleton=None, stretch=None, clips=[{"name": "walk", "follow": None}]) == []

@@ -38,6 +38,7 @@ rest head in the mesh's space, Blender axes, and its parent: what gate 3's joint
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -45,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bmesh  # noqa: E402
 import bpy  # noqa: E402
-from mathutils import Matrix, Vector  # noqa: E402
+from mathutils import Matrix, Quaternion, Vector  # noqa: E402
 from mathutils.kdtree import KDTree  # noqa: E402
 
 from _common import empty_scene, import_gltf, progress, run, select_only  # noqa: E402
@@ -106,11 +107,24 @@ def fit_template(arm, mesh, template: dict, axis: str) -> tuple[float, Vector]:
     return scale, offset
 
 
-def pose_to_targets(arm, targets: dict) -> int:
+def facing_signs(arm) -> dict:
+    """For each bone, which way along its Z axis is the character's front (-Y) on the template:
+    spine and arm bones point Z forward, leg bones backward. Measured before fitting, so the
+    facing reported after it means the same on every asset."""
+    signs = {}
+    for bone in arm.data.bones:
+        z = (arm.matrix_world.to_3x3() @ bone.matrix_local.to_3x3()).col[2]
+        signs[bone.name] = -1.0 if z.y > 0 else 1.0
+    return signs
+
+
+def pose_to_targets(arm, targets: dict, twists: dict | None = None) -> int:
     """Moves the template's joints onto the asset: each targeted bone's head goes to its target
-    and the bone turns towards its child's target (lengths kept); the result becomes the rest
-    pose. Returns how many bones were placed."""
-    if not targets:
+    and the bone turns towards its child's target (lengths kept); then a twisted bone turns about
+    its own length by its twist (degrees: which way a knee or elbow faces). The result becomes
+    the rest pose. Returns how many bones were placed."""
+    twists = twists or {}
+    if not targets and not twists:
         return 0
     select_only([arm])
     bpy.ops.object.mode_set(mode="POSE")
@@ -124,19 +138,24 @@ def pose_to_targets(arm, targets: dict) -> int:
             pose_bone.matrix = matrix
             bpy.context.view_layer.update()
             placed += 1
-        if not pose_bone.children:
-            continue
-        tail = pose_bone.tail.copy()
-        child = min(pose_bone.children, key=lambda c: (c.head - tail).length)  # the one the bone points at
-        if child.name not in targets:
-            continue  # turning towards a side branch (a clavicle) would swing the main one (the neck)
-        head = pose_bone.head.copy()
-        current, wanted = child.head - head, Vector(targets[child.name]) - head
-        if current.length < 1e-6 or wanted.length < 1e-6:
-            continue
-        turn = current.rotation_difference(wanted).to_matrix().to_4x4()
-        pose_bone.matrix = Matrix.Translation(head) @ turn @ Matrix.Translation(-head) @ pose_bone.matrix
-        bpy.context.view_layer.update()
+        child = None
+        if pose_bone.children:
+            tail = pose_bone.tail.copy()
+            child = min(pose_bone.children, key=lambda c: (c.head - tail).length)  # the one the bone points at
+        # Turning towards a side branch (a clavicle) would swing the main one (the neck): only
+        # towards the child the bone points at, and only when that child has a target.
+        if child is not None and child.name in targets:
+            head = pose_bone.head.copy()
+            current, wanted = child.head - head, Vector(targets[child.name]) - head
+            if current.length > 1e-6 and wanted.length > 1e-6:
+                turn = current.rotation_difference(wanted).to_matrix().to_4x4()
+                pose_bone.matrix = Matrix.Translation(head) @ turn @ Matrix.Translation(-head) @ pose_bone.matrix
+                bpy.context.view_layer.update()
+        if abs(twists.get(name, 0.0)) > 1e-3:  # about the bone's own axis: children's heads stay put
+            head, axis = pose_bone.head.copy(), (pose_bone.tail - pose_bone.head).normalized()
+            spin = Matrix.Rotation(math.radians(twists[name]), 4, axis)
+            pose_bone.matrix = Matrix.Translation(head) @ spin @ Matrix.Translation(-head) @ pose_bone.matrix
+            bpy.context.view_layer.update()
     bpy.ops.pose.armature_apply(selected=False)
     bpy.ops.object.mode_set(mode="OBJECT")
     return placed
@@ -445,8 +464,31 @@ def clip_first_pose(clip_file: str, scale: float, offset: Vector) -> dict:
     return pose
 
 
+
+
+def frame_twist(reference, fitted):
+    """The part of the turn from the clip bone's reference frame to the fitted bone's that is about
+    the bone itself (a quaternion about local Y). Retargeting copies each bone's turn in a frame,
+    so a frame twisted this way turns the hinge: a knee bends sideways, an arm swings across. It
+    comes from fitting (a moved shoulder carries the arm round) and is taken out; where the bone
+    points is the asset's own stance and stays."""
+    q = reference.inverted() @ fitted
+    twist = Quaternion((q.w, 0.0, q.y, 0.0))
+    return twist.normalized() if twist.magnitude > 1e-6 else Quaternion()
+
+
+SIDEWAYS_BONES = ("thigh_l", "thigh_r", "calf_l", "calf_r", "foot_l", "foot_r")
+X_AXIS = Vector((1.0, 0.0, 0.0))
+
+
+def sideways(direction, pelvis) -> float:
+    """Degrees ``direction`` leans to the side of the hips (along the pelvis bone's X axis)."""
+    right = (pelvis @ X_AXIS).normalized()
+    return math.degrees(math.asin(max(-1.0, min(1.0, direction.normalized().dot(right)))))
+
+
 def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fitted: dict,
-             natural: dict | None = None) -> dict:
+             natural: dict | None = None, intended: set | None = None) -> dict:
     """Bakes ``clip`` onto ``arm``. Each bone turns against its parent as the clip's bone turns
     against its parent away from the template's reference pose (``reference``: bone directions
     before fitting; the clip's rest differs by the template's A-pose, and its bone axes by how
@@ -484,6 +526,14 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fit
             idle_dir = rotation @ Vector((0.0, 1.0, 0.0))
             src_ref[n] = reference[n].rotation_difference(idle_dir) @ src_ref[n]
     src_parent = {n: (source.data.bones[n].parent.name if source.data.bones[n].parent else None) for n in driven}
+    # Frames lined up with the clip's (the user's own twists are meant and kept).
+    untwist = {n: frame_twist(src_ref[n], fitted[n]) for n in driven
+               if n in fitted and n not in (intended or set())}
+    # "Follows the animation": how far each leg leans sideways differently from the clip's, against
+    # the first frame (a wider stance is the asset's own), in the hips' frame.
+    legs = [n for n in SIDEWAYS_BONES if n in driven and n not in (intended or set())]
+    lean_start: dict[str, float] = {}
+    lean_worst: dict[str, float] = {}
     baked = bpy.data.actions.new(clip["name"])
     baked.use_fake_user = True  # kept for the export, which writes every saved action
     arm.animation_data_create()
@@ -513,6 +563,9 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fit
                 else:
                     turn = src_ref[name].inverted() @ src_pose[name]
                 # ... applied to the fitted bone against its own (posed) parent.
+                if name in untwist:  # the turn in the frame lined up with the clip bone's
+                    twist = untwist[name]
+                    turn = twist.inverted() @ turn @ twist
                 if parent:
                     above = posed[parent].to_3x3().normalized().to_quaternion()
                     rotation = above @ (fitted[parent].inverted() @ fitted[name]) @ turn
@@ -527,6 +580,14 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fit
             pose_bone.matrix_basis = (to_arm @ base).inverted() @ (to_arm @ wanted)
             pose_bone.keyframe_insert("rotation_quaternion", frame=frame)
             pose_bone.keyframe_insert("location", frame=frame)
+        if "pelvis" in posed and "pelvis" in src_pose:
+            mine_pelvis, their_pelvis = posed["pelvis"].to_3x3().normalized(), src_pose["pelvis"].to_matrix()
+            for name in legs:
+                if name in posed:
+                    lean = (sideways(posed[name].to_3x3().normalized().col[1], mine_pelvis)
+                            - sideways(src_pose[name].to_matrix().col[1], their_pelvis))
+                    lean_start.setdefault(name, lean)
+                    lean_worst[name] = max(lean_worst.get(name, 0.0), abs(lean - lean_start[name]))
     arm.animation_data.action = None
 
     for name in imported:
@@ -539,7 +600,9 @@ def retarget(arm, clip: dict, scale: float, offset: Vector, reference: dict, fit
     baked.name = clip["name"]
     for pose_bone in arm.pose.bones:
         pose_bone.matrix_basis.identity()
-    return {"name": clip["name"], "duration": round((end - start) / FPS, 4), "loop": bool(clip.get("loop"))}
+    worst = max(lean_worst, key=lean_worst.get) if lean_worst else None
+    return {"name": clip["name"], "duration": round((end - start) / FPS, 4), "loop": bool(clip.get("loop")),
+            "follow": {"bone": worst, "degrees": round(lean_worst[worst], 1)} if worst else None}
 
 
 def clip_stretch(mesh, arm, clips: list[dict], samples: int = 5) -> dict[str, float]:
@@ -594,7 +657,8 @@ def main(args: dict) -> dict:
     template = json.loads(Path(args["template_json"]).read_text(encoding="utf-8"))
     scale, offset = fit_template(arm, mesh, template, args.get("fit_axis", "longest"))
     reference = rest_directions(arm)  # the pose the clips' rotations are measured from
-    placed = pose_to_targets(arm, args.get("targets") or {})
+    signs = facing_signs(arm)
+    placed = pose_to_targets(arm, args.get("targets") or {}, args.get("twists") or {})
     fitted = rest_rotations(arm)
 
     progress(0.1, "Skinning the mesh")
@@ -607,7 +671,8 @@ def main(args: dict) -> dict:
     clips = []
     for index, clip in enumerate(args["clips"]):
         progress(0.2 + 0.7 * index / max(len(args["clips"]), 1), f"Retargeting {clip['name']}")
-        clips.append(retarget(arm, clip, scale, offset, reference, fitted, natural))
+        clips.append(retarget(arm, clip, scale, offset, reference, fitted, natural,
+                              intended=set(args.get("twists") or {})))
 
     progress(0.9, "Measuring stretch per clip")
     stretch = clip_stretch(mesh, arm, clips)
@@ -624,8 +689,15 @@ def main(args: dict) -> dict:
     mesh.name = mesh.data.name = "mesh"
     bpy.ops.wm.save_as_mainfile(filepath=str(out.with_name("rigged.blend")), compress=True, copy=True)
     progress(1.0, "Animated result ready")
+    def axis(bone, column: int, sign: float = 1.0) -> list[float]:
+        vector = (arm.matrix_world.to_3x3() @ bone.matrix_local.to_3x3()).col[column].normalized() * sign
+        return [round(v, 4) for v in vector]
+
+    # Each joint's place, its bone's direction (``axis``) and which way it faces (``front``: the
+    # side a knee cap or a chest is on), all in Blender axes, for the joint editor.
     joints = {b.name: {"head": [round(v, 5) for v in arm.matrix_world @ b.head_local],
-                       "parent": b.parent.name if b.parent else None}
+                       "parent": b.parent.name if b.parent else None,
+                       "axis": axis(b, 1), "front": axis(b, 2, signs.get(b.name, 1.0))}
               for b in arm.data.bones if b.use_deform}
     return {"clips": clips, "joints": joints, "stretch": stretch, "scale": round(scale, 4), "skinning": method, "unweighted_before_fix": missing, "cross_limb_weights_dropped": dropped, "touching_limb_edges_cut": cut, "idle_reference_bones": sorted(natural),
             "joints_placed": placed}

@@ -97,7 +97,8 @@ class BlenderTools:
                 raise BlenderError(f"{body} is missing; rebuild the biped template with "
                                    "blender_scripts/build_archetypes.py.")
             result = self._run("rig_animate.py", {
-                "mesh_glb": str(Path(mesh_glb).resolve()), "base_body_blend": str(body.resolve()),
+                "mesh_glb": str(Path(mesh_glb).resolve()) if mesh_glb else None,
+                "base_body_blend": str(body.resolve()),
                 "template_object": f"{archetype['id']}_template", "clips": clip_args,
                 "attach": {k: v for k, v in attach.items() if k != "wearer"},
                 "wearer_blend": attach["wearer"]["blend"] if attach.get("wearer") else None,
@@ -118,6 +119,7 @@ class BlenderTools:
             "unirig_glb": skeleton.get("unirig_file") if use_unirig else None,
             "mapping": skeleton.get("mapping") if use_unirig else None,
             "targets": targets or None,
+            "twists": skeleton.get("twists") or None,
             "out_glb": str(out_path.resolve())}, out_path.parent, progress)
         return {"glb": out_path, "clips": result["clips"], "skinning": result["skinning"],
                 "joints": result.get("joints"), "stretch": result.get("stretch")}

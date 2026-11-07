@@ -259,7 +259,7 @@ class FakeBlender(FakeBase):
 
     def rig_and_animate(self, *, mesh_glb, skeleton, archetype, clips, attach, out_path, progress):
         self.last_attach = attach
-        info = read_glb_json(mesh_glb).get("extras") or {}
+        info = (read_glb_json(mesh_glb).get("extras") or {}) if mesh_glb else {}  # None: the test dummy
         if "parts" not in info:  # a real mesh: the fake rig animates a placeholder body of the archetype
             info = {**info, "parts": _parts_info(asset_parts("hero", archetype["id"])),
                     "color": info.get("color", (0.7, 0.7, 0.7))}

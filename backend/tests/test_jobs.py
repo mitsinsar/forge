@@ -103,3 +103,23 @@ def test_outfits_are_saved_and_checked(client, tmp_path):
     assert changed["items"] == [] and changed["name"] == "Night watch"
     assert [o["name"] for o in client.get(f"/api/outfits?project_id={project['id']}").json()] == ["Night watch"]
     assert client.delete(f"/api/outfits/{outfit.json()['id']}").status_code == 204
+
+
+def test_the_test_dummy_is_built_once_and_dressed_like_a_hero(client, settings, tmp_path):
+    project = make_project(client, "unity", tmp_path / "g")
+    first = client.get("/api/dummy").json()
+    assert first["ready"] is False and first["job"]["kind"] == "dummy"
+    assert wait_job(client, first["job"]["id"])["status"] == "done"
+    dummy = client.get("/api/dummy").json()
+    assert dummy["ready"] and dummy["name"] == "Test dummy" and "walk" in [c["name"] for c in dummy["clips"]]
+    assert client.get(dummy["url"]).status_code == 200
+
+    helm = _to_gate3(client, _asset(client, project, kind="gear", slot="head", description="a helm")["id"])
+    job = client.post(f"/api/assets/{helm['id']}/fits", json={"wearer_id": "dummy"})
+    assert job.status_code == 202, job.text
+    assert wait_job(client, job.json()["id"])["status"] == "done"
+    item = client.get(f"/api/assets/{helm['id']}").json()
+    assert item["fits"]["dummy"]["wearer"]["name"] == "Test dummy"
+    outfit = client.post("/api/outfits", json={"project_id": project["id"], "name": "Trial", "hero_id": "dummy",
+                                               "items": [helm["id"]]})
+    assert outfit.status_code == 201, outfit.text

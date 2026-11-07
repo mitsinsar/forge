@@ -1,5 +1,5 @@
-// Outfits: a hero with gear and a weapon, previewed together in 3D. Picking an item fits it on the
-// hero (a worker job, kept per hero), so items can be swapped between heroes freely.
+// Outfits: a hero (or the test dummy) with gear and a weapon, previewed together in 3D. Picking an
+// item fits it on the hero (a worker job, kept per hero), so items can be swapped between heroes freely.
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,12 +13,10 @@ import {
   Box,
   Button,
   Card,
-  EmptyState,
   ErrorNotice,
   Field,
   Grid,
   Input,
-  LinkButton,
   Loading,
   MediaCard,
   PageHeader,
@@ -32,9 +30,13 @@ import {
 
 const thumb = (asset: Asset) => localUrl(asset.urls?.thumb ?? null) ?? null;
 
-/** The item's GLB fitted on this hero: its own gate 3 result when it was fitted there, else a kept fit. */
+const DUMMY = "dummy";
+
+/** The item's GLB fitted on this hero: its own gate 3 result when it was fitted there (on the base
+ *  body, for the dummy), else a kept fit. */
 function fittedUrl(item: Asset, heroId: string): string | null {
-  if (item.outputs.rig?.wearer?.id === heroId) return localUrl(item.urls?.animated ?? null) ?? null;
+  const own = item.outputs.rig ? (item.outputs.rig.wearer?.id ?? DUMMY) : null;
+  if (own === heroId) return localUrl(item.urls?.animated ?? null) ?? null;
   return localUrl(item.urls?.fits?.[heroId] ?? null) ?? null;
 }
 
@@ -51,6 +53,12 @@ export function OutfitsPage() {
     enabled: !!projectId,
   });
   const outfits = useQuery({ queryKey: keys.outfits(projectId), queryFn: () => api.outfits(projectId), enabled: !!projectId });
+  // Built once, the first time it is asked for (a short worker job).
+  const dummy = useQuery({
+    queryKey: ["dummy"],
+    queryFn: api.dummy,
+    refetchInterval: (query) => (query.state.data && !query.state.data.ready ? 1500 : false),
+  });
   const fitJobs = useQuery({
     queryKey: ["jobs", "fit", projectId],
     queryFn: () => api.jobs({ kind: "fit" }),
@@ -64,8 +72,18 @@ export function OutfitsPage() {
   const [name, setName] = useState("");
   const [outfitId, setOutfitId] = useState<string | null>(null);
 
-  const heroes = wearers.data ?? [];
-  const hero = assets.data?.find((a) => a.id === (heroId || heroes[0]?.id));
+  const heroes = [{ id: DUMMY, name: "Test dummy", height: 1.8 }, ...(wearers.data ?? [])];
+  const selectedId = heroId || wearers.data?.[0]?.id || DUMMY;
+  const heroAsset = assets.data?.find((a) => a.id === selectedId);
+  // What the viewer shows: a rigged hero, or the dummy.
+  const hero =
+    selectedId === DUMMY
+      ? { id: DUMMY, name: "Test dummy", url: dummy.data?.url ?? null, clips: dummy.data?.clips ?? [] }
+      : heroAsset
+        ? { id: heroAsset.id, name: heroAsset.name, url: localUrl(heroAsset.urls?.animated ?? null) ?? null,
+            clips: heroAsset.outputs.rig?.clips ?? [] }
+        : undefined;
+  const heroName = (id: string) => (id === DUMMY ? "Test dummy" : assets.data?.find((a) => a.id === id)?.name ?? "?");
   useEffect(() => setHeroId(""), [projectId]);
 
   const items = useMemo(
@@ -136,7 +154,7 @@ export function OutfitsPage() {
     <Stack gap={4}>
       <PageHeader
         title="Outfits"
-        subtitle="Dress a hero in gear and a weapon and see them together. Items are fitted on each hero you try them on."
+        subtitle="Dress a hero, or the test dummy, in gear and a weapon and see them together. Items are fitted on each hero you try them on."
       />
       <Row gap={3}>
         <Box minWidth={220}>
@@ -149,22 +167,21 @@ export function OutfitsPage() {
         </Box>
       </Row>
 
-      {!heroes.length ? (
-        <EmptyState
-          title="No rigged heroes in this project"
-          body="Outfits need a biped hero that has been through gate 3. Heroes rigged before outfits existed need a re-rig."
-          action={<LinkButton to="/new" variant="primary">New asset</LinkButton>}
-        />
-      ) : (
-        <Grid cols={2}>
+      <Grid cols={2}>
           <Stack gap={4}>
             <Card title={hero?.name ?? "Hero"} subtitle={`${worn.length} item${worn.length === 1 ? "" : "s"} worn`}>
               <Stack gap={3}>
-                {hero?.outputs.rig && (
+                {!!hero?.clips.length && (
                   <Tabs label="Clip" value={clip} onChange={setClip}
-                        items={hero.outputs.rig.clips.map((c) => ({ value: c.name, label: label(c.name) }))} />
+                        items={hero.clips.map((c) => ({ value: c.name, label: label(c.name) }))} />
                 )}
-                {hero?.urls?.animated && <ModelViewer url={localUrl(hero.urls.animated)!} clip={clip} extras={extras} />}
+                {hero?.url && <ModelViewer url={hero.url} clip={clip} extras={extras} />}
+                {hero?.id === DUMMY && !dummy.data?.ready && (
+                  <Text small muted>
+                    Building the test dummy{dummy.data?.job ? ` · ${dummy.data.job.step}` : ""}… it takes about a minute, once.
+                  </Text>
+                )}
+                <ErrorNotice error={dummy.error} />
                 {fitting.length > 0 && (
                   <Text small muted>Fitting {fitting.map((i) => i.name).join(", ")} on {hero?.name}… it appears when it is ready.</Text>
                 )}
@@ -198,7 +215,7 @@ export function OutfitsPage() {
                         <Row gap={2}>
                           <Text strong>{o.name}</Text>
                           <Text small faint>
-                            {assets.data?.find((a) => a.id === o.hero_id)?.name ?? "?"} · {o.items.length} items
+                            {heroName(o.hero_id)} · {o.items.length} items
                           </Text>
                         </Row>
                         <Row gap={1}>
@@ -219,8 +236,8 @@ export function OutfitsPage() {
                 {heroes.map((h) => {
                   const asset = assets.data?.find((a) => a.id === h.id);
                   return (
-                    <MediaCard key={h.id} image={asset ? thumb(asset) : null} title={h.name}
-                               subtitle={h.height ? `${h.height} m` : undefined}
+                    <MediaCard key={h.id} image={asset ? thumb(asset) : null} empty="Dummy" title={h.name}
+                               subtitle={h.id === DUMMY ? "Base mannequin · 1.8 m" : h.height ? `${h.height} m` : undefined}
                                selected={hero?.id === h.id} onClick={() => setHeroId(h.id)} />
                   );
                 })}
@@ -252,10 +269,9 @@ export function OutfitsPage() {
                 )}
               </Card>
             ))}
-            <SectionTitle>Items are fitted on the base body at their own gate 3; here they are fitted on the hero you pick.</SectionTitle>
+            <SectionTitle>Items are fitted on the base body (the test dummy) at their own gate 3; here they are fitted on the hero you pick.</SectionTitle>
           </Stack>
-        </Grid>
-      )}
+      </Grid>
     </Stack>
   );
 }
