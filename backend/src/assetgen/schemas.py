@@ -13,7 +13,7 @@ Kind = Literal["hero", "monster", "boss", "gear", "weapon"]
 BaseModelName = Literal["qwen-image", "sdxl", "flux"]
 CameraPreset = Literal["side", "three_quarter", "topdown_4", "topdown_8"]
 Slot = Literal["head", "chest", "legs", "hands", "feet", "cape"]
-WeaponClass = Literal["one_handed", "two_handed", "bow", "staff"]
+WeaponClass = Literal["one_handed", "two_handed", "bow", "staff", "shield"]
 
 
 class Strict(BaseModel):

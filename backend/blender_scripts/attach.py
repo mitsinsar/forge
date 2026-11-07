@@ -28,6 +28,10 @@ bone so the grip frame sits on the bone's frame (+Y out of the fist on the thumb
 the fingers). A grip given at gate 3 (``grip_matrix``) replaces the detected one. Two-handed
 weapons also get a second grip, 12 cm towards the blade, for ``weapon_l``.
 
+**Shields** (``shield_grip``): held on ``weapon_l`` by the middle of the back. The face is the
+shield's thinnest direction (its front is the side that bulges out, the boss), its height the
+longest; at rest it stands upright beside the hand with the face turned outward.
+
 **Wearer**: with ``wearer_blend`` the item is fitted on that character instead of the base body:
 its skinned mesh and armature are loaded from the scene its rig stage kept, its slot regions are
 worked out the same way (each vertex's strongest bone), and its own baked clips are played, so
@@ -429,6 +433,41 @@ def detect_grip(item, weapon_class: str) -> tuple[Matrix, dict]:
                    "thickness_ends": [round(start_mean, 4), round(end_mean, 4)]}
 
 
+def shield_grip(item, arm, socket: str) -> tuple[Matrix, dict]:
+    """The grip frame of a shield: the middle of its back, where the hand holds the strap. Chosen
+    so the shield stands upright at rest on the socket's side, its face turned outward."""
+    points = dense_points(item)
+    centre = sum(points, Vector()) / len(points)
+    spread = [[sum((p[i] - centre[i]) * (p[j] - centre[j]) for p in points) / len(points) for j in range(3)]
+              for i in range(3)]
+    import numpy as np  # noqa: PLC0415 - Blender ships numpy
+
+    values, vectors = np.linalg.eigh(np.array(spread))
+    normal = Vector(vectors[:, 0]).normalized()  # the thinnest direction: through the face
+    height = Vector(vectors[:, 2]).normalized()  # the longest: top to bottom
+    ts = [(p - centre).dot(normal) for p in points]
+    if abs(max(ts)) < abs(min(ts)):  # the front bulges further out than the back
+        normal = -normal
+    thickness = max(ts) - min(ts)
+    if height.z < 0:
+        height = -height
+    back = centre + normal * min((p - centre).dot(normal) for p in points)
+    across = height.cross(normal).normalized()
+    model = Matrix((across, height, normal)).transposed()  # the shield's own axes, in its model space
+
+    bone_frame = (arm.matrix_world @ arm.data.bones[socket].matrix_local).normalized()
+    hand = bone_frame.translation
+    outward = Vector((1.0 if hand.x >= 0 else -1.0, 0.0, 0.0))  # away from the body, on that side
+    up = Vector((0.0, 0.0, 1.0))
+    world = Matrix((up.cross(outward).normalized(), up, outward)).transposed()
+    # Where the shield goes at rest: its back just outside the hand, upright, face outward.
+    placed = (world @ model.inverted()).to_4x4()
+    placed.translation = hand + outward * 0.02 - (world @ model.inverted()) @ back
+    grip = placed.inverted() @ bone_frame  # so that bone_frame @ grip^-1 == placed
+    return grip, {"length": round(max(values) ** 0.5 * 2, 4), "thickness": round(thickness, 4),
+                  "handle_end": "back"}
+
+
 def attach_weapon(item, arm, socket: str, grip: Matrix) -> None:
     bone = arm.data.bones[socket]
     bone_frame = arm.matrix_world @ bone.matrix_local
@@ -481,7 +520,10 @@ def main(args: dict) -> dict:
     elif attach["kind"] == "weapon":
         progress(0.08, "Finding the grip")
         item.name = item.data.name = "weapon"
-        detected, measured = detect_grip(item, attach["weapon_class"])
+        if attach["weapon_class"] == "shield":
+            detected, measured = shield_grip(item, arm, attach["socket"])
+        else:
+            detected, measured = detect_grip(item, attach["weapon_class"])
         manual = attach.get("grip_matrix")
         grip = Matrix(manual) if manual else detected
         attach_weapon(item, arm, attach["socket"], grip)

@@ -11,7 +11,7 @@ BASE_MODELS = ("qwen-image", "sdxl", "flux")
 CAMERA_PRESETS = ("side", "three_quarter", "topdown_4", "topdown_8")
 SPRITE_LOOKS = ("hd", "pixel")
 GEAR_SLOTS = ("head", "chest", "legs", "hands", "feet", "cape")
-WEAPON_CLASSES = ("one_handed", "two_handed", "bow", "staff")
+WEAPON_CLASSES = ("one_handed", "two_handed", "bow", "staff", "shield")
 WEAPON_SOCKETS = ("weapon_r", "weapon_l")
 
 # Grip point (where the hand holds it) relative to the weapon origin, per weapon class.
@@ -20,6 +20,7 @@ DEFAULT_GRIPS = {
     "two_handed": {"socket": "weapon_r", "position": [0.0, -0.12, 0.0], "rotation": [0.0, 0.0, 0.0]},
     "bow": {"socket": "weapon_l", "position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0]},
     "staff": {"socket": "weapon_r", "position": [0.0, 0.1, 0.0], "rotation": [0.0, 0.0, 0.0]},
+    "shield": {"socket": "weapon_l", "position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0]},
 }
 
 
@@ -77,6 +78,7 @@ WEAPON_ATTACKS: dict[str, list[str]] = {
     "two_handed": ["attack_cleave", "attack_overhead"],
     "bow": ["attack_shoot", "attack_quick_shot"],
     "staff": ["attack_cast", "attack_strike"],
+    "shield": ["attack_stab", "attack_strike"],  # a jab with the left (a shield bash) and a punch
 }
 
 STAGES = ("prompt", "mesh", "rig", "export")

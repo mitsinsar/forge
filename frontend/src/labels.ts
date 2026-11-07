@@ -14,6 +14,7 @@ const SPECIAL: Record<string, string> = {
   three_quarter: "Three-quarter",
   one_handed: "One-handed",
   two_handed: "Two-handed",
+  shield: "Shield",
 };
 
 /** "one_handed" → "One-handed", "attack_1" → "Attack 1", "down_right" → "Down right". */
