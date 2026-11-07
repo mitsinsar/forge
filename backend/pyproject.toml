@@ -1,8 +1,9 @@
 [project]
 name = "assetgen"
 version = "0.1.0"
-description = "Local asset generator backend: text description to game-ready animated assets."
+description = "Forge backend: a text description to game-ready animated assets, locally."
 readme = "README.md"
+license = "Apache-2.0"
 authors = [
     { name = "Mithat Sinan Sari", email = "m.sinan.sari@gmail.com" }
 ]

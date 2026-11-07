@@ -1,0 +1,8 @@
+Forge
+Copyright 2026 Mithat Sinan Sari
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Forge drives tools and models that are not part of this repository (ComfyUI, SDXL, Hunyuan3D,
+UniRig, MV-Adapter, Blender, a language model); each has its own licence. The archetype
+animations under backend/src/assetgen/archetypes are CC0 packs by Quaternius.

@@ -62,7 +62,11 @@ curl http://127.0.0.1:8000/api/setup
 
 Tests: `cd backend && uv run pytest` (Blender tests run when Blender is found; the rest need no GPU).
 
-## Licences
+## Licence
+
+Forge is licensed under the [Apache License 2.0](LICENSE): anyone may use, change and share it,
+including commercially, as long as they keep the copyright and licence notices ([NOTICE](NOTICE))
+and mark files they change.
 
 The archetype animations are Quaternius's CC0 packs (see each `archetypes/<id>/LICENCES.md`).
 The tools and models Forge drives (ComfyUI, SDXL, Hunyuan3D, UniRig, MV-Adapter, the language
