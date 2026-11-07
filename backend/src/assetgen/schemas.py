@@ -194,7 +194,11 @@ class Reject(Strict):
     joints: dict[str, list[float]] | None = Field(
         None, description="Gate 3, characters only: joints moved in the joint editor, by name, as rest positions "
                           "in the mesh's space (Blender axes: Z up, -Y front, metres). They replace UniRig's for "
-                          "these joints and add up over rejections; {} goes back to the detected joints.")
+                          "these joints and add up over rejections; {} goes back to the detected joints "
+                          "(and clears the twists).")
+    twists: dict[str, float] | None = Field(
+        None, description="Gate 3, characters only: degrees each joint is turned about its own bone (which way a "
+                          "knee or elbow faces); add up over rejections like joints.")
 
 
 class FitRequest(Strict):

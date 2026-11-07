@@ -217,9 +217,16 @@ def test_joints_moved_at_gate_3_are_used_and_can_be_reset(client, settings, tmp_
 
     bad = client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"joints": {"tail_07": [0, 0, 0]}})
     assert bad.status_code in (409, 422) and "tail_07" in bad.text
+    twisted = client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"twists": {"calf_l": 20, "calf_r": -20}})
+    assert twisted.status_code == 200, twisted.text
+    again = wait_for(client, asset["id"], "waiting", gate=3)
+    assert again["outputs"]["rig"]["joint_twists"] == {"calf_l": 20.0, "calf_r": -20.0}
+    assert again["outputs"]["rig"]["joint_overrides"] == ["calf_l"]  # a twist alone keeps the moved joints
+    assert client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"twists": {"calf_l": 400}}).status_code == 422
     client.post(f"/api/assets/{asset['id']}/gates/3/reject", json={"joints": {}})
     reset = wait_for(client, asset["id"], "waiting", gate=3)
     assert reset["outputs"]["rig"]["joint_overrides"] == []
+    assert reset["outputs"]["rig"]["joint_twists"] == {}
     assert reset["outputs"]["rig"]["joints"]["calf_l"]["head"] != moved
 
 

@@ -13,6 +13,9 @@ export type Vec3 = [number, number, number];
 export interface Joint {
   head: Vec3;
   parent: string | null;
+  /** The bone's direction and the way the joint faces (Blender axes), when the rig reports them. */
+  axis?: Vec3;
+  front?: Vec3;
 }
 
 /** The light copy of one of the app's GLBs (JPEG textures) for viewing; the exports keep the full ones. */
@@ -58,6 +61,8 @@ interface Props {
   /** Joints moved so far (they are shown where they were moved to). */
   moved?: Record<string, Vec3>;
   editJoints?: boolean;
+  /** Degrees each joint is turned about its bone, not yet re-rigged (its facing line turns). */
+  twists?: Record<string, number>;
   onJointMove?: (name: string, head: Vec3) => void;
   /** Called with the joint clicked in the editor (for the placement hint). */
   onJointPick?: (name: string) => void;
@@ -75,6 +80,7 @@ export function ModelViewer({
   joints,
   moved,
   editJoints,
+  twists,
   onJointMove,
   onJointPick,
   extras,
@@ -345,7 +351,11 @@ export function ModelViewer({
 
   // Joint editor: a handle per joint and a line per bone, drawn through the mesh; click a handle to
   // move it with the arrows.
-  const handlesRef = useRef<{ handles: Map<string, THREE.Mesh>; update: () => void } | null>(null);
+  const handlesRef = useRef<{
+    handles: Map<string, THREE.Mesh>;
+    facings: Map<string, THREE.Line>;
+    update: () => void;
+  } | null>(null);
   useEffect(() => {
     const { model, scene, camera, controls, canvas, radius } = sceneRef.current;
     if (!editJoints || !joints || !model || !scene || !camera || !controls || !canvas) return;
@@ -357,6 +367,18 @@ export function ModelViewer({
     const sphere = new THREE.SphereGeometry(size, 12, 8);
     const colours = { normal: 0x5ad1ff, moved: 0xff9a3c, picked: 0xffffff };
     const handles = new Map<string, THREE.Mesh>();
+    // Which way each joint faces: a short line from the joint (a knee's line points where the
+    // knee cap is). It turns with the joint's twist.
+    const facings = new Map<string, THREE.Line>();
+    const facingMaterial = new THREE.LineBasicMaterial({ color: 0x7cf29c, depthTest: false, transparent: true });
+    for (const name of names) {
+      if (!joints[name].front) continue;
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+                                  facingMaterial);
+      line.renderOrder = 11;
+      overlay.add(line);
+      facings.set(name, line);
+    }
     for (const name of names) {
       const handle = new THREE.Mesh(
         sphere,
@@ -386,7 +408,7 @@ export function ModelViewer({
       });
       position.needsUpdate = true;
     };
-    handlesRef.current = { handles, update };
+    handlesRef.current = { handles, facings, update };
 
     const gizmo = new TransformControls(camera, canvas);
     gizmo.setSize(0.6);
@@ -446,6 +468,8 @@ export function ModelViewer({
       model.remove(overlay);
       sphere.dispose();
       lineGeometry.dispose();
+      facings.forEach((line) => line.geometry.dispose());
+      facingMaterial.dispose();
       handles.forEach((h) => (h.material as THREE.Material).dispose());
       (lines.material as THREE.Material).dispose();
       controls.enabled = true;
@@ -463,8 +487,18 @@ export function ModelViewer({
       handle.userData.moved = !!moved?.[name];
       (handle.material as THREE.MeshBasicMaterial).color.setHex(moved?.[name] ? 0xff9a3c : 0x5ad1ff);
     });
+    const length = (sceneRef.current.radius ?? 1.8) * 0.06;
+    editor.facings.forEach((line, name) => {
+      const joint = joints[name];
+      const start = editor.handles.get(name)!.position;
+      const front = toThree(joint.front!).normalize();
+      const twist = twists?.[name] ?? 0;
+      if (twist && joint.axis) front.applyAxisAngle(toThree(joint.axis).normalize(), THREE.MathUtils.degToRad(twist));
+      line.geometry.setFromPoints([start.clone(), start.clone().add(front.multiplyScalar(length))]);
+      (line.material as THREE.LineBasicMaterial).color.setHex(0x7cf29c);
+    });
     editor.update();
-  }, [joints, moved, editJoints, loaded]);
+  }, [joints, moved, twists, editJoints, loaded]);
 
   return (
     <div className="stage" ref={host}>

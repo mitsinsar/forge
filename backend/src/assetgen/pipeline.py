@@ -21,7 +21,7 @@ import traceback
 from pathlib import Path
 
 from .adapters import Adapters
-from .archetypes import get_archetype, load_archetypes
+from .archetypes import ARCHETYPES_DIR, get_archetype, load_archetypes
 from .config import Settings
 from .db import Database, now
 from .defaults import (EXAMPLE_LORA_WEIGHT, EXAMPLE_NEGATIVE, EXAMPLE_SEED, EXAMPLE_SUBJECTS)
@@ -32,6 +32,9 @@ from . import checks as qc
 from . import exporters, grips, pose, variants, watchdog
 
 log = logging.getLogger("assetgen.pipeline")
+
+# The test dummy's id where a hero's goes (outfits, fits): the biped base body.
+DUMMY = "dummy"
 
 # MV-Adapter's view names to Hunyuan3D-2mv's (both: the character's own left and right sides).
 HUNYUAN_VIEW = {"front": "front", "right": "right", "back": "back", "left": "left"}
@@ -178,7 +181,7 @@ class Pipeline:
 
     def reject(self, asset_id: str, gate: int, note: str | None = None, archetype: str | None = None,
                grip: dict | None = None, joints: dict | None = None, height: float | None = None,
-               wearer: str | None = None) -> dict:
+               wearer: str | None = None, twists: dict | None = None) -> dict:
         asset = self._require(asset_id)
         self._require_gate(asset, gate)
         stage = STAGE_OF_GATE[gate]
@@ -216,6 +219,17 @@ class Pipeline:
             # Moved joints add up over rejections; an empty set goes back to the detected ones.
             changes["joint_overrides"] = ({**(asset.get("joint_overrides") or {}),
                                            **{k: [float(v) for v in p] for k, p in joints.items()}} if joints else {})
+            if not joints and not twists:
+                changes["joint_twists"] = {}
+        if twists is not None:
+            if gate != 3 or asset["kind"] in ("gear", "weapon"):
+                raise Invalid("joints can only be twisted for characters at gate 3")
+            known = set(get_archetype(asset["archetype"])["joints"])
+            unknown = sorted(set(twists) - known)
+            if unknown:
+                raise Invalid(f"unknown joints for the {asset['archetype']} skeleton: {', '.join(unknown)}")
+            merged = {**(asset.get("joint_twists") or {}), **{k: float(v) for k, v in twists.items()}}
+            changes["joint_twists"] = {k: v for k, v in merged.items() if abs(v) > 1e-3}
         notes = list(asset.get("notes") or [])
         if note and note.strip():
             notes.append({"gate": gate, "stage": stage, "note": note.strip(), "at": now()})
@@ -353,17 +367,37 @@ class Pipeline:
             return
         self._job_update(job_id, status="done", step="Done", progress=1.0, result=result, finished_at=now())
 
+    def dummy_glb(self) -> Path:
+        """The test dummy: the biped base body with every biped clip, which outfits dress like a hero."""
+        return Path(self.settings.data_dir) / "dummy" / "biped" / "animated.glb"
+
+    def dummy_clips(self) -> list[str]:
+        folder = ARCHETYPES_DIR / get_archetype("biped")["folder"]
+        return sorted(json.loads((folder / "clips.json").read_text(encoding="utf-8")))
+
+    def _job_dummy(self, job: dict, progress) -> dict:
+        out = self.dummy_glb()
+        archetype = get_archetype("biped")
+        result = self.adapters.blender.rig_and_animate(
+            mesh_glb=None, skeleton={"joints": archetype["joints"], "fit_score": 1.0, "fallback": False},
+            archetype=archetype, clips=self.dummy_clips(), attach={"kind": "body"}, out_path=out, progress=progress)
+        (out.parent / "clips.json").write_text(json.dumps(result["clips"]), encoding="utf-8")
+        return {"clips": result["clips"]}
+
     def _job_fit(self, job: dict, progress) -> dict:
-        """Fits a finished gear or weapon asset on a rigged hero, kept per hero under ``fits/<hero>``."""
+        """Fits a finished gear or weapon asset on a rigged hero (or the test dummy, ``dummy``), kept
+        per hero under ``fits/<hero>``."""
         item = self._require(job["target_id"])
-        wearer = self._wearer_info(job["params"]["wearer_id"])
+        dummy = job["params"]["wearer_id"] == DUMMY
+        wearer = {"id": DUMMY, "name": "Test dummy"} if dummy else self._wearer_info(job["params"]["wearer_id"])
         if not (item.get("outputs") or {}).get("mesh"):
             raise RuntimeError("the item has no mesh yet: approve its gate 2 first")
         directory = self.asset_dir(item["id"]) / "fits" / wearer["id"]
         shutil.rmtree(directory, ignore_errors=True)
         directory.mkdir(parents=True)
         attach = self._attach_for(item)
-        attach["wearer"] = wearer
+        if not dummy:
+            attach["wearer"] = wearer
         archetype = get_archetype("biped")
         clips = self.clips_for(item, self.asset_settings(item))
         result = self.adapters.blender.rig_and_animate(
@@ -756,7 +790,8 @@ class Pipeline:
         else:
             skeleton = self.adapters.rig.predict_skeleton(
                 mesh=mesh, archetype=archetype, out_dir=directory, progress=lambda s, f: progress(s, 0.3 * f))
-            skeleton = {**skeleton, "overrides": dict(asset.get("joint_overrides") or {})}
+            skeleton = {**skeleton, "overrides": dict(asset.get("joint_overrides") or {}),
+                        "twists": dict(asset.get("joint_twists") or {})}
         wearer = self._wearer(asset) if attach else None
         if wearer:
             attach["wearer"] = wearer
@@ -775,10 +810,11 @@ class Pipeline:
             output["wearer"] = {"id": wearer["id"], "name": wearer["name"]} if wearer else None
         output["stretch"] = result.get("stretch")
         output["checks"] = qc.rig_checks(skeleton=None if attach else skeleton, stretch=result.get("stretch"),
-                                              gear=result.get("gear"))
+                                         gear=result.get("gear"), clips=None if attach else result["clips"])
         if result.get("joints"):
             output["joints"] = result["joints"]
             output["joint_overrides"] = sorted(asset.get("joint_overrides") or {})
+            output["joint_twists"] = dict(asset.get("joint_twists") or {})
         if result.get("gear"):
             output["gear"] = result["gear"]
         if result.get("weapon"):

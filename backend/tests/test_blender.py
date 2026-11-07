@@ -708,3 +708,27 @@ def test_gear_and_a_weapon_fit_a_shorter_wearer(tmp_path):
     names = [n.get("name") for n in gltf["nodes"]]
     assert names.index("weapon") in gltf["nodes"][names.index("weapon_r")].get("children", [])
     assert held["weapon"]["handle_end"] == "low"
+
+
+@needs_blender
+def test_a_twisted_knee_faces_the_new_way_and_every_clip_reports_its_drift(tmp_path):
+    """Joints report their facing; a twist turns the bone about itself (the knee then faces
+    sideways), and each clip says how far its limbs drift from the clip's bones."""
+    tools = BlenderTools(load_settings(data_dir=tmp_path, blender_path=BLENDER))
+    raw = write_raw(tmp_path / "raw.glb", asset_parts("hero", "biped"), 6000)
+    mesh = tools.cleanup_and_lods(raw_mesh=raw, kind="hero", triangles=3000, lod_ratios=[0.5],
+                                  out_dir=tmp_path / "mesh", progress=lambda s, f: None)
+
+    def rig(folder, twists):
+        return tools.rig_and_animate(mesh_glb=mesh["glb"], skeleton={"fallback": True, "twists": twists},
+                                     archetype=get_archetype("biped"), clips=["walk"], attach=None,
+                                     out_path=tmp_path / folder / "animated.glb", progress=lambda s, f: None)
+
+    plain, twisted = rig("plain", {}), rig("twisted", {"calf_l": 90.0})
+    front = np.array(plain["joints"]["calf_l"]["front"])
+    assert front[1] < -0.9  # Blender's front is -Y: the knee cap faces forward
+    turned = np.array(twisted["joints"]["calf_l"]["front"])
+    assert abs(float(turned @ front)) < 0.1  # turned a quarter: facing sideways now
+    assert np.allclose(twisted["joints"]["calf_r"]["front"], plain["joints"]["calf_r"]["front"], atol=1e-3)
+    (walk,) = plain["clips"]
+    assert walk["follow"]["bone"] and 0 <= walk["follow"]["degrees"] < 20

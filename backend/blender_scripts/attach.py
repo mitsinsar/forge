@@ -451,7 +451,8 @@ def main(args: dict) -> dict:
     rig.empty_scene()
     scene = bpy.context.scene
     scene.render.fps, scene.render.fps_base = rig.FPS, 1.0
-    item = rig.load_lod0(args["mesh_glb"])
+    # "body": no item, the base body alone with its clips (the test dummy outfits dress).
+    item = None if attach["kind"] == "body" else rig.load_lod0(args["mesh_glb"])
     wearer = args.get("wearer_blend")
     if wearer:
         arm, body = load_wearer(wearer, args["template_object"], [c["name"] for c in args["clips"]])
@@ -466,7 +467,7 @@ def main(args: dict) -> dict:
         Path(args["mask_json"]).write_text(json.dumps({"slot": attach["slot"], "faces": covered}), encoding="utf-8")
         hide_faces(body, covered)
         result["gear"] = {**fitted, "masked_faces": len(covered)}
-    else:
+    elif attach["kind"] == "weapon":
         progress(0.08, "Finding the grip")
         item.name = item.data.name = "weapon"
         detected, measured = detect_grip(item, attach["weapon_class"])
@@ -493,7 +494,7 @@ def main(args: dict) -> dict:
     progress(0.92, "Writing the animated GLB")
     out = Path(args["out_glb"])
     out.parent.mkdir(parents=True, exist_ok=True)
-    select_only([body, item, arm], active=arm)
+    select_only([o for o in (body, item, arm) if o is not None], active=arm)
     bpy.ops.export_scene.gltf(filepath=str(out), export_format="GLB", use_selection=True, export_yup=True,
                               export_apply=False, export_animations=True, export_animation_mode="ACTIONS",
                               export_force_sampling=True, export_skins=True, export_def_bones=False,

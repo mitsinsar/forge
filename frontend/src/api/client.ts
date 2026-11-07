@@ -291,9 +291,17 @@ export interface AssetOutputs {
     grip: Grip | null;
     sprites?: SpritePreview;
     /** Characters: each joint's rest position (mesh space, Blender axes) and parent. */
-    joints?: Record<string, { head: [number, number, number]; parent: string | null }>;
+    joints?: Record<string, {
+      head: [number, number, number];
+      parent: string | null;
+      /** The bone's direction and the way the joint faces (a knee cap's side), Blender axes. */
+      axis?: [number, number, number];
+      front?: [number, number, number];
+    }>;
     /** Joints the user moved (they replace the detected ones on every re-rig). */
     joint_overrides?: string[];
+    /** Degrees the user turned joints about their bones (in effect in this result). */
+    joint_twists?: Record<string, number>;
     /** Gear and weapons: the hero it was fitted on (null: the base mannequin). */
     wearer?: { id: string; name: string } | null;
     /** Gear: how it was fitted on the base body. */
@@ -391,6 +399,17 @@ export interface AssetFilters {
   batch_id?: string;
 }
 
+/** The test dummy: the biped base body with every clip, dressed in outfits like a hero. */
+export interface Dummy {
+  id: "dummy";
+  name: string;
+  height: number;
+  ready: boolean;
+  url?: string;
+  clips?: Clip[];
+  job?: Job;
+}
+
 export interface RejectInput {
   note?: string;
   archetype?: string;
@@ -401,6 +420,8 @@ export interface RejectInput {
   wearer?: string;
   /** Gate 3, characters: moved joints (Blender axes); {} goes back to the detected ones. */
   joints?: Record<string, [number, number, number]>;
+  /** Gate 3, characters: degrees to turn joints about their own bones (add up over re-rigs). */
+  twists?: Record<string, number>;
 }
 
 export class ApiError extends Error {
@@ -533,6 +554,7 @@ export const api = {
   deleteAsset: (id: string) => request<void>("DELETE", `/assets/${id}`),
   approve: (id: string, gate: Gate, candidate?: number) =>
     request<Asset>("POST", `/assets/${id}/gates/${gate}/approve`, candidate ? { candidate } : {}),
+  dummy: () => request<Dummy>("GET", "/dummy"),
   wearers: (projectId: string) =>
     request<{ id: string; name: string; height: number | null }[]>("GET", `/projects/${projectId}/wearers`),
   reject: (id: string, gate: Gate, input: RejectInput) =>

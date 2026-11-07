@@ -1,6 +1,6 @@
 // The three approval gates of an asset, plus its done and failed views.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, assetFileUrl, localUrl, type Asset, type Gate, type Grip, type RejectInput, type Socket } from "../api/client";
 import { keys, useApiMutation, useArchetypes } from "../api/queries";
@@ -440,7 +440,7 @@ function WearerCard({ asset }: { asset: Asset }) {
     <Card
       title="Wearer"
       subtitle="The body it is fitted on. Fit it on the hero who will wear it, so it matches that hero's size and build."
-      actions={<Badge>{rig?.wearer?.name ?? "Base mannequin"}</Badge>}
+      actions={<Badge>{rig?.wearer?.name ?? "Test dummy"}</Badge>}
     >
       <Stack gap={3}>
         <Row>
@@ -451,7 +451,7 @@ function WearerCard({ asset }: { asset: Asset }) {
               value={choice}
               onChange={(e) => setChoice(e.target.value)}
               options={[
-                { value: "", label: "Base mannequin (1.8 m)" },
+                { value: "", label: "Test dummy (base mannequin, 1.8 m)" },
                 ...(wearers.data ?? []).map((w) => ({ value: w.id, label: w.height ? `${w.name} (${w.height} m)` : w.name })),
               ]}
             />
@@ -537,9 +537,33 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
   const [moved, setMoved] = useState<Record<string, Vec3>>({});
   const [mirror, setMirror] = useState(true);
   const [pickedJoint, setPickedJoint] = useState<string>();
+  const [twisted, setTwisted] = useState<Record<string, number>>({}); // degrees, on top of the rig's
+  const twistedCount = Object.keys(twisted).length;
+  const twistJoint = (name: string, degrees: number) =>
+    setTwisted((current) => {
+      const clamp = (v: number) => Math.max(-180, Math.min(180, Math.round(v)));
+      const next = { ...current, [name]: clamp(degrees) };
+      const side = name.match(/_(l|r)$/)?.[1];
+      const twin = side && name.slice(0, -1) + (side === "l" ? "r" : "l");
+      // A mirror image turns the other way: both knees turn out (or in) together.
+      if (mirror && twin && rig?.joints?.[twin]) next[twin] = clamp(-degrees);
+      return next;
+    });
+  const shownTwists = useMemo(() => {
+    // The facing lines show the rig's result, so only the twists not yet re-rigged turn them.
+    const done = rig?.joint_twists ?? {};
+    return Object.fromEntries(Object.entries(twisted).map(([k, v]) => [k, v - (done[k] ?? 0)]));
+  }, [twisted, rig?.joint_twists]);
   const [jointWireframe, setJointWireframe] = useState(false);
   const movedCount = Object.keys(moved).length;
-  const rerig = useApiMutation((joints: Record<string, Vec3>) => api.reject(asset.id, 3, { joints }), [
+  const rerig = useApiMutation(
+    // Only what changed is sent: an empty set of joints means "back to the detected joints".
+    (input: { joints?: Record<string, Vec3>; twists?: Record<string, number> }) =>
+      api.reject(asset.id, 3, {
+        ...(input.joints ? { joints: input.joints } : {}),
+        ...(input.twists && Object.keys(input.twists).length ? { twists: input.twists } : {}),
+      }),
+    [
     keys.assets,
     keys.asset(asset.id),
   ]);
@@ -591,6 +615,7 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
                   joints={rig?.joints}
                   moved={moved}
                   editJoints={editing}
+                  twists={shownTwists}
                   onJointMove={moveJoint}
                   onJointPick={setPickedJoint}
                   wireframe={editing && jointWireframe}
@@ -676,21 +701,49 @@ export function Gate3({ asset, godot, readOnly = false }: { asset: Asset; godot:
                 Front, Left and Flat above the model to line joints up straight on.
               </Text>
             )}
-            {editing && <JointGuide picked={pickedJoint} onPick={setPickedJoint} />}
+            {editing && pickedJoint && rig?.joints?.[pickedJoint]?.axis && (
+              <Row>
+                <Text small>Twist {pickedJoint.replace(/_/g, " ")}</Text>
+                <Button size="sm" onClick={() => twistJoint(pickedJoint, (twisted[pickedJoint] ?? rig?.joint_twists?.[pickedJoint] ?? 0) - 5)}>
+                  ⟲ 5°
+                </Button>
+                <Box width={90}>
+                  <Input
+                    aria-label="Twist in degrees"
+                    type="number"
+                    step={5}
+                    value={twisted[pickedJoint] ?? rig?.joint_twists?.[pickedJoint] ?? 0}
+                    onChange={(e) => twistJoint(pickedJoint, Number(e.target.value) || 0)}
+                  />
+                </Box>
+                <Button size="sm" onClick={() => twistJoint(pickedJoint, (twisted[pickedJoint] ?? rig?.joint_twists?.[pickedJoint] ?? 0) + 5)}>
+                  ⟳ 5°
+                </Button>
+                <Text small muted>The green line shows which way the joint faces: a knee's should point forward.</Text>
+              </Row>
+            )}
+            {editing && (
+              <JointGuide
+                picked={pickedJoint}
+                // The figure names a joint without its side: take the left one (mirroring moves the right).
+                onPick={(base) => setPickedJoint(rig?.joints?.[base] || !rig?.joints?.[`${base}_l`] ? base : `${base}_l`)}
+              />
+            )}
             <Row>
               <Button
                 variant="primary"
-                disabled={movedCount === 0}
+                disabled={movedCount === 0 && twistedCount === 0}
                 busy={rerig.isPending}
-                onClick={() => rerig.mutate(moved, { onSuccess: () => setMoved({}) })}
+                onClick={() => rerig.mutate({ ...(movedCount ? { joints: moved } : {}), twists: twisted }, { onSuccess: () => { setMoved({}); setTwisted({}); } })}
               >
                 Re-rig with these joints
               </Button>
-              <Button variant="ghost" disabled={movedCount === 0} onClick={() => setMoved({})}>
+              <Button variant="ghost" disabled={movedCount === 0 && twistedCount === 0}
+                      onClick={() => { setMoved({}); setTwisted({}); }}>
                 Undo moves
               </Button>
-              {!!rig?.joint_overrides?.length && (
-                <Button variant="ghost" busy={rerig.isPending} onClick={() => rerig.mutate({})}>
+              {(!!rig?.joint_overrides?.length || !!Object.keys(rig?.joint_twists ?? {}).length) && (
+                <Button variant="ghost" busy={rerig.isPending} onClick={() => rerig.mutate({ joints: {} })}>
                   Back to the detected joints
                 </Button>
               )}
