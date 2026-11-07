@@ -96,6 +96,8 @@ def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict |
         status = PASS if arms["arms_clear"] else FAIL if arms["arms_clear"] is False else WARN
         checks.append(check("arms", "Arms clear of the body", status,
                             f"{round(arms['clear_share'] * 100)} % of the chest-to-hip rows show a gap"))
+    if vision is not None and vision.get("match") is not None:  # auto mode's judge
+        checks.append(judged("match", "Matches the description", vision["match"], vision.get("problems")))
     if kind in ("gear", "weapon"):  # the item alone: anyone wearing or holding it ends up in the mesh
         if vision is None:
             checks.append(check("alone", "The item alone", WARN, "Not checked: the text model can't see images"))
@@ -113,9 +115,18 @@ def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict |
     return checks
 
 
-def mesh_checks(stats: dict | None, kind: str = "hero", pair: bool = False) -> list[dict]:
+def judged(check_id: str, label: str, score: int, problems: list[str] | None) -> dict:
+    """A check from the vision model's 0-10 score (auto mode's judge)."""
+    from .defaults import JUDGE_FAIL, JUDGE_WARN  # noqa: PLC0415
+
+    status = FAIL if score < JUDGE_FAIL else WARN if score < JUDGE_WARN else PASS
+    detail = f"{score}/10" + (": " + "; ".join(problems) if problems and status != PASS else "")
+    return check(check_id, label, status, detail)
+
+
+def mesh_checks(stats: dict | None, kind: str = "hero", pair: bool = False, judge: dict | None = None) -> list[dict]:
     if not stats:
-        return []
+        return [judged("looks", "Looks like the picture", judge["match"], judge.get("problems"))] if judge else []
     share = float(stats.get("largest_piece_share", 1.0))
     # A pair is two main pieces: count only what is outside both (taking the second about the size of the first).
     loose = (0.0 if int(stats.get("pieces", 1)) <= 2 else max(0.0, 1 - 2 * share)) if pair else 1 - share
@@ -132,7 +143,7 @@ def mesh_checks(stats: dict | None, kind: str = "hero", pair: bool = False) -> l
               f"{'two' if pair else 'one'}"),
         check("holes", "Few holes", WARN if open_share > 0.03 else PASS,
               f"{round(open_share * 100, 1)} % of the edges border a hole"),
-    ]
+    ] + ([judged("looks", "Looks like the picture", judge["match"], judge.get("problems"))] if judge else [])
 
 
 STANDARD_CLIPS = ("idle", "walk", "run", "attack_1", "attack_2", "hit", "death")

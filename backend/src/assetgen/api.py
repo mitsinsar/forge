@@ -23,9 +23,10 @@ from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, 
 from .exporters import safe_name
 from .pipeline import DUMMY, Conflict, Invalid, Pipeline
 from . import delivery, storage, watchdog
+from .models import model_choices
 from .setup_guide import setup_report
 from .tools import check_tools
-from .schemas import (AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
+from .schemas import (AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, AutopilotSet, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
                       TrainingCandidate)
 
@@ -142,6 +143,12 @@ async def stop_tool(request: Request, tool: str):
         return {"tool": tool, "result": await asyncio.to_thread(watchdog.stop_tool, settings, tool)}
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/models", tags=["tools"],
+            summary="The models a profile can pick for each step, and which are installed")
+def models(request: Request):
+    return model_choices(pipeline_of(request).settings)
 
 
 @router.get("/setup", tags=["tools"],
@@ -481,10 +488,10 @@ def make_variant(request: Request, asset_id: str, body: VariantCreate):
 
 @router.put("/assets/{asset_id}/autopilot", tags=["assets"],
             summary="Turn autopilot on or off (on: approves the current gate now if its checks allow)")
-def set_autopilot(request: Request, asset_id: str, body: Toggle):
+def set_autopilot(request: Request, asset_id: str, body: AutopilotSet):
     pipeline = pipeline_of(request)
     _found(pipeline.db.get("assets", asset_id), "asset")
-    return asset_view(request, pipeline.set_autopilot(asset_id, body.value))
+    return asset_view(request, pipeline.set_autopilot(asset_id, body.value, body.export))
 
 
 def _create_asset(request: Request, body: AssetCreate, source: Image.Image | None = None,
@@ -515,7 +522,8 @@ def _create_asset(request: Request, body: AssetCreate, source: Image.Image | Non
         "name": (body.name or "").strip() or _default_name(body.description), "description": body.description,
         "archetype_override": body.archetype, "archetype": body.archetype, "slot": body.slot,
         "weapon_class": body.weapon_class, "grip": None, "overrides": overrides, "height": body.height,
-        "wearer_id": None, "autopilot": body.autopilot, "batch_id": batch_id,
+        "wearer_id": None, "autopilot": body.autopilot, "autopilot_export": body.autopilot_export,
+        "batch_id": batch_id,
         "status": "queued", "stage": "prompt", "gate": None, "step": "Waiting for the worker", "progress": 0.0,
         "error": None, "notes": [], "attempts": {}, "approvals": {}, "chosen_candidate": None, "outputs": {},
         "training_candidate": False, "training_candidate_set": False, "queued_at": now(),

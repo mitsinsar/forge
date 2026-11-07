@@ -82,12 +82,18 @@ class MeshQuality(Strict):
     remove_floaters: bool | None = Field(None, description="Drop small pieces that do not touch the body.")
     multi_view: bool | None = Field(None, description="Draw right, back and left views first (MV-Adapter) and "
                                                       "build the shape from all four (Hunyuan3D-2mv).")
+    model: Literal["hunyuan3d-2.1", "hunyuan3d-2-mini"] | None = Field(
+        None, description="The image-to-3D model: Hunyuan3D 2.1 (shape and PBR texture) or Hunyuan3D 2 mini turbo "
+                          "(Modly; fast).")
 
 
 class ProfileSettings(Strict):
     """Every field a style profile holds; each can also be overridden per asset."""
 
     base_model: BaseModelName | None = None
+    text_model: str | None = Field(None, max_length=200, description="The language model (an LM Studio model id) "
+                                                                     "that writes prompts and judges results; empty: "
+                                                                     "the default from settings.")
     prompt_suffix: str | None = None
     negative_prompt: str | None = None
     loras: list[LoraRef] | None = None
@@ -150,7 +156,10 @@ class AssetCreate(Strict):
                                  "(default by kind: hero 1.8, monster 1.5, boss 2.7).")
     profile_id: str | None = Field(None, description="Defaults to the project's default profile.")
     overrides: ProfileSettings | None = Field(None, description="Per-asset overrides of profile fields.")
-    autopilot: bool = Field(False, description="Approve each gate by itself when nothing failed its checks.")
+    autopilot: bool = Field(False, description="Approve each gate by itself when nothing failed its checks; "
+                                               "redraw, rebuild or try another picture when something did.")
+    autopilot_export: bool = Field(False, description="With autopilot: also approve gate 3 (export) when its checks "
+                                                      "pass. Off: it stops at gate 3 for you.")
 
 
 class BatchCreate(Strict):
@@ -174,6 +183,11 @@ class CleanRequest(Strict):
 
 class Toggle(Strict):
     value: bool
+
+
+class AutopilotSet(Strict):
+    value: bool
+    export: bool | None = Field(None, description="Also approve gate 3 (export) when everything passes.")
 
 
 class Approve(Strict):

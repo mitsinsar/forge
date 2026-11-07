@@ -26,7 +26,8 @@ from .adapters import Adapters
 from .archetypes import ARCHETYPES_DIR, get_archetype, load_archetypes
 from .config import Settings
 from .db import Database, now
-from .defaults import (EXAMPLE_LORA_WEIGHT, EXAMPLE_NEGATIVE, EXAMPLE_SEED, EXAMPLE_SUBJECTS)
+from .defaults import (AUTO_MESH_RETRIES, AUTO_PICTURES, AUTO_REDRAWS, EXAMPLE_LORA_WEIGHT, EXAMPLE_NEGATIVE,
+                       EXAMPLE_SEED, EXAMPLE_SUBJECTS, MESH_MODELS)
 from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_DOLL_FRAMING, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
@@ -613,7 +614,7 @@ class Pipeline:
             expansion = self.adapters.llm.expand(
                 description=asset["description"], kind=asset["kind"], archetypes=load_archetypes(),
                 archetype_override=asset.get("archetype_override"), slot=asset.get("slot"),
-                weapon_class=asset.get("weapon_class"), notes=notes)
+                weapon_class=asset.get("weapon_class"), notes=notes, model=self._text_model(settings))
             if expansion["archetype"] not in load_archetypes():
                 expansion.setdefault("flags", []).append(
                     f"The archetype {expansion['archetype']!r} is not a template; biped is used instead.")
@@ -639,10 +640,16 @@ class Pipeline:
         suffix = settings.get("prompt_suffix") or ""
         if asset["kind"] in ("gear", "weapon"):  # an item alone: "full body" draws a person to wear it
             suffix = ", ".join(p.strip() for p in suffix.split(",") if p.strip().lower() not in ("full body", "full-body"))
-        prompt = ", ".join(p for p in (expansion["prompt"], suffix) if p)
-        negative = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
         loras = self._profile_loras(settings)
-        prompt = self.with_triggers(prompt, loras)
+
+        def prompts(expansion: dict) -> tuple[str, str]:
+            text = self.with_triggers(", ".join(p for p in (expansion["prompt"], suffix) if p), loras)
+            neg = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
+            if self._posed_biped(asset):
+                neg = ", ".join(p for p in (neg, POSE_NEGATIVE) if p)
+            return text, neg
+
+        prompt, negative = prompts(expansion)
         references = [self.settings.uploads_dir / "references" / r["file"] for r in settings["reference_images"]]
 
         def scaled(step, fraction):
@@ -652,7 +659,7 @@ class Pipeline:
         hints = self._hints(asset)
         if self._posed_biped(asset):
             hints["pose_guide"] = str(pose.guide_image(directory / "pose_guide.png"))
-            negative = ", ".join(p for p in (negative, POSE_NEGATIVE) if p)
+
         def render(seed: int) -> list[Path]:
             return self.adapters.image.render_candidates(
                 prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
@@ -672,6 +679,24 @@ class Pipeline:
             for number in bad:
                 paths[number - 1].unlink(missing_ok=True)
             redrawn += bad
+            # The judge said what the pictures got wrong: the prompt is written again with that in mind.
+            problems = self._judge_problems(candidate_checks, bad)
+            if problems and round_ == 0 and not upload:
+                progress("Rewriting the prompt with the judge's notes", 0.97)
+                notes = [n["note"] for n in asset.get("notes") or [] if n["stage"] == "prompt"]
+                try:
+                    rewritten = self.adapters.llm.expand(
+                        description=asset["description"], kind=asset["kind"], archetypes=load_archetypes(),
+                        archetype_override=asset.get("archetype_override") or asset.get("archetype"),
+                        slot=asset.get("slot"), weapon_class=asset.get("weapon_class"),
+                        notes=[*notes, "The last pictures had these problems, avoid them: " + "; ".join(problems)],
+                        model=self._text_model(settings))
+                    expansion = {**expansion, "prompt": rewritten["prompt"],
+                                 "negative_prompt": rewritten.get("negative_prompt") or expansion.get("negative_prompt")}
+                    prompt, negative = prompts(expansion)
+                    stage_log.append("Rewrote the prompt from the judge's notes: " + "; ".join(problems))
+                except Exception:  # noqa: BLE001 - the redraw goes on with the old prompt
+                    log.warning("rewriting the prompt failed", exc_info=True)
             paths = render(seed_of(asset["id"], attempt) + 1000 * (round_ + 1))
         if redrawn:
             stage_log.append(f"Redrew {len(redrawn)} candidate{'s' if len(redrawn) > 1 else ''} that failed the "
@@ -681,6 +706,46 @@ class Pipeline:
                 "base_model": settings["base_model"], "loras": loras, "attempt": attempt,
                 "log": stage_log, "candidates": [self._rel(asset["id"], p) for p in paths],
                 "pose_check": self._pose_check(asset, paths)}
+
+    @staticmethod
+    def _text_model(settings: dict) -> str | None:
+        """The language model the asset's profile picked (an LM Studio id), or None for the default."""
+        return (settings.get("text_model") or "").strip() or None
+
+    @staticmethod
+    def _judge_problems(candidate_checks: list[dict], numbers: list[int]) -> list[str]:
+        """What the judge said the given candidates got wrong (unique, in order)."""
+        found: list[str] = []
+        for entry in candidate_checks:
+            if entry["candidate"] in numbers:
+                for c in entry["checks"]:
+                    if c["id"] == "match" and c["status"] != qc.PASS and ": " in c["detail"]:
+                        found += [p.strip() for p in c["detail"].split(": ", 1)[1].split(";") if p.strip()]
+        return list(dict.fromkeys(found))[:6]
+
+    def _mesh_tool(self, settings: dict):
+        """The image-to-3D adapter of the profile's mesh model."""
+        model = (settings.get("mesh") or {}).get("model") or "hunyuan3d-2.1"
+        tool = MESH_MODELS.get(model, MESH_MODELS["hunyuan3d-2.1"])["tool"]
+        return tool, self.adapters.meshes.get(tool) or self.adapters.mesh
+
+    def _judge_mesh(self, asset: dict, settings: dict, source: Path, mesh_glb: Path, directory: Path,
+                    progress) -> dict | None:
+        """Auto mode's judge at gate 2: the mesh rendered from three sides, compared with the picture."""
+        render = getattr(self.adapters.blender, "render_views", None)
+        judge = getattr(self.adapters.llm, "judge_mesh", None)
+        if render is None or judge is None:
+            return None
+        try:
+            views = render(mesh_glb=mesh_glb, out_dir=directory / "judge", progress=progress)
+            found = judge(picture=source, views=views, description=asset["description"], kind=asset["kind"],
+                          model=self._text_model(settings))
+        except Exception:  # noqa: BLE001 - gate 2 goes on without the judge
+            log.warning("judging the mesh of %s failed", asset["id"], exc_info=True)
+            return None
+        if found is None:
+            return None
+        return {**found, "views": [self._rel(asset["id"], v) for v in views]}
 
     @staticmethod
     def _pair(asset: dict) -> bool:
@@ -727,32 +792,112 @@ class Pipeline:
     # ---- autopilot -------------------------------------------------------------------
 
     def autopilot(self, asset_id: str) -> None:
-        """With autopilot on, approves the gate the asset waits at when its checks found nothing that
-        failed (gate 1: the best candidate). Otherwise it stops there for the user, and says why."""
+        """Auto mode. With autopilot on, the gate the asset waits at is decided by its checks, the
+        judge's included (does the picture match the description, does the mesh look like the picture):
+
+        * gate 1: the best candidate (fewest problems, then the judge's score); none usable: redraw
+          with the judge's notes (``AUTO_REDRAWS`` times), then stop.
+        * gate 2: approve; something failed: rebuild the mesh with a new seed (``AUTO_MESH_RETRIES``),
+          then build it from the next-best picture (``AUTO_PICTURES`` in all), then redraw gate 1.
+        * gate 3: approve (export) only with ``autopilot_export``; otherwise stop there for the user.
+          A failed check stops it too.
+        """
         asset = self.db.get("assets", asset_id)
         if not asset or not asset.get("autopilot") or asset["status"] != "waiting":
             return
         gate = asset["gate"]
         outputs = asset.get("outputs") or {}
-        candidate = None
+        auto = dict(asset.get("auto") or {})
         if gate == 1:
             ranked = sorted(outputs.get("prompt", {}).get("candidate_checks") or [],
-                            key=lambda c: (qc.ORDER[c["status"]], c["candidate"]))
+                            key=lambda c: (qc.ORDER[c["status"]], -self._match(c), c["candidate"]))
             usable = [c for c in ranked if c["status"] != qc.FAIL]
             if not usable:
-                self._autopilot_stop(asset, gate, "every candidate failed its checks")
+                checks = outputs.get("prompt", {}).get("candidate_checks") or []
+                problems = self._judge_problems(checks, [c["candidate"] for c in checks])
+                if auto.get("redraws", 0) < AUTO_REDRAWS:
+                    self._autopilot_redraw(asset, auto, "every candidate failed its checks", problems)
+                else:
+                    self._autopilot_stop(asset, gate, "every candidate failed its checks, after a redraw")
                 return
             candidate = usable[0]["candidate"]
-            reason = f"picked candidate {candidate} ({'all checks passed' if usable[0]['status'] == qc.PASS else 'checks: look'})"
-        else:
-            checks = outputs.get({2: "mesh", 3: "rig"}[gate], {}).get("checks") or []
-            failed = [c for c in checks if c["status"] == qc.FAIL]
-            if failed:
-                self._autopilot_stop(asset, gate, "; ".join(f"{c['label']}: {c['detail']}" for c in failed))
-                return
-            reason = "checks passed" if qc.worst(checks) == qc.PASS else "checks: look, nothing failed"
-        self._autopilot_log(asset, gate, "approved", reason)
-        self.approve(asset_id, gate, candidate)
+            score = self._match(usable[0])
+            reason = (f"picked candidate {candidate}"
+                      + (f" (judge {score}/10)" if score >= 0 else "")
+                      + ("" if usable[0]["status"] == qc.PASS else ", checks: look"))
+            self.db.update("assets", asset_id, {"auto": {**auto, "ranking": [c["candidate"] for c in usable],
+                                                         "tried": [candidate], "mesh_retries": 0}})
+            self._autopilot_log(asset, gate, "approved", reason)
+            self.approve(asset_id, gate, candidate)
+            return
+
+        checks = outputs.get({2: "mesh", 3: "rig"}[gate], {}).get("checks") or []
+        failed = [c for c in checks if c["status"] == qc.FAIL]
+        why = "; ".join(f"{c['label']}: {c['detail']}" for c in failed)
+        if gate == 2 and failed:
+            tried = list(auto.get("tried") or [asset.get("chosen_candidate")])
+            left = [c for c in auto.get("ranking") or [] if c not in tried]
+            if auto.get("mesh_retries", 0) < AUTO_MESH_RETRIES:
+                self.db.update("assets", asset_id, {"auto": {**auto, "mesh_retries": auto.get("mesh_retries", 0) + 1}})
+                self._autopilot_log(asset, gate, "rebuilt", f"{why}; building the mesh again with a new seed")
+                self.redo(asset_id, "mesh", f"Autopilot: {why}")
+            elif left and len(tried) < AUTO_PICTURES:
+                self.db.update("assets", asset_id, {"chosen_candidate": left[0],
+                                                    "auto": {**auto, "tried": [*tried, left[0]], "mesh_retries": 0}})
+                self._autopilot_log(asset, gate, "rebuilt", f"{why}; building the mesh from candidate {left[0]}")
+                self.redo(asset_id, "mesh", f"Autopilot: {why}")
+            elif auto.get("redraws", 0) < AUTO_REDRAWS:
+                problems = (outputs.get("mesh", {}).get("judge") or {}).get("problems") or []
+                self._autopilot_redraw(asset, auto, f"no picture gave a good mesh ({why})", problems)
+            else:
+                self._autopilot_stop(asset, gate, why)
+            return
+        if failed:
+            self._autopilot_stop(asset, gate, why)
+            return
+        if gate == 3 and not asset.get("autopilot_export"):
+            self._autopilot_log(asset, gate, "stopped", "everything passed; exporting is yours (or turn on export "
+                                                        "in autopilot)")
+            self.update(asset_id, step="Autopilot finished: ready for you at gate 3")
+            return
+        self._autopilot_log(asset, gate, "approved",
+                            "checks passed" if qc.worst(checks) == qc.PASS else "checks: look, nothing failed")
+        self.approve(asset_id, gate)
+
+    @staticmethod
+    def _match(candidate: dict) -> int:
+        """The judge's 0-10 score of a gate 1 candidate (-1 when it wasn't judged)."""
+        for c in candidate.get("checks") or []:
+            if c["id"] == "match":
+                try:
+                    return int(c["detail"].split("/", 1)[0])
+                except ValueError:
+                    return -1
+        return -1
+
+    def _autopilot_redraw(self, asset: dict, auto: dict, reason: str, problems: list[str]) -> None:
+        self.db.update("assets", asset["id"], {"auto": {**auto, "redraws": auto.get("redraws", 0) + 1,
+                                                        "tried": [], "mesh_retries": 0}})
+        note = "Autopilot: " + reason + (". Avoid: " + "; ".join(problems) if problems else "")
+        self._autopilot_log(asset, asset["gate"], "redrew", f"{reason}; drawing new pictures")
+        self.redo(asset["id"], "prompt", note)
+
+    def redo(self, asset_id: str, stage: str, note: str | None = None) -> dict:
+        """Runs ``stage`` again from scratch, whatever gate the asset waits at (auto mode): the note
+        is kept like a rejection's, the attempt goes up (new seeds) and later outputs are dropped."""
+        asset = self._require(asset_id)
+        notes = list(asset.get("notes") or [])
+        if note:
+            notes.append({"gate": GATE_OF_STAGE.get(stage), "stage": stage, "note": note, "at": now()})
+        attempts = dict(asset.get("attempts") or {})
+        attempts[stage] = attempts.get(stage, 1) + 1
+        outputs = {k: v for k, v in (asset.get("outputs") or {}).items() if k not in STAGES[STAGES.index(stage):]}
+        changes = {"notes": notes, "attempts": attempts, "outputs": outputs}
+        if stage == "prompt":
+            changes["chosen_candidate"] = None
+        self.db.update("assets", asset_id, changes)
+        self._clear_from(asset_id, stage)
+        return self.enqueue(asset_id, stage)
 
     def _autopilot_log(self, asset: dict, gate: int, action: str, reason: str) -> None:
         entries = [*(asset.get("autopilot_log") or []), {"gate": gate, "action": action, "reason": reason, "at": now()}]
@@ -762,9 +907,9 @@ class Pipeline:
         self._autopilot_log(asset, gate, "stopped", reason)
         self.update(asset["id"], step=f"Autopilot stopped at gate {gate}: {reason}")
 
-    def set_autopilot(self, asset_id: str, value: bool) -> dict:
+    def set_autopilot(self, asset_id: str, value: bool, export: bool | None = None) -> dict:
         self._require(asset_id)
-        self.update(asset_id, autopilot=bool(value))
+        self.update(asset_id, autopilot=bool(value), **({} if export is None else {"autopilot_export": bool(export)}))
         if value:
             self.autopilot(asset_id)
         return self._require(asset_id)
@@ -775,7 +920,9 @@ class Pipeline:
         result = []
         for number, path in enumerate(paths, start=1):
             try:
-                vision = self.adapters.llm.inspect(image=Path(path), kind=asset["kind"])
+                vision = self.adapters.llm.inspect(image=Path(path), kind=asset["kind"],
+                                                   description=asset["description"],
+                                                   model=self._text_model(self.asset_settings(asset)))
             except Exception:  # noqa: BLE001 - the checks go on without the vision model
                 log.warning("the vision check of %s failed", path, exc_info=True)
                 vision = None
@@ -828,10 +975,11 @@ class Pipeline:
         delight = bool(settings.get("delight", True))
         quality = dict(settings.get("mesh") or {})
         views = None
-        if quality.get("multi_view") and not (raw.is_file() and texture.is_file()):
+        tool, mesher = self._mesh_tool(settings)
+        if quality.get("multi_view") and tool == "hunyuan3d" and not (raw.is_file() and texture.is_file()):
             views = self._mesh_views(asset, source, directory, lambda s, f: progress(s, 0.25 * f))
         if not (raw.is_file() and texture.is_file()):
-            self.adapters.mesh.image_to_mesh(
+            mesher.image_to_mesh(
                 image=source, texture_size=int(settings["budgets"]["texture"][asset["kind"]]), out_path=raw,
                 progress=lambda s, f: progress(s, (0.25 if views else 0.0) + (0.25 if views else 0.5) * f),
                 hints=self._hints(asset), delight=delight, quality=quality,
@@ -839,14 +987,18 @@ class Pipeline:
         triangles = int(settings["budgets"]["triangles"][asset["kind"]])
         result = self.adapters.blender.cleanup_and_lods(
             raw_mesh=raw, kind=asset["kind"], triangles=triangles, lod_ratios=list(settings["budgets"]["lod_ratios"]),
-            out_dir=directory, progress=lambda s, f: progress(s, 0.5 + 0.5 * f),
+            out_dir=directory, progress=lambda s, f: progress(s, 0.5 + 0.4 * f),
             remove_floaters=bool(quality.get("remove_floaters", True)), height=asset.get("height"))
+        progress("Judging the mesh against the picture", 0.9)
+        judge = self._judge_mesh(asset, settings, source, result["glb"], directory,
+                                 lambda s, f: progress(s, 0.9 + 0.1 * f))
         return {"glb": self._rel(asset["id"], result["glb"]), "texture": self._rel(asset["id"], texture),
                 "triangle_budget": triangles, "lods": result["lods"], "delight": delight, "quality": quality,
                 "removed": result.get("removed"), "stats": result.get("stats"),
                 "views": sorted(self._rel(asset["id"], p) for p in (directory / "views").glob("*.png")
                                 if p.stem in HUNYUAN_VIEW) if quality.get("multi_view") else None,
-                "checks": qc.mesh_checks(result.get("stats"), asset["kind"], pair=self._pair(asset))}
+                "judge": judge,
+                "checks": qc.mesh_checks(result.get("stats"), asset["kind"], pair=self._pair(asset), judge=judge)}
 
     def _stage_rig(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)

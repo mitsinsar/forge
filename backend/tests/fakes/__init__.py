@@ -58,16 +58,23 @@ class FakeLLM(FakeBase):
     """Keyword rules standing in for Qwen's structured JSON answer."""
 
     inspections: list = []  # answers ``inspect`` gives first (then a clean one); tests set them
+    mesh_judgements: list = []  # answers ``judge_mesh`` gives first (then None: not judged)
+    seen_models: list = []  # the language model asked for by each call
 
-    def inspect(self, *, image, kind):
+    def inspect(self, *, image, kind, description=None, model=None):
+        self.seen_models.append(model)
         if self.inspections:
             return self.inspections.pop(0)
         return {"held_item": False, "held_item_name": None, "figures": 1, "whole_body": True}
 
-    def vary(self, *, description, kind, count):
+    def judge_mesh(self, *, picture, views, description, kind, model=None):
+        return self.mesh_judgements.pop(0) if self.mesh_judgements else None
+
+    def vary(self, *, description, kind, count, model=None):
         return [f"{description}, variant {n}" for n in range(1, count + 1)]
 
-    def expand(self, *, description, kind, archetypes, archetype_override, slot, weapon_class, notes):
+    def expand(self, *, description, kind, archetypes, archetype_override, slot, weapon_class, notes, model=None):
+        self.seen_models.append(model)
         self._wait()
         text = _words(description)
         if kind in ("gear", "weapon"):
@@ -215,6 +222,15 @@ class FakeRig(FakeBase):
 
 
 class FakeBlender(FakeBase):
+    def render_views(self, *, mesh_glb, out_dir, progress, size=384):
+        from PIL import Image  # noqa: PLC0415
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        paths = [out_dir / f"{v}.png" for v in ("front", "side", "back")]
+        for path in paths:
+            Image.new("RGB", (32, 32), (150, 150, 150)).save(path)
+        return paths
+
     def cleanup_and_lods(self, *, raw_mesh, kind, triangles, lod_ratios, out_dir, progress, remove_floaters=True,
                          height=None):
         self.last_height = height
