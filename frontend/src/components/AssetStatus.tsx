@@ -26,6 +26,8 @@ export function StatusBadge({ asset }: { asset: StatusFields }) {
       return <Badge tone="success">Done</Badge>;
     case "failed":
       return <Badge tone="danger">Failed</Badge>;
+    case "stopped":
+      return <Badge>Stopped · {STAGE_LABEL[asset.stage]}</Badge>;
   }
 }
 

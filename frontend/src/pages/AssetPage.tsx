@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api, localUrl, type Asset, type Stage } from "../api/client";
 import { keys, useApiMutation, useAsset, useProfiles, useProjects } from "../api/queries";
 import { AssetStatus } from "../components/AssetStatus";
-import { AssetDetails, DoneView, FailedView, Gate1, Gate2, Gate3 } from "../components/Gates";
+import { AssetDetails, DoneView, FailedView, Gate1, Gate2, Gate3, StoppedView } from "../components/Gates";
 import { KIND_LABEL, STAGE_LABEL, label } from "../labels";
 import {
   Badge,
@@ -47,6 +47,7 @@ function steps(asset: Asset, viewing: Stage | null, setViewing: (stage: Stage | 
         state = "failed";
         sub = "Failed";
       } else if (asset.status === "waiting") sub = `Gate ${asset.gate}`;
+      else if (asset.status === "stopped") sub = "Stopped";
       else if (asset.status === "running") sub = `${Math.round(asset.progress * 100)}%`;
       else sub = "Queued";
     }
@@ -78,15 +79,32 @@ function PastStep({ asset, stage, godot, onBack }: { asset: Asset; stage: Stage;
 }
 
 function Working({ asset }: { asset: Asset }) {
+  const stop = useApiMutation(() => api.stop(asset.id), [keys.assets, keys.asset(asset.id)]);
+  const queued = asset.status === "queued";
   return (
-    <Card title={asset.status === "queued" ? "Queued" : `Working on ${STAGE_LABEL[asset.stage].toLowerCase()}`}>
+    <Card
+      title={queued ? "Queued" : `Working on ${STAGE_LABEL[asset.stage].toLowerCase()}`}
+      actions={
+        <Button size="sm" variant="danger" busy={stop.isPending} disabled={!queued && !asset.autopilot}
+                title={queued ? "Take it off the queue" : "Finish this step, then wait at the gate"}
+                onClick={() => stop.mutate(undefined)}>
+          Stop
+        </Button>
+      }
+    >
       <Stack gap={3}>
         <AssetStatus asset={asset} />
-        {asset.status === "queued" && (
+        {queued ? (
           <Text muted small>
-            The GPU runs one job at a time; this starts when the worker is free.
+            The GPU runs one job at a time; this starts when the worker is free. Stop takes it off the queue.
+          </Text>
+        ) : (
+          <Text muted small>
+            A running step can't be cut off safely; it finishes and waits at its gate.
+            {asset.autopilot ? " Stop turns autopilot off so nothing continues after it." : ""}
           </Text>
         )}
+        <ErrorNotice error={stop.error} />
       </Stack>
     </Card>
   );
@@ -128,6 +146,7 @@ export function AssetPage() {
   else if (a.status === "waiting" && a.gate === 3) body = <Gate3 key={viewKey} asset={a} godot={godot} />;
   else if (a.status === "done") body = <DoneView asset={a} />;
   else if (a.status === "failed") body = <FailedView asset={a} />;
+  else if (a.status === "stopped") body = <StoppedView asset={a} />;
   else body = <Working asset={a} />;
 
   return (

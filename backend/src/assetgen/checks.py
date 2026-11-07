@@ -87,6 +87,13 @@ def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict |
         status = PASS if arms["arms_clear"] else FAIL if arms["arms_clear"] is False else WARN
         checks.append(check("arms", "Arms clear of the body", status,
                             f"{round(arms['clear_share'] * 100)} % of the chest-to-hip rows show a gap"))
+    if kind in ("gear", "weapon"):  # the item alone: anyone wearing or holding it ends up in the mesh
+        if vision is None:
+            checks.append(check("alone", "The item alone", WARN, "Not checked: the text model can't see images"))
+        else:
+            person = vision.get("person")
+            checks.append(check("alone", "The item alone", FAIL if person else PASS,
+                                "A person or mannequin is in the picture" if person else "No one wears or holds it"))
     if kind in ("hero", "monster", "boss"):
         if vision is None:
             checks.append(check("props", "Empty hands", WARN, "Not checked: the text model can't see images"))

@@ -49,7 +49,7 @@ Rules for every prompt:
 - The subject stands alone, whole and uncropped, in the chosen archetype's rest pose, exactly as written above.
 - Neutral plain light-grey background, no scenery, no props, no text.
 - Flat, even, shadowless studio lighting; no dramatic light, no rim light, no motion blur.
-- Full body in frame, centred, facing the camera.
+- The whole subject in frame, centred, facing the camera.
 - Describe shapes, materials and colours concretely in one paragraph of comma-separated phrases.
 - The negative prompt lists what would break the mesh: extra limbs, cropped parts, dynamic pose,
   busy background, cast shadows, several subjects.
@@ -57,7 +57,10 @@ Rules for every prompt:
 
 KIND_RULES = {
     "gear": """This asset is GEAR (an armour or clothing piece for the "{slot}" slot{slot_note}).
-- Show the piece alone, worn by a plain featureless grey mannequin in the biped rest pose; nothing else is worn.
+- Show the piece alone as an object, with no person, mannequin, body, head or limbs: nobody wears it and
+  nothing is inside it. A helmet stands upright facing the camera; a chest piece (with its pauldrons) is
+  shown front-on on its own; gloves, gauntlets and boots are a matching pair side by side; leg armour is
+  both legs' pieces side by side. Only this one piece: no other armour, no weapon.
 - "archetype" is always "biped". "slot" is one of: {slots}. "weapon_class" is null.""",
     "weapon": """This asset is a WEAPON ({weapon_note}).
 - Show the weapon alone, side-on, upright and centred, with no hands, no character and no stand.
@@ -74,6 +77,10 @@ KIND_RULES = {
 
 # Always added to the negative prompt of heroes, monsters and bosses: held items and loose
 # effects become junk geometry in the mesh, and side or three-quarter views reconstruct worse.
+# Always added to the negative prompt of gear and weapons: Hunyuan3D builds whatever is drawn, so a
+# person wearing or holding the item becomes part of the mesh.
+ITEM_NEGATIVE = ("person, human, mannequin, body, head, face, arms, legs, hands, character wearing it, "
+                 "full suit of armor, knight, stand, display stand")
 CREATURE_NEGATIVE = ("weapon, sword, shield, staff, holding an object, props, particles, floating debris, "
                      "smoke, aura")
 # Bipeds are reconstructed best from the front; other rest poses name their own view.
@@ -202,7 +209,8 @@ class QwenLLM:
                     '{"held_item": <true if a character holds or carries a weapon, shield, staff, bag or any other '
                     'object, else false>, "held_item_name": <what it holds, or null>, "figures": <how many '
                     'separate figures or objects are shown>, "whole_body": <true if nothing is cut off by the '
-                    'image edges>}')
+                    'image edges>, "person": <true if a person, mannequin, body, head or limbs are shown, even '
+                    'only wearing or holding something, else false>}')
         messages = [{"role": "user", "content": [
             {"type": "text", "text": question},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}}]}]
@@ -211,7 +219,8 @@ class QwenLLM:
         except (LLMError, ValueError):
             return None
         return {"held_item": bool(answer.get("held_item")), "held_item_name": answer.get("held_item_name"),
-                "figures": int(answer.get("figures") or 1), "whole_body": bool(answer.get("whole_body", True))}
+                "figures": int(answer.get("figures") or 1), "whole_body": bool(answer.get("whole_body", True)),
+                "person": bool(answer.get("person"))}
 
     def vary(self, *, description, kind, count):
         text = (f"Write {count} different variations of this {kind} description for a game asset generator. "
@@ -265,6 +274,8 @@ class QwenLLM:
                                             else "one_handed")
         negative = data.get("negative_prompt")
         negative = negative.strip() if isinstance(negative, str) else ""
+        if kind in ("gear", "weapon"):
+            negative = ", ".join(p for p in (negative, ITEM_NEGATIVE) if p)
         if kind not in ("gear", "weapon"):
             extra = (CREATURE_NEGATIVE, BIPED_NEGATIVE if archetype == "biped" else "")
             negative = ", ".join(p for p in (negative, *extra) if p)
