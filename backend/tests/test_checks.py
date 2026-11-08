@@ -273,6 +273,20 @@ def test_a_mesh_the_judge_rejects_is_rebuilt_then_made_from_the_next_picture(cli
     assert looks["status"] == qc.PASS and ready["outputs"]["mesh"]["judge"]["match"] == 9
 
 
+def test_unloading_can_be_turned_off(client, tmp_path):
+    llm = client.app.state.pipeline.adapters.llm
+    llm.unloads.clear()
+    image = client.app.state.pipeline.adapters.image
+    freed = image.unload_count
+    project = make_project(client, "unity", tmp_path / "g")
+    profile = client.post("/api/profiles", json={"name": "Big GPU", "one_model_at_a_time": False}).json()
+    assert profile["one_model_at_a_time"] is False
+    created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "archetype": "biped",
+                                               "description": "a rogue", "profile_id": profile["id"]}).json()
+    wait_for(client, created["id"], "waiting", gate=1)
+    assert llm.unloads == [] and image.unload_count == freed
+
+
 def test_the_profiles_language_model_writes_and_judges(client, tmp_path):
     llm = client.app.state.pipeline.adapters.llm
     llm.seen_models.clear()

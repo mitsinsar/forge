@@ -69,6 +69,8 @@ export interface ProfileSettings {
   base_model: BaseModel;
   /** The language model (LM Studio id) that writes prompts and judges results; "" is the default. */
   text_model?: string;
+  /** Unload the language model while drawing and the image model after (one model on the GPU). */
+  one_model_at_a_time?: boolean;
   prompt_suffix: string;
   negative_prompt: string;
   loras: LoraRef[];

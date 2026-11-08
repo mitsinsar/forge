@@ -666,12 +666,15 @@ class Pipeline:
         def render(seed: int) -> list[Path]:
             # One model on the GPU at a time: the language model makes way for the image model, and
             # the image model for the judge (each loads again by itself when it is next used).
-            self.adapters.llm.unload(self._text_model(settings))
+            alone = settings.get("one_model_at_a_time", True)
+            if alone:
+                self.adapters.llm.unload(self._text_model(settings))
             drawn = self.adapters.image.render_candidates(
                 prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
                 reference_images=references, count=int(settings["candidates"]), seed=seed,
                 out_dir=directory, progress=scaled, hints=hints, log=stage_log.append)
-            self.adapters.image.unload()
+            if alone:
+                self.adapters.image.unload()
             return drawn
 
         paths = render(seed_of(asset["id"], attempt))

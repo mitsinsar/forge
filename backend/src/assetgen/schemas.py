@@ -94,6 +94,9 @@ class ProfileSettings(Strict):
     text_model: str | None = Field(None, max_length=200, description="The language model (an LM Studio model id) "
                                                                      "that writes prompts and judges results; empty: "
                                                                      "the default from settings.")
+    one_model_at_a_time: bool | None = Field(None, description="Unload the language model while the pictures are "
+                                                                "drawn and the image model after them, so only "
+                                                                "one model holds the GPU.")
     prompt_suffix: str | None = None
     negative_prompt: str | None = None
     loras: list[LoraRef] | None = None

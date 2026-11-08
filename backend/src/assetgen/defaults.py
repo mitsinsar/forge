@@ -110,6 +110,9 @@ FIT_BY_HEIGHT = {"biped", "blob"}
 PROFILE_DEFAULTS: dict = {
     "base_model": "sdxl",
     "text_model": "",  # empty: settings.qwen_model
+    # Unload the language model while pictures are drawn, and the image model after (each loads
+    # again by itself): slower model switches, but nothing spills out of the GPU's memory.
+    "one_model_at_a_time": True,
     "prompt_suffix": "game asset, full body, plain background, flat even lighting",
     "negative_prompt": "cropped, blurry, text, watermark, multiple characters, cast shadow",
     "loras": [],

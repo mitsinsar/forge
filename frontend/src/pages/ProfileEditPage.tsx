@@ -39,6 +39,7 @@ function toInput(source: Profile | Meta["profile_defaults"], name: string, proje
     project_id: projectId,
     base_model: source.base_model,
     text_model: source.text_model ?? "",
+    one_model_at_a_time: source.one_model_at_a_time ?? true,
     prompt_suffix: source.prompt_suffix,
     negative_prompt: source.negative_prompt,
     loras: source.loras.map((l) => ({ ...l, weight: Math.round(l.weight * 100) / 100 })),
@@ -303,6 +304,7 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
         </Card>
 
         <Card title="Models" subtitle="Which local model does each step. Only installed ones work; the Setup page says how to add the others.">
+          <Stack gap={4}>
           <Grid cols={3}>
             <Field label="Language model" hint="Writes the image prompts and judges pictures and meshes (it needs vision).">
               {(id) => (
@@ -341,6 +343,12 @@ function ProfileForm({ initial, profile, meta }: { initial: ProfileInput; profil
               )}
             </Field>
           </Grid>
+          <Checkbox
+            label="One model on the GPU at a time: unload the language model while the pictures are drawn, and the image model after them. Turn off when both fit in your GPU's memory together; switching is then quicker."
+            checked={form.one_model_at_a_time ?? true}
+            onChange={(on) => set("one_model_at_a_time", on)}
+          />
+          </Stack>
         </Card>
 
         <Card title="Pictures" subtitle="How the gate 1 pictures are drawn.">

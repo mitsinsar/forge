@@ -216,10 +216,12 @@ attack.
 
 ### Models
 
-One model holds the GPU at a time: before gate 1's pictures are drawn the language model is
+With `one_model_at_a_time` (a profile setting, on by default) one model holds the GPU at a
+time: before gate 1's pictures are drawn the language model is
 unloaded from LM Studio (`QwenLLM.unload`, through LM Studio's `/api/v1/models` API; only Forge's
 model), and after them ComfyUI frees the image model, so the judge loads again on its own (about
-10 s). On a 32 GB card Gemma (16 GB) beside Qwen-Image (about 21 GB) spilled into system memory.
+10 s). On a 32 GB card Gemma (16 GB) beside Qwen-Image (about 21 GB) spilled into system memory;
+turn it off when both fit, and switching is quicker.
 
 Each style profile picks the model of each step (`GET /api/models` lists them and which are
 installed; the profile page shows the same):
