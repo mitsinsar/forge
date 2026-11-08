@@ -403,6 +403,8 @@ export interface Asset {
     chosen_image: string | null;
     mesh: string | null;
     texture: string | null;
+    /** The square inventory icon (transparent PNG; a glove or boot shows the pair). */
+    icon?: string | null;
     animated: string | null;
     zip: string | null;
     export_files: string[];

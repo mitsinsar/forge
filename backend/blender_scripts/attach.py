@@ -13,8 +13,10 @@ Called by ``rig_animate.py`` when its arguments have ``attach``::
 
 **Gear** (``fit_gear``): the item (LOD0) is scaled and moved onto its slot's region of the body
 (the ``slot_<slot>`` vertex group) by their bounds: centred, covering the region's width and
-depth (head, chest, legs, cape) or its length along the limb (hands, feet: each side on its own;
-one glove or boot is mirrored for the other side); a helmet's top sits just above the head's. A
+depth (head, chest, cape), each leg's height (legs) or its length along the limb (hands, feet).
+Gloves, boots and leg armour are drawn as one right piece and mirrored for the left (a drawn pair
+is split instead); a boot is first turned so its toe points like the foot. A helmet's top sits
+just above the head's. A
 Shrinkwrap in "outside" mode with an offset
 then pushes out whatever still sits inside the body, so nothing clips at rest. The body's weights
 are copied onto it (Data Transfer, nearest face; a helmet follows the head bone only), and the body faces it covers (a ray from the
@@ -179,6 +181,35 @@ def fit_along(item, region: list[Vector], up: Vector) -> float:
     return scale
 
 
+def toe_direction(points: list[Vector]) -> Vector:
+    """The way a foot (or boot) points, flat on the ground: the long axis of its lowest part, towards
+    the end away from the leg (or shaft) above it."""
+    low_z = min(p.z for p in points)
+    height = max(p.z for p in points) - low_z
+    bottom = [p for p in points if p.z < low_z + 0.3 * height]
+    top = [p for p in points if p.z > low_z + 0.6 * height] or points
+    flat = [Vector((p.x, p.y, 0.0)) for p in bottom]
+    centre, axis = principal_axis(flat)
+    axis = Vector((axis.x, axis.y, 0.0))
+    if axis.length < 1e-6:
+        return Vector((0.0, -1.0, 0.0))
+    axis.normalize()
+    above = sum(top, Vector()) / len(top)
+    if axis.dot(Vector((centre.x - above.x, centre.y - above.y, 0.0))) < 0:
+        axis = -axis
+    return axis
+
+
+def turn_toe(item, region: list[Vector]) -> float:
+    """Turns ``item`` about the vertical so its toe points like the foot region's, whatever angle the
+    boot was drawn from. Returns the turn in degrees."""
+    have, want = toe_direction(world_points(item)), toe_direction(region)
+    angle = math.atan2(have.x * want.y - have.y * want.x, have.dot(want))
+    centre = sum(world_points(item), Vector()) / len(item.data.vertices)
+    place(item, Matrix.Translation(centre) @ Matrix.Rotation(angle, 4, "Z") @ Matrix.Translation(-centre))
+    return math.degrees(angle)
+
+
 def split_pair(item) -> list:
     """A pair (gloves, boots) as two objects, left and right of the item's middle; a single piece
     stays one object."""
@@ -203,9 +234,16 @@ def split_pair(item) -> list:
         islands.append(island)
     left = {i for island in islands
             if sum(bm.verts[j].co.x for j in island) / len(island) > centre_x for i in island}
+    xs = [(item.matrix_world @ v.co).x for v in bm.verts]
     bm.free()
     total = len(item.data.vertices)
     if not (0.25 * total < len(left) < 0.75 * total):
+        return [item]
+    # Two pieces side by side, not one piece in loose parts (a boot's shaft and foot overlap sideways).
+    right_x = [x for i, x in enumerate(xs) if i not in left]
+    left_x = [xs[i] for i in left]
+    width = max(xs) - min(xs)
+    if min(left_x) < max(right_x) - 0.05 * width:
         return [item]
     other = item.copy()
     other.data = item.data.copy()
@@ -314,7 +352,7 @@ RIGID = {"head": "Head"}  # slots whose item moves with one bone only (a helmet 
 SLOT_FIT = {  # how each slot's item is placed on its region
     "head": ("box", (0, 1), "top"),
     "chest": ("box", (0, 1), "centre"),
-    "legs": ("box", (2,), "centre"),
+    "legs": ("pair", (2,), "centre"),  # one leg's armour, mirrored for the other leg
     "cape": ("box", (0, 2), "back"),
     "hands": ("pair", None, "along"),
     "feet": ("pair", (0, 1), "bottom"),
@@ -334,6 +372,8 @@ def fit_gear(item, body, arm, slot: str) -> dict:
             pieces.append(mirror_copy(item))
         scales = []
         for piece, side in zip(pieces, ("r", "l")):
+            if slot == "feet":
+                turn_toe(piece, sides[side])
             if anchor == "along":
                 hand = arm.data.bones[f"hand_{side}"]
                 scales.append(fit_along(piece, sides[side], arm.matrix_world.to_3x3() @ (hand.tail_local - hand.head_local)))

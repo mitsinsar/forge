@@ -11,8 +11,10 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.162.0",
     "numpy>=2.5.4",
+    "onnxruntime>=1.31.1",
     "pillow>=13.0.0",
     "python-multipart>=0.0.33",
+    "rembg>=2.0.87",
     "uvicorn[standard]>=0.54.0",
     "websockets>=15",
 ]

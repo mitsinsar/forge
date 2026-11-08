@@ -22,6 +22,10 @@ def _no_local_config(tmp_path, monkeypatch):
     # Gate 1 redraws candidates that fail their checks; the placeholders often do, so tests that
     # don't test it turn it off (test_checks.py turns it on).
     monkeypatch.setenv("ASSETGEN_AUTO_RETRIES", "0")
+    # rembg runs a segmentation model on the CPU (and downloads it the first time): the tests use the
+    # flood-fill cut-out, which is quick and the same on every machine.
+    from assetgen import imaging
+    monkeypatch.setattr(imaging, "_rembg_cutout", lambda image: None)
 
 
 def fake_adapters(**real) -> Adapters:

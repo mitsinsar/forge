@@ -1,8 +1,10 @@
 """Image and GLB-texture helpers shared by the mesh and Blender adapters.
 
 * ``remove_background`` cuts the subject out of a preview candidate. The
-  candidates are rendered on a plain neutral background, so a flood fill from
-  the border is enough; ``rembg`` is used instead when it is installed.
+  candidates are rendered on a plain background: ``rembg`` (a segmentation
+  model; it downloads its weights, about 170 MB, the first time) cuts it out,
+  with a flood fill from the border as the fallback when it is missing.
+* ``make_icon`` makes the square inventory icon (a pair slot shows both pieces).
 * ``delight`` evens out the brightness that Hunyuan3D bakes into its albedo
   (light from above, shade underneath), keeping the colours and fine detail.
 * ``read_glb`` / ``write_glb`` / ``albedo_image`` / ``replace_image`` read the
@@ -31,7 +33,7 @@ EDGE_SAMPLES = 64  # flood-fill seeds per image edge
 
 def _rembg_cutout(image: Image.Image) -> Image.Image | None:
     try:
-        from rembg import remove  # optional: uv pip install "rembg[gpu]"
+        from rembg import remove  # a dependency; the fallback keeps a broken install working
     except ImportError:
         return None
     return remove(image).convert("RGBA")
@@ -82,6 +84,39 @@ def remove_background(image: Image.Image) -> tuple[Image.Image, str]:
     if cut is not None:
         return cut, "flood"
     return image.convert("RGBA"), "none"
+
+
+# ---- item icons ---------------------------------------------------------------
+
+ICON_SIZE = 512
+ICON_MARGIN = 0.08  # of the icon's side, all round
+PAIR_OVERLAP = 0.12  # of a piece's width: how far the two pieces of a pair overlap in the icon
+
+
+def make_icon(picture: Path, out_path: Path, *, pair: bool = False, size: int = ICON_SIZE) -> Path:
+    """A square inventory icon with a transparent background from the asset's picture, cropped to
+    the subject. For a pair slot (one glove or boot drawn) its mirror image stands beside it, so the
+    icon shows the pair the game gets."""
+    with Image.open(picture) as image:
+        cut, _ = remove_background(image)
+    box = cut.getchannel("A").point(lambda a: 255 if a > 16 else 0).getbbox() or (0, 0, *cut.size)
+    piece = cut.crop(box)
+    if pair:
+        w, h = piece.size
+        step = round(w * (1 - PAIR_OVERLAP))
+        both = Image.new("RGBA", (step + w, h), (0, 0, 0, 0))
+        both.alpha_composite(piece.transpose(Image.Transpose.FLIP_LEFT_RIGHT), (step, 0))
+        both.alpha_composite(piece, (0, 0))  # the drawn (right) piece in front
+        piece = both
+    inner = round(size * (1 - 2 * ICON_MARGIN))
+    scale = inner / max(piece.size)
+    piece = piece.resize((max(1, round(piece.width * scale)), max(1, round(piece.height * scale))), Image.LANCZOS)
+    icon = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    icon.alpha_composite(piece, ((size - piece.width) // 2, (size - piece.height) // 2))
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    icon.save(out_path)
+    return out_path
 
 
 # ---- de-lighting ------------------------------------------------------------

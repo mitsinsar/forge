@@ -391,7 +391,8 @@ def asset_view(request: Request, asset: dict) -> dict:
         "candidates": [url(c) for c in prompt.get("candidates", [])],
         "chosen_image": url(prompt["candidates"][asset["chosen_candidate"] - 1])
         if asset.get("chosen_candidate") and prompt.get("candidates") else None,
-        "mesh": url(mesh.get("glb")), "texture": url(mesh.get("texture")), "animated": url(rig.get("glb")),
+        "mesh": url(mesh.get("glb")), "texture": url(mesh.get("texture")),
+        "icon": url(mesh.get("icon")), "animated": url(rig.get("glb")),
         "zip": str(request.url_for("download_asset", asset_id=asset["id"])) if export.get("zip") else None,
         "export_files": [url(f"{export['folder']}/{f}") for f in export.get("files", [])] if export else [],
         "thumb": str(request.url_for("read_asset_thumb", asset_id=asset["id"])) if prompt.get("candidates") else None,

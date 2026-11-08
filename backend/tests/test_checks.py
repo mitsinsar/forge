@@ -207,23 +207,42 @@ def test_an_item_with_a_person_in_the_picture_fails(tmp_path):
     assert not any(c["id"] == "alone" for c in qc.candidate_checks(picture, kind="hero", posed_biped=False, vision=None))
 
 
-def test_pairs_may_be_two_objects_and_two_mesh_parts():
-    two = {"pieces": 2, "largest_piece_share": 0.51, "open_edges": 0, "edges": 100}
-    assert next(c for c in qc.mesh_checks(two, "gear", pair=True) if c["id"] == "pieces")["status"] == qc.PASS
-    assert next(c for c in qc.mesh_checks(two, "gear") if c["id"] == "pieces")["status"] == qc.FAIL
-    junk = {"pieces": 6, "largest_piece_share": 0.3, "open_edges": 0, "edges": 100}
-    assert next(c for c in qc.mesh_checks(junk, "gear", pair=True) if c["id"] == "pieces")["status"] == qc.FAIL
-
-
-def test_a_pair_of_gloves_is_one_subject(tmp_path):
+def test_a_pair_slot_wants_one_piece_drawn(tmp_path):
+    """Gloves and boots are drawn one at a time (the other is mirrored): two in the picture fail."""
     from test_pose import figure
-    picture = figure(tmp_path / "gloves.png", arms_out=True)
-    pair = qc.candidate_checks(picture, kind="gear", posed_biped=False, pair=True,
-                               vision={"figures": 2, "whole_body": True, "person": False})
-    assert next(c for c in pair if c["id"] == "figures")["status"] == qc.PASS
-    three = qc.candidate_checks(picture, kind="gear", posed_biped=False, pair=True,
-                                vision={"figures": 3, "whole_body": True, "person": False})
-    assert next(c for c in three if c["id"] == "figures")["status"] == qc.FAIL
+    picture = figure(tmp_path / "glove.png", arms_out=True)
+    one = qc.candidate_checks(picture, kind="gear", posed_biped=False, pair=True,
+                              vision={"figures": 1, "whole_body": True, "person": False})
+    assert next(c for c in one if c["id"] == "figures")["status"] == qc.PASS
+    two = qc.candidate_checks(picture, kind="gear", posed_biped=False, pair=True,
+                              vision={"figures": 2, "whole_body": True, "person": False})
+    figures = next(c for c in two if c["id"] == "figures")
+    assert figures["status"] == qc.FAIL and "mirror" in figures["detail"]
+    glued = {"pieces": 2, "largest_piece_share": 0.51, "open_edges": 0, "edges": 100}
+    assert next(c for c in qc.mesh_checks(glued, "gear") if c["id"] == "pieces")["status"] == qc.FAIL
+
+
+def test_icon_of_a_pair_shows_the_piece_and_its_mirror(tmp_path):
+    from PIL import Image, ImageDraw
+
+    from assetgen import imaging
+    picture = tmp_path / "boot.png"
+    image = Image.new("RGB", (200, 200), (200, 200, 200))
+    ImageDraw.Draw(image).rectangle((60, 40, 100, 160), fill=(90, 50, 20))  # the shaft
+    ImageDraw.Draw(image).rectangle((60, 140, 140, 160), fill=(90, 50, 20))  # the foot, toe to the right
+    image.save(picture)
+    single = Image.open(imaging.make_icon(picture, tmp_path / "one.png", size=128))
+    pair = Image.open(imaging.make_icon(picture, tmp_path / "two.png", pair=True, size=128))
+    assert single.size == pair.size == (128, 128) and single.mode == pair.mode == "RGBA"
+    assert single.getpixel((0, 0))[3] == 0  # transparent background
+    # The pair is wider than tall, so it fills the width; the single boot does not.
+    def width(icon):
+        box = icon.getchannel("A").getbbox()
+        return box[2] - box[0]
+    assert width(pair) > width(single)
+    # Both halves hold a piece.
+    alpha = pair.getchannel("A")
+    assert alpha.crop((0, 0, 40, 128)).getbbox() and alpha.crop((88, 0, 128, 128)).getbbox()
 
 
 def test_autopilot_stops_at_gate_3_unless_export_is_on(client, tmp_path, monkeypatch):

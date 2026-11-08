@@ -132,6 +132,21 @@ def test_gear_and_weapon(client, tmp_path):
     assert "attack_cleave" in [c["name"] for c in sword["outputs"]["rig"]["clips"]]
 
 
+def test_boots_are_drawn_one_at_a_time_and_exported_with_a_pair_icon(client, tmp_path):
+    project = make_project(client, "godot", tmp_path / "boots")
+    boots = client.post("/api/assets", json={"project_id": project["id"], "kind": "gear", "slot": "feet",
+                                             "name": "Iron Boots", "description": "iron boots"}).json()
+    boots = run_to_done(client, boots["id"])
+    prompt = boots["outputs"]["prompt"]
+    assert prompt["prompt"].startswith("one single right boot")
+    assert "two boots" in prompt["negative_prompt"]
+    icon = boots["outputs"]["export"]["icon"]
+    assert icon == "Iron_Boots_icon.png" and icon in boots["outputs"]["export"]["files"]
+    from PIL import Image
+    with Image.open(tmp_path / "boots" / "generated" / "gear" / "Iron_Boots" / icon) as image:
+        assert image.mode == "RGBA" and image.size == (512, 512)
+
+
 def test_unity_weapon_writes_prefab(client, tmp_path):
     game = tmp_path / "unity"
     project = make_project(client, "unity", game)

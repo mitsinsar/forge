@@ -330,6 +330,28 @@ def test_a_box_helmet_lands_on_the_head_with_the_bodys_weights(tmp_path):
 
 
 @needs_blender
+def test_one_boot_drawn_side_on_is_turned_and_mirrored_onto_both_feet(tmp_path):
+    mesh = tmp_path / "boot.glb"
+    builder = GlbBuilder()
+    material = builder.add_material("albedo", (0.4, 0.25, 0.1))
+    parts = [Part((0, 0.2, 0), (0.05, 0.2, 0.05), 2),  # the shaft (glTF: Y up)
+             Part((0.09, 0.03, 0), (0.14, 0.03, 0.05), 1)]  # the foot, toe sideways (+X): drawn side-on
+    builder.add_node("LOD0", builder.add_mesh("LOD0", build_mesh(parts, 3000), material))
+    builder.write(mesh)
+    result, gltf, binary = _attach(tmp_path, mesh, {"kind": "gear", "slot": "feet"})
+
+    names = [n.get("name") for n in gltf["nodes"]]
+    gear = gltf["nodes"][names.index("gear")]
+    points = _accessor(gltf, binary, gltf["meshes"][gear["mesh"]]["primitives"][0]["attributes"]["POSITION"])
+    sides = [points[points[:, 0] < 0], points[points[:, 0] > 0]]
+    assert all(len(side) > 500 for side in sides)  # a boot on each foot, not one split in two
+    for side in sides:
+        foot = side[side[:, 1] < side[:, 1].min() + 0.03]  # the sole
+        across, along = np.ptp(foot[:, 0]), np.ptp(foot[:, 2])  # glTF Z is Blender's -Y, along the foot
+        assert along > 1.5 * across  # turned to point forward, not sideways
+
+
+@needs_blender
 def test_a_stick_weapons_grip_is_at_its_thin_end(tmp_path):
     mesh = tmp_path / "stick.glb"
     builder = GlbBuilder()

@@ -11,6 +11,17 @@ BASE_MODELS = ("qwen-image", "sdxl", "flux")
 CAMERA_PRESETS = ("side", "three_quarter", "topdown_4", "topdown_8")
 SPRITE_LOOKS = ("hd", "pixel")
 GEAR_SLOTS = ("head", "chest", "legs", "hands", "feet", "cape")
+# Slots worn on both sides (gloves, boots, leg armour): only the right piece is drawn and built, and
+# it is mirrored for the left when fitted. A drawn pair comes out of Hunyuan3D as one glued shape.
+PAIR_SLOTS = ("hands", "feet", "legs")
+PAIR_PIECES = {  # what is drawn for each pair slot
+    "hands": "one single right glove or gauntlet, upright with the fingers pointing up, the back of the hand "
+             "towards the viewer",
+    "feet": "one single right boot, standing upright on its sole, seen from the front at a slight angle",
+    "legs": "the armour of one single right leg (thigh guard, knee cop and shin guard as one piece), "
+            "standing upright, seen from the front",
+}
+PAIR_NEGATIVE = "pair, two of them, both left and right, matching set, second piece, two boots, two gloves"
 WEAPON_CLASSES = ("one_handed", "two_handed", "bow", "staff", "shield")
 WEAPON_SOCKETS = ("weapon_r", "weapon_l")
 

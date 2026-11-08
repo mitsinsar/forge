@@ -59,8 +59,10 @@ KIND_RULES = {
     "gear": """This asset is GEAR (an armour or clothing piece for the "{slot}" slot{slot_note}).
 - Show the piece alone as an object, with no person, mannequin, body, head or limbs: nobody wears it and
   nothing is inside it. A helmet stands upright facing the camera; a chest piece (with its pauldrons) is
-  shown front-on on its own; gloves, gauntlets and boots are a matching pair side by side; leg armour is
-  both legs' pieces side by side. Only this one piece: no other armour, no weapon.
+  shown front-on on its own. Gloves, gauntlets, boots and leg armour are drawn as ONE single piece, the
+  right one, never a pair (the left one is its mirror image, made later): a glove upright with its
+  fingers up, a boot standing on its sole, one leg's armour upright. Only this one piece: no other
+  armour, no weapon.
 - "archetype" is always "biped". "slot" is one of: {slots}. "weapon_class" is null.""",
     "weapon": """This asset is a WEAPON ({weapon_note}).
 - Show the weapon alone, side-on, upright and centred, with no hands, no character and no stand.

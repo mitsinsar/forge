@@ -168,14 +168,23 @@ which reruns only the clean-up). The template skeleton is scaled to the mesh, so
 
 ### Gear and weapons (rig stage, gate 3)
 
+Every mesh stage also writes `mesh/icon.png`, a 512 px square inventory icon with a transparent
+background cut from the picture by `rembg` (`imaging.make_icon`; the first icon downloads its
+model, about 170 MB); a pair slot shows the piece beside its
+mirror image. It is in the export as `<name>_icon.png` and at gate 2 (`urls.icon`).
+
 Gear and weapons are rigged on the biped base body (`blender_scripts/attach.py`, called by
 `rig_animate.py`); the preview GLB has the mannequin, the item and the armature playing walk and an
 attack.
 
 * **Gear**: the item is scaled and moved onto its slot region by their bounds: centred over the
-  region's width and depth (head, chest, cape: the cape against the back, from the shoulders), the
-  legs' height, each foot (bottom on the ground) or each forearm and hand (turned along it). A pair
-  is split into its two pieces; a single glove or boot is mirrored for the other side. A Shrinkwrap
+  region's width and depth (head, chest, cape: the cape against the back, from the shoulders), each
+  leg's height, each foot (bottom on the ground) or each forearm and hand (turned along it).
+  **Pairs** (gloves, boots, leg armour: `PAIR_SLOTS`) are drawn as one right piece (`PAIR_PIECES`
+  starts the prompt and `PAIR_NEGATIVE` keeps the second one out; gate 1 fails a picture with two),
+  because Hunyuan3D builds a drawn pair as one glued shape. The fit mirrors it for the left side
+  (an older picture of a pair whose halves sit side by side is split instead), and turns each boot
+  about the vertical so its toe points like the foot, whatever angle it was drawn from. A Shrinkwrap
   (outside mode, 8 mm offset) pushes out whatever is still inside the body, so nothing clips at
   rest. The body's weights are copied onto it (Data Transfer, nearest face); a helmet follows the
   head bone alone. The body faces it covers (a ray along the face's normal meets the item within

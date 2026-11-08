@@ -27,12 +27,12 @@ from .archetypes import ARCHETYPES_DIR, get_archetype, load_archetypes
 from .config import Settings
 from .db import Database, now
 from .defaults import (AUTO_MESH_RETRIES, AUTO_PICTURES, AUTO_REDRAWS, EXAMPLE_LORA_WEIGHT, EXAMPLE_NEGATIVE,
-                       EXAMPLE_SEED, EXAMPLE_SUBJECTS, MESH_MODELS)
+                       EXAMPLE_SEED, EXAMPLE_SUBJECTS, MESH_MODELS, PAIR_NEGATIVE, PAIR_PIECES)
 from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_DOLL_FRAMING, GATE_OF_STAGE, PROFILE_SETTING_KEYS,
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import checks as qc
-from . import exporters, grips, pose, variants, watchdog
+from . import exporters, grips, imaging, pose, variants, watchdog
 
 log = logging.getLogger("assetgen.pipeline")
 
@@ -644,8 +644,10 @@ class Pipeline:
         loras = self._profile_loras(settings)
 
         def prompts(expansion: dict) -> tuple[str, str]:
-            text = self.with_triggers(", ".join(p for p in (expansion["prompt"], suffix) if p), loras)
-            neg = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt")) if p)
+            piece = PAIR_PIECES[asset["slot"]] if self._pair(asset) else ""
+            text = self.with_triggers(", ".join(p for p in (piece, expansion["prompt"], suffix) if p), loras)
+            neg = ", ".join(p for p in (expansion.get("negative_prompt"), settings.get("negative_prompt"),
+                                        PAIR_NEGATIVE if piece else "") if p)
             if self._posed_biped(asset):
                 neg = ", ".join(p for p in (neg, POSE_NEGATIVE) if p)
             return text, neg
@@ -739,7 +741,8 @@ class Pipeline:
             return None
         try:
             views = render(mesh_glb=mesh_glb, out_dir=directory / "judge", progress=progress)
-            found = judge(picture=source, views=views, description=asset["description"], kind=asset["kind"],
+            found = judge(picture=source, views=views, description=self._judged_description(asset),
+                          kind=asset["kind"],
                           model=self._text_model(settings))
         except Exception:  # noqa: BLE001 - gate 2 goes on without the judge
             log.warning("judging the mesh of %s failed", asset["id"], exc_info=True)
@@ -750,8 +753,16 @@ class Pipeline:
 
     @staticmethod
     def _pair(asset: dict) -> bool:
-        """Gear made as a matching pair (gloves, boots, leg pieces): two objects and two mesh parts."""
+        """Gear worn on both sides (gloves, boots, leg armour): one piece is drawn and built, and it is
+        mirrored for the other side when fitted."""
         return asset["kind"] == "gear" and asset.get("slot") in qc.PAIR_SLOTS
+
+    def _judged_description(self, asset: dict) -> str:
+        """The description the judge holds pictures and meshes to: for a pair slot, one piece of it."""
+        if not self._pair(asset):
+            return asset["description"]
+        return (f"{asset['description']} (drawn as {PAIR_PIECES[asset['slot']]}: only one piece is wanted, "
+                "the other side is its mirror image, made later)")
 
     @staticmethod
     def _posed_biped(asset: dict) -> bool:
@@ -922,15 +933,14 @@ class Pipeline:
         for number, path in enumerate(paths, start=1):
             try:
                 vision = self.adapters.llm.inspect(image=Path(path), kind=asset["kind"],
-                                                   description=asset["description"],
+                                                   description=self._judged_description(asset),
                                                    model=self._text_model(self.asset_settings(asset)))
             except Exception:  # noqa: BLE001 - the checks go on without the vision model
                 log.warning("the vision check of %s failed", path, exc_info=True)
                 vision = None
             try:
                 found = qc.candidate_checks(Path(path), kind=asset["kind"], posed_biped=self._posed_biped(asset),
-                                            pair=self._pair(asset),
-                                                 vision=vision)
+                                            pair=self._pair(asset), vision=vision)
             except OSError:
                 found = [qc.check("image", "Readable image", qc.FAIL, "The image could not be read")]
             result.append({"candidate": number, "checks": found, "status": qc.worst(found)})
@@ -993,13 +1003,15 @@ class Pipeline:
         progress("Judging the mesh against the picture", 0.9)
         judge = self._judge_mesh(asset, settings, source, result["glb"], directory,
                                  lambda s, f: progress(s, 0.9 + 0.1 * f))
+        icon = imaging.make_icon(source, directory / "icon.png", pair=self._pair(asset))
         return {"glb": self._rel(asset["id"], result["glb"]), "texture": self._rel(asset["id"], texture),
+                "icon": self._rel(asset["id"], icon),
                 "triangle_budget": triangles, "lods": result["lods"], "delight": delight, "quality": quality,
                 "removed": result.get("removed"), "stats": result.get("stats"),
                 "views": sorted(self._rel(asset["id"], p) for p in (directory / "views").glob("*.png")
                                 if p.stem in HUNYUAN_VIEW) if quality.get("multi_view") else None,
                 "judge": judge,
-                "checks": qc.mesh_checks(result.get("stats"), asset["kind"], pair=self._pair(asset), judge=judge)}
+                "checks": qc.mesh_checks(result.get("stats"), asset["kind"], judge=judge)}
 
     def _stage_rig(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)
@@ -1193,6 +1205,10 @@ class Pipeline:
                                   mirrored=CAMERA_MIRRORED[preset], look=render["look"])
             result.update(directions=CAMERA_DIRECTIONS[preset], frame_size=frame_size, layer=layer,
                           sprites_dir="sprites")
+        icon = self.asset_dir(asset["id"]) / mesh["icon"] if mesh.get("icon") else None
+        if icon is not None and icon.is_file():  # the inventory icon (a pair shows both pieces)
+            shutil.copy2(icon, build / f"{name}_icon.png")
+            result["icon"] = f"{name}_icon.png"
         relative = self._export_parent(engine, asset["kind"]) / name
         progress("Zipping", 0.9)
         zip_path = exporters.make_zip(build, directory / f"{name}.zip", name)

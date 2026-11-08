@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from .defaults import PAIR_SLOTS  # noqa: F401 - used by the pipeline as qc.PAIR_SLOTS
 from .pose import arms_check, silhouette, touches_edge
 
 PASS, WARN, FAIL = "pass", "warn", "fail"
@@ -54,8 +55,8 @@ def _shapes(mask: np.ndarray) -> list[int]:
     return sorted(sizes, reverse=True)
 
 
-# Gear slots made as a matching pair (two gloves, two boots, two leg pieces): two objects are right.
-PAIR_SLOTS = ("hands", "feet", "legs")
+# Gear worn on both sides (gloves, boots, leg armour, ``PAIR_SLOTS``): one piece is drawn, and
+# mirrored when fitted.
 
 
 def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict | None,
@@ -70,12 +71,10 @@ def candidate_checks(path: Path, *, kind: str, posed_biped: bool, vision: dict |
     # The vision model counts figures; the silhouette splits on low contrast (dark clothes on a
     # dark background), so on its own it only warns.
     seen = int(vision.get("figures", 1)) if vision else None
-    allowed = 2 if pair else 1
-    if seen is not None and seen > allowed:
-        checks.append(check("figures", "One subject" if not pair else "One pair",
-                            FAIL, f"{seen} separate figures or objects"))
-    elif pair:
-        checks.append(check("figures", "One pair", PASS, f"{seen or pieces} piece{'s' if (seen or pieces) != 1 else ''}"))
+    if seen is not None and seen > 1:
+        checks.append(check("figures", "One piece" if pair else "One subject", FAIL,
+                            f"{seen} pieces: draw only one, the other side is its mirror image" if pair
+                            else f"{seen} separate figures or objects"))
     elif seen is None and pieces > 1:
         checks.append(check("figures", "One subject", WARN, f"The outline falls into {pieces} parts"))
     else:
@@ -124,12 +123,11 @@ def judged(check_id: str, label: str, score: int, problems: list[str] | None) ->
     return check(check_id, label, status, detail)
 
 
-def mesh_checks(stats: dict | None, kind: str = "hero", pair: bool = False, judge: dict | None = None) -> list[dict]:
+def mesh_checks(stats: dict | None, kind: str = "hero", judge: dict | None = None) -> list[dict]:
     if not stats:
         return [judged("looks", "Looks like the picture", judge["match"], judge.get("problems"))] if judge else []
     share = float(stats.get("largest_piece_share", 1.0))
-    # A pair is two main pieces: count only what is outside both (taking the second about the size of the first).
-    loose = (0.0 if int(stats.get("pieces", 1)) <= 2 else max(0.0, 1 - 2 * share)) if pair else 1 - share
+    loose = 1 - share
     open_share = stats.get("open_edges", 0) / max(stats.get("edges", 1), 1)
     floor = float(stats.get("floor_ratio", 1.0))
     found = [check("floor", "No floor under the feet", FAIL if floor > 4 else WARN if floor > 2.5 else PASS,
@@ -137,10 +135,9 @@ def mesh_checks(stats: dict | None, kind: str = "hero", pair: bool = False, judg
                    "shadow, which tears when the character moves. Reject gate 1 for another image, or reject gate 2."
                    if floor > 2.5 else "The model stands on its own feet")] if kind in ("hero", "monster", "boss") else []
     return found + [
-        check("pieces", "One solid pair" if pair else "One solid piece",
+        check("pieces", "One solid piece",
               FAIL if loose > 0.25 else WARN if loose > 0.08 else PASS,
-              f"{stats.get('pieces', 1)} pieces; {round(loose * 100)} % of the vertices outside the main "
-              f"{'two' if pair else 'one'}"),
+              f"{stats.get('pieces', 1)} pieces; {round(loose * 100)} % of the vertices outside the main one"),
         check("holes", "Few holes", WARN if open_share > 0.03 else PASS,
               f"{round(open_share * 100, 1)} % of the edges border a hole"),
     ] + ([judged("looks", "Looks like the picture", judge["match"], judge.get("problems"))] if judge else [])

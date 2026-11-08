@@ -336,6 +336,7 @@ export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
   const [showImage, setShowImage] = useState(false);
   const url = localUrl(asset.urls?.mesh);
   const image = localUrl(asset.urls?.chosen_image);
+  const icon = localUrl(asset.urls?.icon);
   return (
     <Stack gap={4}>
     <Card
@@ -344,6 +345,14 @@ export function Gate2({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
       actions={
         image && (
           <>
+            {icon && (
+              <>
+                <Box width={56}>
+                  <Thumb src={icon} alt="Item icon" />
+                </Box>
+                <LinkButton href={icon} download>Icon</LinkButton>
+              </>
+            )}
             <Box width={56}>
               <Thumb src={image} alt="Picked preview (click to enlarge)" onClick={() => setShowImage(true)} />
             </Box>
