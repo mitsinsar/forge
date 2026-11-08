@@ -60,6 +60,11 @@ class FakeLLM(FakeBase):
     inspections: list = []  # answers ``inspect`` gives first (then a clean one); tests set them
     mesh_judgements: list = []  # answers ``judge_mesh`` gives first (then None: not judged)
     seen_models: list = []  # the language model asked for by each call
+    unloads: list = []  # the language model of each ``unload``
+
+    def unload(self, model=None):
+        FakeLLM.unloads.append(model)
+        return True
 
     def inspect(self, *, image, kind, description=None, model=None):
         self.seen_models.append(model)

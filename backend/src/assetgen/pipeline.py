@@ -664,10 +664,15 @@ class Pipeline:
             hints["pose_guide"] = str(pose.guide_image(directory / "pose_guide.png"))
 
         def render(seed: int) -> list[Path]:
-            return self.adapters.image.render_candidates(
+            # One model on the GPU at a time: the language model makes way for the image model, and
+            # the image model for the judge (each loads again by itself when it is next used).
+            self.adapters.llm.unload(self._text_model(settings))
+            drawn = self.adapters.image.render_candidates(
                 prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
                 reference_images=references, count=int(settings["candidates"]), seed=seed,
                 out_dir=directory, progress=scaled, hints=hints, log=stage_log.append)
+            self.adapters.image.unload()
+            return drawn
 
         paths = render(seed_of(asset["id"], attempt))
         # Candidates that fail their checks are redrawn with other seeds, a few rounds at most.

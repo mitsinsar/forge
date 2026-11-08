@@ -15,8 +15,8 @@ GEAR_SLOTS = ("head", "chest", "legs", "hands", "feet", "cape")
 # it is mirrored for the left when fitted. A drawn pair comes out of Hunyuan3D as one glued shape.
 PAIR_SLOTS = ("hands", "feet", "legs")
 PAIR_PIECES = {  # what is drawn for each pair slot
-    "hands": "one single right glove or gauntlet, upright with the fingers pointing up, the back of the hand "
-             "towards the viewer",
+    "hands": "one single right glove or gauntlet, open and flat, standing upright with all fingers straight, "
+             "together and pointing up, the back of the hand towards the viewer",
     "feet": "one single right boot, standing upright on its sole, seen from the front at a slight angle",
     "legs": "the armour of one single right leg (thigh guard, knee cop and shin guard as one piece), "
             "standing upright, seen from the front",

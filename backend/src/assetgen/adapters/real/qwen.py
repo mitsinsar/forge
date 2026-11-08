@@ -11,12 +11,15 @@ flag the reviewer sees.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import urllib.error
 import urllib.request
 
 from ...config import Settings
 from ...defaults import GEAR_SLOTS, WEAPON_CLASSES
+
+log = logging.getLogger(__name__)
 
 ATTEMPTS = 2  # one retry on an invalid reply
 
@@ -158,6 +161,27 @@ class QwenLLM:
         self.url = settings.qwen_url.rstrip("/") + "/chat/completions"
         self.model = settings.qwen_model
         self._format = 0  # index into RESPONSE_FORMATS; moves on when the server refuses one
+
+    def unload(self, model: str | None = None) -> bool:
+        """Unloads ``model`` (default: the settings') from LM Studio, so the image model and
+        Hunyuan3D get the GPU to themselves; LM Studio loads it again on the next call (about 10 s).
+        Needs LM Studio's REST API (``/api/v1/models``); any other server is left alone."""
+        wanted = model or self.model
+        base = self.url.rsplit("/chat/completions", 1)[0]
+        base = base[: -len("/v1")] if base.endswith("/v1") else base
+        try:
+            with urllib.request.urlopen(base + "/api/v1/models", timeout=10) as response:
+                listed = json.load(response).get("models", [])
+            instances = [i["id"] for m in listed if m.get("key") == wanted for i in m.get("loaded_instances") or []]
+            for instance in instances:
+                request = urllib.request.Request(base + "/api/v1/models/unload", method="POST",
+                                                 data=json.dumps({"instance_id": instance}).encode("utf-8"),
+                                                 headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(request, timeout=60).close()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            log.info("could not unload %s from %s: %s", wanted, base, exc)
+            return False
+        return bool(instances)
 
     def _post(self, messages: list[dict], model: str | None = None) -> str:
         while True:

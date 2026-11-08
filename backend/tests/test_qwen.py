@@ -34,6 +34,11 @@ class FakeQwen:
                 pass
 
             def do_GET(self):
+                if self.path == "/api/v1/models":  # LM Studio's own API: what is loaded
+                    self._json({"models": [{"type": "llm", "key": "qwen3:14b",
+                                            "loaded_instances": [{"id": "qwen3:14b"}]},
+                                           {"type": "llm", "key": "other", "loaded_instances": [{"id": "other"}]}]})
+                    return
                 self._json({"object": "list", "data": [{"id": "qwen3"}]})
 
             def do_POST(self):
@@ -284,3 +289,16 @@ def test_tools_report_paths(tmp_path, monkeypatch):
     tools = {t["tool"]: t for t in check_tools(settings)}
     assert tools["blender"]["ok"] is True
     assert tools["rig"]["ok"] is False and "UniRig not found" in tools["rig"]["detail"]
+
+
+def test_unload_frees_only_forges_model(fake_qwen, tmp_path):
+    server = fake_qwen(reply())
+    assert adapter_for(server, tmp_path).unload() is True
+    assert [(r["path"], r["body"]) for r in server.requests] == [
+        ("/api/v1/models/unload", {"instance_id": "qwen3:14b"})]  # someone else's model stays
+    assert adapter_for(server, tmp_path).unload("not-loaded") is False
+
+
+def test_unload_without_lm_studio_goes_on(tmp_path):
+    llm = QwenLLM(load_settings(data_dir=tmp_path, qwen_url="http://127.0.0.1:9/v1", qwen_model="m"))
+    assert llm.unload() is False

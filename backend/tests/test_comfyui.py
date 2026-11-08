@@ -271,11 +271,11 @@ def test_gate_one_shows_comfyui_candidates_and_mesh_stage_unloads(fake_comfy, tm
         assert node_of(workflow, "IPAdapterAdvanced") and len(server.uploads) == 1
         log = asset["outputs"]["prompt"]["log"]
         assert any("Painterly (0.6)" in line for line in log)
-        assert server.freed == []
+        assert server.freed == [{"unload_models": True, "free_memory": True}]  # after drawing: the judge gets the GPU
 
         client.post(f"/api/assets/{asset['id']}/gates/1/approve", json={"candidate": 2})
         wait_for(client, asset["id"], "waiting", gate=2)
-        assert server.freed == [{"unload_models": True, "free_memory": True}]
+        assert server.freed == [{"unload_models": True, "free_memory": True}] * 2  # and again before the mesh
         tools = {t["tool"]: t for t in client.get("/api/tools").json()}
         assert tools["image"]["ok"] is True
 

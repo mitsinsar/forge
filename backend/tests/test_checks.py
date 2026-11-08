@@ -276,12 +276,17 @@ def test_a_mesh_the_judge_rejects_is_rebuilt_then_made_from_the_next_picture(cli
 def test_the_profiles_language_model_writes_and_judges(client, tmp_path):
     llm = client.app.state.pipeline.adapters.llm
     llm.seen_models.clear()
+    llm.unloads.clear()
+    image = client.app.state.pipeline.adapters.image
+    freed = image.unload_count
     project = make_project(client, "unity", tmp_path / "g")
     profile = client.post("/api/profiles", json={"name": "Qwen judged", "text_model": "qwen3.6-35b-a3b"}).json()
     created = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero", "archetype": "biped",
                                                "description": "a rogue", "profile_id": profile["id"]}).json()
     wait_for(client, created["id"], "waiting", gate=1)
     assert llm.seen_models and set(llm.seen_models) == {"qwen3.6-35b-a3b"}
+    # The language model makes way for the pictures, and the image model for the judge.
+    assert llm.unloads == ["qwen3.6-35b-a3b"] and image.unload_count == freed + 1
     models = client.get("/api/models").json()
     assert {m["id"] for m in models["mesh"]} == {"hunyuan3d-2.1", "hunyuan3d-2-mini"}
     assert "sdxl" in {m["id"] for m in models["image"]}

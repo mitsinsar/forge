@@ -33,6 +33,10 @@ class LLMAdapter(Protocol):
     def vary(self, *, description: str, kind: str, count: int) -> list[str]:
         """``count`` different descriptions of the same kind of asset (for batches)."""
 
+    def unload(self, model: str | None = None) -> bool:
+        """Frees the language model's VRAM before the pictures are drawn (it loads again by itself
+        on the next call). True when something was unloaded."""
+
 
 class ImageAdapter(Protocol):
     """ComfyUI (Qwen-Image, SDXL or Flux per style profile)."""
