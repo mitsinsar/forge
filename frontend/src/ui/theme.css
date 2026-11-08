@@ -867,9 +867,25 @@ code,
 .media-card--static {
   cursor: default;
 }
-.media-card--selected {
+.media-card--selected,
+.media-card--selected:hover,
+.media-card--selected:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  box-shadow: 0 0 0 3px var(--accent);
+}
+.media-card--selected .media-card__picture::after {
+  content: "\2713";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: #1a1420;
+  font-weight: 700;
 }
 .media-card__picture {
   position: relative;

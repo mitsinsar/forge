@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, assetFileUrl, localUrl, type Asset, type AssetFilters, type AssetStatus, type Kind } from "../api/client";
 import { keys, useApiMutation, useAssets, useMeta, useProjects } from "../api/queries";
@@ -8,6 +9,8 @@ import {
   Badge,
   Box,
   Button,
+  Checkbox,
+  ConfirmDialog,
   EmptyState,
   ErrorNotice,
   Field,
@@ -81,6 +84,31 @@ export function AssetsPage() {
   const queued = (allAssets.data ?? []).filter((a) => a.status === "queued").length;
   const stopAll = useApiMutation(() => api.stopQueue(), [keys.assets]);
 
+  // Selecting: a click picks a card or row instead of opening it.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+  const shown = assets.data ?? [];
+  const picked = shown.filter((a) => selected.has(a.id));
+  const toggle = (id: string) =>
+    setSelected((now) => {
+      const next = new Set(now);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const stopSelecting = () => {
+    setSelecting(false);
+    setSelected(new Set());
+  };
+  const open = (id: string) => (selecting ? toggle(id) : navigate(`/asset/${id}`));
+  const remove = useApiMutation(
+    async (ids: string[]) => {
+      await Promise.all(ids.map((id) => api.deleteAsset(id)));
+    },
+    [keys.assets],
+  );
+
   return (
     <Stack gap={4}>
       <PageHeader
@@ -94,11 +122,47 @@ export function AssetsPage() {
                 Stop all queued ({queued})
               </Button>
             )}
+            {!!shown.length && (
+              <Button variant={selecting ? "secondary" : "ghost"} onClick={() => (selecting ? stopSelecting() : setSelecting(true))}>
+                {selecting ? "Done" : "Select"}
+              </Button>
+            )}
             <LinkButton to="/new" variant="primary">
               New asset
             </LinkButton>
           </Row>
         }
+      />
+      {selecting && (
+        <Row gap={3}>
+          <Text strong>{picked.length} selected</Text>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set(shown.map((a) => a.id)))}>
+            Select all ({shown.length})
+          </Button>
+          <Button size="sm" variant="ghost" disabled={!picked.length} onClick={() => setSelected(new Set())}>
+            Clear
+          </Button>
+          <Button size="sm" variant="danger" disabled={!picked.length} onClick={() => setConfirming(true)}>
+            Delete ({picked.length})
+          </Button>
+        </Row>
+      )}
+      <ConfirmDialog
+        open={confirming}
+        title={`Delete ${picked.length} asset${picked.length === 1 ? "" : "s"}?`}
+        body={`${picked.slice(0, 5).map((a) => a.name).join(", ")}${picked.length > 5 ? ` and ${picked.length - 5} more` : ""}. Their files go too (exports already copied into a game project stay there). This can't be undone.`}
+        confirmLabel={`Delete ${picked.length}`}
+        busy={remove.isPending}
+        error={remove.error}
+        onConfirm={() =>
+          remove.mutate(picked.map((a) => a.id), {
+            onSuccess: () => {
+              setConfirming(false);
+              stopSelecting();
+            },
+          })
+        }
+        onClose={() => setConfirming(false)}
       />
       <Row gap={3}>
         <Tabs
@@ -203,14 +267,20 @@ export function AssetsPage() {
                   {asset.autopilot && asset.status !== "done" && <Badge tone="info">Autopilot</Badge>}
                 </>
               }
-              onClick={() => navigate(`/asset/${asset.id}`)}
+              selected={selecting && selected.has(asset.id)}
+              onClick={() => open(asset.id)}
             />
           ))}
         </Grid>
       ) : (
-        <Table head={["Name", "Kind", "Project", "Status", "Updated"]}>
+        <Table head={[...(selecting ? [""] : []), "Name", "Kind", "Project", "Status", "Updated"]}>
           {assets.data.map((asset) => (
-            <TableRow key={asset.id} onClick={() => navigate(`/asset/${asset.id}`)}>
+            <TableRow key={asset.id} onClick={() => open(asset.id)}>
+              {selecting && (
+                <td onClick={(e) => e.stopPropagation()}>
+                  <Checkbox label="" checked={selected.has(asset.id)} onChange={() => toggle(asset.id)} />
+                </td>
+              )}
               <td>
                 <Stack gap={1}>
                   <Text strong>{asset.name}</Text>
