@@ -26,7 +26,7 @@ from . import delivery, storage, watchdog
 from .models import model_choices
 from .setup_guide import setup_report
 from .tools import check_tools
-from .schemas import (AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, AutopilotSet, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
+from .schemas import (Redo, AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, AutopilotSet, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
                       TrainingCandidate)
 
@@ -552,6 +552,14 @@ def delete_asset(request: Request, asset_id: str):
     if not pipeline_of(request).delete(asset_id):
         raise HTTPException(404, "asset not found")
     return Response(status_code=204)
+
+
+@router.post("/assets/{asset_id}/redo", tags=["assets"],
+             summary="Run a stage again from scratch (and every later one), also on a finished asset; "
+                     "edits like moved joints and the grip are kept")
+def redo_stage(request: Request, asset_id: str, body: Redo):
+    pipeline = pipeline_of(request)
+    return asset_view(request, _run(lambda: pipeline.redo(asset_id, body.stage, body.note)))
 
 
 @router.post("/assets/{asset_id}/gates/{gate}/approve", tags=["gates"],

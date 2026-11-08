@@ -147,6 +147,19 @@ def test_boots_are_drawn_one_at_a_time_and_exported_with_a_pair_icon(client, tmp
         assert image.mode == "RGBA" and image.size == (512, 512)
 
 
+def test_a_finished_hero_can_be_rigged_again(client, tmp_path):
+    project = make_project(client, "godot", tmp_path / "again")
+    hero = client.post("/api/assets", json={"project_id": project["id"], "kind": "hero",
+                                            "description": "a knight"}).json()
+    hero = run_to_done(client, hero["id"])
+    assert hero["outputs"].get("export")
+    again = client.post(f"/api/assets/{hero['id']}/redo", json={"stage": "rig"})
+    assert again.status_code == 200 and again.json()["status"] == "queued"
+    hero = wait_for(client, hero["id"], "waiting", gate=3)
+    assert hero["outputs"].get("rig") and not hero["outputs"].get("export")
+    assert hero["attempts"]["rig"] == 2
+
+
 def test_unity_weapon_writes_prefab(client, tmp_path):
     game = tmp_path / "unity"
     project = make_project(client, "unity", game)

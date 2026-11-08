@@ -193,6 +193,11 @@ class AutopilotSet(Strict):
     export: bool | None = Field(None, description="Also approve gate 3 (export) when everything passes.")
 
 
+class Redo(Strict):
+    stage: Literal["prompt", "mesh", "rig", "export"]
+    note: str | None = Field(None, max_length=2000, description="Kept like a rejection note.")
+
+
 class Approve(Strict):
     candidate: int | None = Field(None, ge=1, description="Gate 1: the picked candidate (1-based).")
 

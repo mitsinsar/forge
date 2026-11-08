@@ -906,6 +906,8 @@ class Pipeline:
         """Runs ``stage`` again from scratch, whatever gate the asset waits at (auto mode): the note
         is kept like a rejection's, the attempt goes up (new seeds) and later outputs are dropped."""
         asset = self._require(asset_id)
+        if asset["status"] in ("queued", "running"):
+            raise Conflict(f"asset is {asset['status']}; stop it first")
         notes = list(asset.get("notes") or [])
         if note:
             notes.append({"gate": GATE_OF_STAGE.get(stage), "stage": stage, "note": note, "at": now()})
