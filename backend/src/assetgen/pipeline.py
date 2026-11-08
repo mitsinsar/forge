@@ -46,6 +46,23 @@ HUNYUAN_VIEW = {"front": "front", "right": "right", "back": "back", "left": "lef
 POSE_NEGATIVE = "hands touching the legs, arms against the body, hands on hips, arms crossed"
 
 
+# The GPU model each stage starts with: ``llm`` (LM Studio), ``image`` (ComfyUI), ``mesh``
+# (Hunyuan3D) and ``rig`` (UniRig). A stage that uses a second model steps back into the queue
+# (``StepBack``) while other assets wait for the model on the GPU now, so a batch runs model by
+# model (every prompt, then every drawing, then every judging...) instead of swapping per asset.
+STAGE_MODEL = {"prompt": "llm", "mesh": "mesh", "rig": "rig", "export": None}
+
+
+class StepBack(Exception):
+    """A stage stops before a step on another model; it resumes from its files when that model's
+    turn comes (``needs``)."""
+
+    def __init__(self, needs: str, step: str):
+        super().__init__(step)
+        self.needs = needs
+        self.step = step
+
+
 class Conflict(Exception):
     """The asset is not in a state that allows the action (HTTP 409)."""
 
@@ -63,6 +80,7 @@ class Pipeline:
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
         self.current: str | None = None
+        self.loaded: str | None = None  # the model the worker last used (STAGE_MODEL's names)
 
     # ---- paths and settings -------------------------------------------------
 
@@ -137,7 +155,7 @@ class Pipeline:
 
     def enqueue(self, asset_id: str, stage: str, step: str = "Waiting for the worker") -> dict:
         asset = self.update(asset_id, status="queued", stage=stage, gate=None, step=step, progress=0.0,
-                            error=None, queued_at=now())
+                            error=None, queued_at=now(), needs=None)
         self._wake.set()
         return asset
 
@@ -313,11 +331,46 @@ class Pipeline:
             except asyncio.CancelledError:
                 pass
 
+    @staticmethod
+    def needs(asset: dict) -> str | None:
+        """The model a queued asset's next step runs on."""
+        return asset.get("needs") or STAGE_MODEL.get(asset["stage"])
+
+    def _waiting_for(self, model: str | None, besides: str) -> bool:
+        """Whether another queued asset's next step runs on ``model``."""
+        return model is not None and any(
+            a["id"] != besides and self.needs(a) == model for a in self.db.list("assets", status="queued"))
+
     def _next(self) -> tuple[str, dict] | None:
-        """The oldest queued asset stage or job (one worker: the GPU is never shared)."""
-        queued = [("asset", a) for a in self.db.list("assets", order="queued_at", status="queued")[:1]]
+        """The oldest queued asset stage whose next step runs on the model the GPU holds now; else the
+        oldest queued asset stage or job (one worker: the GPU is never shared)."""
+        assets = self.db.list("assets", order="queued_at", status="queued")
+        same = [a for a in assets if self.loaded and self.needs(a) == self.loaded]
+        if same:
+            return "asset", same[0]
+        queued = [("asset", a) for a in assets[:1]]
         queued += [("job", j) for j in self.db.list("jobs", order="queued_at", status="queued")[:1]]
         return min(queued, key=lambda item: item[1]["queued_at"]) if queued else None
+
+    def _use(self, model: str, settings: dict) -> None:
+        """Gets the GPU ready for a step on ``model``: with one model at a time, the others make way
+        (each loads again by itself when it is next used). Hunyuan3D never shares it with ComfyUI."""
+        before = self.loaded
+        if before == model:
+            return
+        alone = settings.get("one_model_at_a_time", True)
+        if model == "mesh" or (alone and model != "image" and before in (None, "image")):
+            self.adapters.image.unload()
+        if alone and model != "llm" and before in (None, "llm"):
+            self.adapters.llm.unload(self._text_model(settings))
+        self.loaded = model
+
+    def _turn(self, asset: dict, settings: dict, model: str, step: str) -> None:
+        """Before a step on ``model``: while other assets wait for the model the GPU holds now, this
+        one steps back into the queue (its files are kept); otherwise the GPU switches to ``model``."""
+        if self.loaded not in (None, model) and self._waiting_for(self.loaded, asset["id"]):
+            raise StepBack(model, step)
+        self._use(model, settings)
 
     async def _loop(self) -> None:
         while True:
@@ -387,6 +440,8 @@ class Pipeline:
         def progress(step: str, fraction: float) -> None:
             self._job_update(job_id, step=step, progress=max(0.0, min(1.0, float(fraction))))
 
+        if job["kind"].endswith("_examples"):  # they draw, then free ComfyUI
+            self.loaded = None
         try:
             result = await asyncio.to_thread(getattr(self, f"_job_{job['kind']}"), job, progress)
         except Exception as exc:  # noqa: BLE001 - reported on the job
@@ -535,6 +590,13 @@ class Pipeline:
         self.update(asset_id, status="running", step="Starting", progress=0.0, error=None)
         try:
             outputs = await asyncio.to_thread(self.run_stage, asset_id, stage)
+        except StepBack as back:  # another model's turn first: queued again, behind the others
+            if self.db.get("assets", asset_id) is None:
+                shutil.rmtree(self.asset_dir(asset_id), ignore_errors=True)
+            else:
+                self.update(asset_id, status="queued", needs=back.needs, queued_at=now(), progress=0.0,
+                            step=f"Waiting to {back.step} (the batch's other assets go first on this model)")
+            return
         except Exception as exc:  # noqa: BLE001 - every failure is reported on the asset
             if self.db.get("assets", asset_id) is None:  # deleted while it ran
                 shutil.rmtree(self.asset_dir(asset_id), ignore_errors=True)
@@ -611,6 +673,7 @@ class Pipeline:
             expansion_file.write_text(json.dumps(expansion, indent=2), encoding="utf-8")
         else:
             progress("Expanding the description", 0.0)
+            self._use("llm", settings)
             notes = [n["note"] for n in asset.get("notes") or [] if n["stage"] == "prompt"]
             expansion = self.adapters.llm.expand(
                 description=asset["description"], kind=asset["kind"], archetypes=load_archetypes(),
@@ -633,6 +696,7 @@ class Pipeline:
             progress("Using your image", 0.5)
             candidate = directory / "candidate_1.png"
             shutil.copy2(self.source_image(asset["id"]), candidate)
+            self._turn(asset, settings, "llm", "judge the picture")
             return {"source": "upload", "expansion": expansion, "prompt": "", "negative_prompt": "",
                     "base_model": None, "loras": [], "attempt": attempt, "log": [],
                     "candidates": [self._rel(asset["id"], candidate)],
@@ -664,25 +728,33 @@ class Pipeline:
             hints["pose_guide"] = str(pose.guide_image(directory / "pose_guide.png"))
 
         def render(seed: int) -> list[Path]:
-            # One model on the GPU at a time: the language model makes way for the image model, and
-            # the image model for the judge (each loads again by itself when it is next used).
-            alone = settings.get("one_model_at_a_time", True)
-            if alone:
-                self.adapters.llm.unload(self._text_model(settings))
-            drawn = self.adapters.image.render_candidates(
+            self._use("image", settings)
+            return self.adapters.image.render_candidates(
                 prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
                 reference_images=references, count=int(settings["candidates"]), seed=seed,
                 out_dir=directory, progress=scaled, hints=hints, log=stage_log.append)
-            if alone:
-                self.adapters.image.unload()
-            return drawn
 
-        paths = render(seed_of(asset["id"], attempt))
+        # The first drawing is kept (drawn.json), so a stage that steps back for the judge's turn
+        # does not draw again when it resumes.
+        drawn_file = directory / "drawn.json"
+        if drawn_file.is_file():
+            drawn = json.loads(drawn_file.read_text(encoding="utf-8"))
+            paths = [self.asset_dir(asset["id"]) / p for p in drawn["candidates"]]
+            stage_log += drawn["log"]
+        else:
+            self._turn(asset, settings, "image", "draw the pictures")
+            paths = render(seed_of(asset["id"], attempt))
+            drawn_file.write_text(json.dumps({"candidates": [self._rel(asset["id"], p) for p in paths],
+                                              "log": stage_log}, indent=2), encoding="utf-8")
         # Candidates that fail their checks are redrawn with other seeds, a few rounds at most.
         redrawn: list[int] = []
         retries = max(0, int(self.settings.auto_retries))
         for round_ in range(retries + 1):
             progress("Checking the candidates", 0.97)
+            if round_ == 0:
+                self._turn(asset, settings, "llm", "judge the pictures")
+            else:
+                self._use("llm", settings)
             candidate_checks = self._candidate_checks(asset, paths)
             bad = [c["candidate"] for c in candidate_checks if c["status"] == qc.FAIL]
             if not bad or round_ == retries:
@@ -739,6 +811,10 @@ class Pipeline:
         model = (settings.get("mesh") or {}).get("model") or "hunyuan3d-2.1"
         tool = MESH_MODELS.get(model, MESH_MODELS["hunyuan3d-2.1"])["tool"]
         return tool, self.adapters.meshes.get(tool) or self.adapters.mesh
+
+    def _judges_meshes(self) -> bool:
+        return (getattr(self.adapters.blender, "render_views", None) is not None
+                and getattr(self.adapters.llm, "judge_mesh", None) is not None)
 
     def _judge_mesh(self, asset: dict, settings: dict, source: Path, mesh_glb: Path, directory: Path,
                     progress) -> dict | None:
@@ -987,7 +1063,6 @@ class Pipeline:
 
     def _stage_mesh(self, asset: dict, directory: Path, progress) -> dict:
         settings = self.asset_settings(asset)
-        self.adapters.image.unload()  # the image model and Hunyuan3D never share the GPU
         chosen = self.stage_dir(asset["id"], "prompt") / f"candidate_{asset['chosen_candidate']}.png"
         source = directory / "input.png"
         shutil.copy2(chosen, source)
@@ -997,14 +1072,19 @@ class Pipeline:
         quality = dict(settings.get("mesh") or {})
         views = None
         tool, mesher = self._mesh_tool(settings)
-        if quality.get("multi_view") and tool == "hunyuan3d" and not (raw.is_file() and texture.is_file()):
+        built = raw.is_file() and texture.is_file()
+        if not built:
+            self._use("mesh", settings)
+        if quality.get("multi_view") and tool == "hunyuan3d" and not built:
             views = self._mesh_views(asset, source, directory, lambda s, f: progress(s, 0.25 * f))
-        if not (raw.is_file() and texture.is_file()):
+        if not built:
             mesher.image_to_mesh(
                 image=source, texture_size=int(settings["budgets"]["texture"][asset["kind"]]), out_path=raw,
                 progress=lambda s, f: progress(s, (0.25 if views else 0.0) + (0.25 if views else 0.5) * f),
                 hints=self._hints(asset), delight=delight, quality=quality,
                 **({"views": {HUNYUAN_VIEW[v]: p for v, p in views.items() if v != "front"}} if views else {}))
+        if self._judges_meshes():
+            self._turn(asset, settings, "llm", "judge the mesh")
         triangles = int(settings["budgets"]["triangles"][asset["kind"]])
         result = self.adapters.blender.cleanup_and_lods(
             raw_mesh=raw, kind=asset["kind"], triangles=triangles, lod_ratios=list(settings["budgets"]["lod_ratios"]),
@@ -1033,6 +1113,7 @@ class Pipeline:
             # Fitted on the base body, which is the template itself: nothing to predict.
             skeleton = {"joints": archetype["joints"], "fit_score": 1.0, "fallback": False}
         else:
+            self._use("rig", settings)
             skeleton = self.adapters.rig.predict_skeleton(
                 mesh=mesh, archetype=archetype, out_dir=directory, progress=lambda s, f: progress(s, 0.3 * f))
             skeleton = {**skeleton, "overrides": dict(asset.get("joint_overrides") or {}),

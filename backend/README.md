@@ -217,11 +217,21 @@ attack.
 ### Models
 
 With `one_model_at_a_time` (a profile setting, on by default) one model holds the GPU at a
-time: before gate 1's pictures are drawn the language model is
-unloaded from LM Studio (`QwenLLM.unload`, through LM Studio's `/api/v1/models` API; only Forge's
-model), and after them ComfyUI frees the image model, so the judge loads again on its own (about
-10 s). On a 32 GB card Gemma (16 GB) beside Qwen-Image (about 21 GB) spilled into system memory;
-turn it off when both fit, and switching is quicker.
+time: when the worker moves to a step on another model (`Pipeline._use`), the one it used last
+makes way: the language model is unloaded from LM Studio (`QwenLLM.unload`, through LM Studio's
+`/api/v1/models` API; only Forge's model) and ComfyUI frees the image model (`POST /free`); each
+loads again on its own when it is next used (Gemma in about 10 s). On a 32 GB card Gemma (16 GB)
+beside Qwen-Image (about 21 GB) spilled into system memory; turn it off when both fit, and
+switching is quicker.
+
+Batches run model by model, so those switches happen a few times per batch, not per asset. Each
+queued asset knows the model its next step runs on (`needs`: `llm`, `image`, `mesh` or `rig`), and
+the worker takes the oldest one whose step runs on the model it used last. A stage that comes to a
+step on another model (the prompt stage: write → draw → judge; the mesh stage: build → judge)
+steps back into the queue (`StepBack`) while other assets wait for the current model, and resumes
+from its files when its model's turn comes (the first drawing is kept in `prompt/drawn.json`).
+Ten swords in auto mode: every prompt, then every drawing, then every judging, every mesh, every
+mesh judging. Redraws for failed candidates still run inline.
 
 Each style profile picks the model of each step (`GET /api/models` lists them and which are
 installed; the profile page shows the same):
@@ -622,7 +632,8 @@ mesh to the template skeleton and retargets the clips; see "UniRig" above.
 
 ## Jobs and files
 
-A single in-process worker runs one job (one stage of one asset) at a time, oldest first. Each
+A single in-process worker runs one job (one stage of one asset) at a time, oldest first (but
+an asset whose next step runs on the model already loaded goes first: see Models). Each
 stage writes to `data/assets/<id>/<stage>/` (`prompt`, `mesh`, `rig`, `sprites`, `export`) and
 ends with a `manifest.json`. For Godot projects the rig stage also renders the sprite frames
 (into `sprites/`, listed under `outputs.rig.sprites` with fps, frame size, directions and the

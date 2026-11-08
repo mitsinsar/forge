@@ -114,6 +114,40 @@ def test_a_batch_makes_varied_assets(client, tmp_path):
     assert sorted(a["id"] for a in listed) == sorted(a["id"] for a in batch)
 
 
+def test_a_batch_runs_model_by_model(client, tmp_path, monkeypatch):
+    """Every prompt, then every drawing, then every judging...: the GPU switches models a handful of
+    times for the whole batch, not for each asset."""
+    import time
+    _clean(monkeypatch)
+    adapters = client.app.state.pipeline.adapters
+    used: list[tuple[str, str]] = []
+
+    def watch(obj, name, model, delay=0.0):
+        original = getattr(obj, name)
+
+        def wrapper(*args, **kwargs):
+            used.append((model, name))
+            time.sleep(delay)  # the batch is all queued before the first prompt is written
+            return original(*args, **kwargs)
+        monkeypatch.setattr(obj, name, wrapper)
+
+    watch(adapters.llm, "expand", "llm", 0.3)
+    watch(adapters.llm, "inspect", "llm")
+    watch(adapters.llm, "judge_mesh", "llm")
+    watch(adapters.image, "render_candidates", "image")
+    watch(adapters.mesh, "image_to_mesh", "mesh")
+    watch(adapters.rig, "predict_skeleton", "rig")
+    project = make_project(client, "unity", tmp_path / "g")
+    batch = client.post("/api/assets/batch", json={"count": 3, "vary": False, "asset": {
+        "project_id": project["id"], "kind": "hero", "archetype": "biped", "description": "a goblin",
+        "name": "Goblin", "autopilot": True}}).json()
+    for asset in batch:
+        wait_for(client, asset["id"], "waiting", gate=3, timeout=90)
+    runs = [m for i, (m, _) in enumerate(used) if i == 0 or used[i - 1][0] != m]
+    assert runs == ["llm", "image", "llm", "mesh", "llm", "rig"], used
+    assert [n for m, n in used[:3]] == ["expand"] * 3
+
+
 def test_a_stage_whose_tool_died_restarts_it_and_runs_again(client, tmp_path, monkeypatch):
     from assetgen import watchdog
     pipeline = client.app.state.pipeline
@@ -299,8 +333,9 @@ def test_the_profiles_language_model_writes_and_judges(client, tmp_path):
                                                "description": "a rogue", "profile_id": profile["id"]}).json()
     wait_for(client, created["id"], "waiting", gate=1)
     assert llm.seen_models and set(llm.seen_models) == {"qwen3.6-35b-a3b"}
-    # The language model makes way for the pictures, and the image model for the judge.
-    assert llm.unloads == ["qwen3.6-35b-a3b"] and image.unload_count == freed + 1
+    # The image model makes way for the prompt, the language model for the pictures, and the image
+    # model for the judge.
+    assert llm.unloads == ["qwen3.6-35b-a3b"] and image.unload_count == freed + 2
     models = client.get("/api/models").json()
     assert {m["id"] for m in models["mesh"]} == {"hunyuan3d-2.1", "hunyuan3d-2-mini"}
     assert "sdxl" in {m["id"] for m in models["image"]}
