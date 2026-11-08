@@ -226,7 +226,8 @@ class FakeBlender(FakeBase):
         from PIL import Image  # noqa: PLC0415
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        paths = [out_dir / f"{v}.png" for v in ("front", "side", "back")]
+        # Absolute, like the real adapter: the pipeline must cope with a relative data dir.
+        paths = [(out_dir / f"{v}.png").resolve() for v in ("front", "side", "back")]
         for path in paths:
             Image.new("RGB", (32, 32), (150, 150, 150)).save(path)
         return paths

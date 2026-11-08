@@ -578,7 +578,8 @@ class Pipeline:
         return outputs
 
     def _rel(self, asset_id: str, path: Path) -> str:
-        return Path(path).relative_to(self.asset_dir(asset_id)).as_posix()
+        # Tools may hand back absolute paths while the data dir is relative: compare both resolved.
+        return Path(path).resolve().relative_to(self.asset_dir(asset_id).resolve()).as_posix()
 
     def _hints(self, asset: dict) -> dict:
         return {"asset_id": asset["id"], "name": asset["name"], "kind": asset["kind"],
