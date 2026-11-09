@@ -112,13 +112,14 @@ class BlenderAdapter(Protocol):
 
 class Adapters:
     def __init__(self, llm: LLMAdapter, image: ImageAdapter, mesh: MeshAdapter, rig: RigAdapter,
-                 blender: BlenderAdapter, views=None, meshes: dict | None = None):
+                 blender: BlenderAdapter, views=None, meshes: dict | None = None, motion=None):
         self.llm = llm
         self.image = image
         self.mesh = mesh
         self.rig = rig
         self.blender = blender
         self.views = views  # MV-Adapter, for multi-view meshes (optional)
+        self.motion = motion  # HY-Motion, for skill animations (optional)
         # The image-to-3D tool of each tool name ("hunyuan3d", "modly"); ``mesh`` is the default one.
         self.meshes = meshes or {}
 

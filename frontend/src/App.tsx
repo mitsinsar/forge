@@ -13,12 +13,14 @@ import { ProfileEditPage } from "./pages/ProfileEditPage";
 import { LorasPage } from "./pages/LorasPage";
 import { OutfitsPage } from "./pages/OutfitsPage";
 import { SetupPage } from "./pages/SetupPage";
+import { SkillsPage } from "./pages/SkillsPage";
 
 const NAV = [
   { to: "/", label: "Assets", end: true },
   { to: "/projects", label: "Projects" },
   { to: "/profiles", label: "Style profiles" },
   { to: "/outfits", label: "Outfits" },
+  { to: "/skills", label: "Skills" },
   { to: "/loras", label: "LoRA library" },
   { to: "/setup", label: "Setup" },
 ];
@@ -96,6 +98,7 @@ export function App() {
           <Route path="/profiles/:id" element={<ProfileEditPage />} />
           <Route path="/loras" element={<LorasPage />} />
           <Route path="/outfits" element={<OutfitsPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
           <Route path="/setup" element={<SetupPage />} />
           <Route
             path="*"

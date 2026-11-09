@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 MAX_EXTRA_LODS = 8
 
 Engine = Literal["unity", "godot"]
-Kind = Literal["hero", "monster", "boss", "gear", "weapon"]
+Kind = Literal["hero", "monster", "boss", "gear", "weapon", "effect"]
 BaseModelName = Literal["qwen-image", "sdxl", "flux"]
 CameraPreset = Literal["side", "three_quarter", "topdown_4", "topdown_8"]
 Slot = Literal["head", "chest", "legs", "hands", "feet", "cape"]
@@ -249,6 +249,26 @@ class OutfitUpdate(Strict):
     name: str | None = Field(None, min_length=1, max_length=80)
     hero_id: str | None = None
     items: list[str] | None = None
+
+
+class MotionCreate(Strict):
+    title: str = Field(min_length=1, max_length=60, description="The skill's name, e.g. \"Firebolt\" (the clip is skill_<title>).")
+    description: str = Field(min_length=1, max_length=600, description="What the character does; the language model "
+                             "turns it into the motion prompt.")
+    prompt: str | None = Field(None, max_length=600, description="Your own motion prompt (\"A person ...\"), used as it is.")
+    duration: float | None = Field(None, ge=1.0, le=10.0, description="Seconds (empty: the language model guesses).")
+    in_place: bool = Field(True, description="Take the travel along the ground out (the hips still rise and fall).")
+
+
+class MotionRedo(Strict):
+    note: str | None = Field(None, max_length=600, description="What to change; the prompt is written again with it.")
+    prompt: str | None = Field(None, max_length=600, description="Your own motion prompt instead.")
+    duration: float | None = Field(None, ge=1.0, le=10.0)
+    in_place: bool | None = None
+
+
+class MotionUse(Strict):
+    profile_id: str = Field(description="The style profile whose bipeds get this clip.")
 
 
 class TrainingCandidate(Strict):

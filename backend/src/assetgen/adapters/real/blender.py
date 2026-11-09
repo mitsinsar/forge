@@ -49,10 +49,22 @@ class BlenderTools:
 
     def __init__(self, settings: Settings):
         self.blender = settings.blender_path
+        self.motions_dir = Path(settings.data_dir) / "motions" / "clips"  # generated skill animations
 
     def _run(self, script: str, args: dict, out_dir: Path, progress) -> dict:
         return run_script(self.blender, script, args, work_dir=out_dir,
                           log_path=out_dir / f"blender_{Path(script).stem}.log", progress=progress)
+
+    def motion_to_clip(self, *, motion_json, name, in_place, out_dir, progress) -> dict:
+        """A generated body motion as a clip on the biped's bones (``motion_to_clip.py``), kept in the
+        generated clips folder under its clip name. ``{"glb", "duration", "frames", "travel_m"}``."""
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        glb = self.motions_dir / f"{name}.glb"
+        result = self._run("motion_to_clip.py", {"motion": str(Path(motion_json).resolve()), "name": name,
+                                                 "out_glb": str(glb.resolve()), "in_place": bool(in_place)},
+                           out_dir, progress)
+        return {"glb": glb, **result}
 
     def render_views(self, *, mesh_glb, out_dir, progress, size: int = 384) -> list[Path]:
         """The finished mesh from the front, the side and the back (``mesh_views.py``), for the judge."""
@@ -85,11 +97,20 @@ class BlenderTools:
         out_path = Path(out_path)
         folder = ARCHETYPES_DIR / archetype["folder"]
         record = json.loads((folder / "clips.json").read_text(encoding="utf-8"))
-        missing = [c for c in clips if not (folder / "clips" / f"{c}.glb").is_file()]
+
+        def clip_file(name: str) -> Path:
+            """The template's clip, else a generated skill animation (bipeds only: HY-Motion's skeleton)."""
+            own = folder / "clips" / f"{name}.glb"
+            if own.is_file() or archetype["id"] != "biped":
+                return own
+            return self.motions_dir / f"{name}.glb"
+
+        missing = [c for c in clips if not clip_file(c).is_file()]
         if missing and not (attach and attach.get("wearer")):
             raise BlenderError(f"The {archetype['id']} archetype has no clip for: {', '.join(missing)}. Rebuild "
-                               "the templates with blender_scripts/build_archetypes.py.")
-        clip_args = [{"name": c, "file": str((folder / "clips" / f"{c}.glb").resolve()),
+                               "the templates with blender_scripts/build_archetypes.py, or make the skill "
+                               "animation again on the Skills page.")
+        clip_args = [{"name": c, "file": str(clip_file(c).resolve()),
                       "loop": bool(record.get(c, {}).get("loop"))} for c in clips]
         if attach and attach.get("wearer"):  # the wearer's own baked clips, with their lengths
             wearer = attach["wearer"]

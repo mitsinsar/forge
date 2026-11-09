@@ -21,6 +21,7 @@ import traceback
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from .adapters import Adapters
 from .archetypes import ARCHETYPES_DIR, get_archetype, load_archetypes
@@ -32,7 +33,7 @@ from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import checks as qc
-from . import exporters, grips, imaging, pose, variants, watchdog
+from . import effects, exporters, grips, imaging, pose, variants, watchdog
 
 log = logging.getLogger("assetgen.pipeline")
 
@@ -51,6 +52,9 @@ POSE_NEGATIVE = "hands touching the legs, arms against the body, hands on hips, 
 # (``StepBack``) while other assets wait for the model on the GPU now, so a batch runs model by
 # model (every prompt, then every drawing, then every judging...) instead of swapping per asset.
 STAGE_MODEL = {"prompt": "llm", "mesh": "mesh", "rig": "rig", "export": None}
+# Skill effects: the language model plans, ComfyUI draws ("image"), Wan 2.2 in ComfyUI animates ("video").
+EFFECT_STAGE_MODEL = {"prompt": "llm", "mesh": "image", "rig": None, "export": None}
+COMFYUI_MODELS = ("image", "video")
 
 
 class StepBack(Exception):
@@ -334,7 +338,8 @@ class Pipeline:
     @staticmethod
     def needs(asset: dict) -> str | None:
         """The model a queued asset's next step runs on."""
-        return asset.get("needs") or STAGE_MODEL.get(asset["stage"])
+        stages = EFFECT_STAGE_MODEL if asset.get("kind") == "effect" else STAGE_MODEL
+        return asset.get("needs") or stages.get(asset["stage"])
 
     def _waiting_for(self, model: str | None, besides: str) -> bool:
         """Whether another queued asset's next step runs on ``model``."""
@@ -359,8 +364,9 @@ class Pipeline:
         if before == model:
             return
         alone = settings.get("one_model_at_a_time", True)
-        if model == "mesh" or (alone and model != "image" and before in (None, "image")):
-            self.adapters.image.unload()
+        if (model == "mesh" or (before in COMFYUI_MODELS and model in COMFYUI_MODELS)
+                or (alone and model not in COMFYUI_MODELS and before in (None, *COMFYUI_MODELS))):
+            self.adapters.image.unload()  # ComfyUI frees whatever it holds (the image model, Wan)
         if alone and model != "llm" and before in (None, "llm"):
             self.adapters.llm.unload(self._text_model(settings))
         self.loaded = model
@@ -466,6 +472,129 @@ class Pipeline:
             archetype=archetype, clips=self.dummy_clips(), attach={"kind": "body"}, out_path=out, progress=progress)
         (out.parent / "clips.json").write_text(json.dumps(result["clips"]), encoding="utf-8")
         return {"clips": result["clips"]}
+
+    # ---- skill animations (HY-Motion) -------------------------------------------------
+
+    def motion_dir(self, motion_id: str) -> Path:
+        return Path(self.settings.data_dir) / "motions" / motion_id
+
+    def _clip_name(self, title: str) -> str:
+        """``skill_<title>``, unique among the generated clips and the biped's own."""
+        slug = "_".join("".join(c if c.isalnum() else " " for c in title.lower()).split())[:40] or "skill"
+        taken = {m["name"] for m in self.db.list("motions")} | set(self.dummy_clips())
+        name, n = f"skill_{slug}", 2
+        while name in taken:
+            name, n = f"skill_{slug}_{n}", n + 1
+        return name
+
+    def create_motion(self, *, title: str, description: str, prompt: str | None = None,
+                      duration: float | None = None, in_place: bool = True) -> dict:
+        """A skill animation from a description; queued at once (``motion`` job)."""
+        motion = self.db.insert("motions", {
+            "name": self._clip_name(title), "title": title.strip(), "description": description.strip(),
+            "prompt": (prompt or "").strip() or None, "duration": duration, "in_place": bool(in_place),
+            "attempt": 1, "notes": [], "status": "queued", "step": "Waiting for the worker", "progress": 0.0,
+            "error": None, "clip": None, "preview": None})
+        self.queue_job("motion", motion["id"])
+        return motion
+
+    def redo_motion(self, motion_id: str, *, note: str | None = None, prompt: str | None = None,
+                    duration: float | None = None, in_place: bool | None = None) -> dict:
+        """Makes the skill animation again (a new seed); a note asks the language model to rewrite the
+        prompt with it in mind, a prompt of your own is used as it is."""
+        motion = self.db.get("motions", motion_id)
+        if motion is None:
+            raise KeyError(motion_id)
+        if motion["status"] in ("queued", "running"):
+            raise Conflict(f"the skill animation is {motion['status']}")
+        changes: dict = {"attempt": motion.get("attempt", 1) + 1, "status": "queued", "step": "Waiting for the worker",
+                         "progress": 0.0, "error": None, "clip": None, "preview": None}
+        if note and note.strip():
+            changes["notes"] = [*(motion.get("notes") or []), note.strip()]
+            changes["prompt"] = None  # written again with the note
+        if prompt is not None:
+            changes["prompt"] = prompt.strip() or None
+        if duration is not None:
+            changes["duration"] = float(duration)
+        if in_place is not None:
+            changes["in_place"] = bool(in_place)
+        shutil.rmtree(self.motion_dir(motion_id), ignore_errors=True)
+        motion = self.db.update("motions", motion_id, changes)
+        self.queue_job("motion", motion_id)
+        return motion
+
+    def delete_motion(self, motion_id: str) -> bool:
+        motion = self.db.get("motions", motion_id)
+        if motion is None or not self.db.delete("motions", motion_id):
+            return False
+        shutil.rmtree(self.motion_dir(motion_id), ignore_errors=True)
+        (Path(self.settings.data_dir) / "motions" / "clips" / f"{motion['name']}.glb").unlink(missing_ok=True)
+        return True
+
+    def _job_motion(self, job: dict, progress) -> dict:
+        motion = self.db.get("motions", job["target_id"])
+        if motion is None:
+            raise RuntimeError("the skill animation is gone")
+        if self.adapters.motion is None:
+            raise RuntimeError("HY-Motion is not set up")
+
+        def report(step: str, fraction: float) -> None:
+            progress(step, fraction)
+            self.db.update("motions", motion["id"], {"step": step, "progress": round(float(fraction), 3)})
+
+        self.db.update("motions", motion["id"], {"status": "running", "step": "Starting", "error": None})
+        try:
+            result = self._make_motion(motion, report)
+        except Exception as exc:
+            self.db.update("motions", motion["id"], {"status": "failed", "step": "Failed", "error": f"{exc}"})
+            raise
+        self.db.update("motions", motion["id"], {**result, "status": "done", "step": "Done", "progress": 1.0})
+        return result
+
+    def _make_motion(self, motion: dict, report) -> dict:
+        settings = profile_defaults()
+        directory = self.motion_dir(motion["id"])
+        directory.mkdir(parents=True, exist_ok=True)
+        prompt, duration = motion.get("prompt"), motion.get("duration")
+        if not prompt:
+            report("Writing the motion prompt", 0.02)
+            self._use("llm", settings)
+            written = self.adapters.llm.motion_prompt(description=f"{motion['title']}: {motion['description']}",
+                                                      notes=motion.get("notes") or [], model=self._text_model(settings))
+            prompt, duration = written["prompt"], duration or written["duration"]
+            self.db.update("motions", motion["id"], {"prompt": prompt, "duration": duration})
+        self._use("motion", settings)
+        motion_json = directory / "motion.json"
+        self.adapters.motion.generate(
+            motions=[{"prompt": prompt, "duration": float(duration or 2.5), "out": str(motion_json),
+                      "seed": seed_of(motion["id"], motion.get("attempt", 1)) % 1000}],
+            work_dir=directory, progress=lambda s, f: report(s, 0.05 + 0.6 * f))
+        clip = self.adapters.blender.motion_to_clip(motion_json=motion_json, name=motion["name"],
+                                                    in_place=motion.get("in_place", True), out_dir=directory,
+                                                    progress=lambda s, f: report(s, 0.65 + 0.1 * f))
+        archetype = get_archetype("biped")
+        preview = directory / "preview.glb"
+        self.adapters.blender.rig_and_animate(
+            mesh_glb=None, skeleton={"joints": archetype["joints"], "fit_score": 1.0, "fallback": False},
+            archetype=archetype, clips=[motion["name"]], attach={"kind": "body"}, out_path=preview,
+            progress=lambda s, f: report(f"Preview: {s}", 0.75 + 0.25 * f))
+        return {"prompt": prompt, "duration": duration,
+                "clip": {k: clip[k] for k in ("duration", "frames", "travel_m") if k in clip},
+                "preview": preview.relative_to(Path(self.settings.data_dir)).as_posix()}
+
+    def use_motion(self, motion_id: str, profile_id: str) -> dict:
+        """Adds the skill animation to a style profile's clips for bipeds (heroes rigged from now on
+        get it; rigged ones get it when rigged again)."""
+        motion = self.db.get("motions", motion_id)
+        profile = self.db.get("profiles", profile_id)
+        if motion is None or profile is None:
+            raise KeyError(motion_id if motion is None else profile_id)
+        if motion["status"] != "done":
+            raise Conflict("the skill animation isn't made yet")
+        extra = list(profile.get("biped_extra_clips") or profile_defaults()["biped_extra_clips"])
+        if motion["name"] not in extra:
+            extra.append(motion["name"])
+        return self.db.update("profiles", profile_id, {"biped_extra_clips": extra})
 
     def place_item(self, item_id: str, wearer_id: str, change: list[list[float]] | None) -> dict:
         """Adds ``change`` (a 4x4 move in Blender world space at the rest pose) to the item's kept
@@ -635,7 +764,8 @@ class Pipeline:
         directory.mkdir(parents=True, exist_ok=True)
         asset = self._require(asset_id)
         progress = self._progress(asset_id, stage)
-        outputs = getattr(self, f"_stage_{stage}")(asset, directory, progress)
+        prefix = "_effect" if asset["kind"] == "effect" else "_stage"
+        outputs = getattr(self, f"{prefix}_{stage}")(asset, directory, progress)
         manifest.write_text(json.dumps(outputs, indent=2), encoding="utf-8")
         return outputs
 
@@ -853,6 +983,199 @@ class Pipeline:
         """Biped characters (not gear or weapons, which are drawn alone) get the A-pose guide and check."""
         return asset["kind"] in ("hero", "monster", "boss") and asset.get("archetype") == "biped"
 
+    # ---- skill effects (kind "effect", see effects.py) -----------------------------------
+    # prompt: the language model plans the parts; the main part is drawn as gate 1's candidates.
+    # mesh:   every part is drawn in the picked look and animated (Wan 2.2) into a flipbook: gate 2.
+    # rig:    the parts put together as the effect plays it: gate 3. export: the engine's files.
+
+    def _effect_picture_prompts(self, asset: dict, settings: dict, part: dict, plan: dict) -> tuple[str, str, list]:
+        loras = self._profile_loras(settings)
+        colours = "colours " + ", ".join(plan["palette"])
+        facing = "horizontal, pointing to the right, seen from the side" if part["part"] == "projectile" else ""
+        text = self.with_triggers(", ".join(p for p in (part["picture"], facing, colours, effects.PICTURE_SUFFIX) if p),
+                                  loras)
+        negative = ", ".join(p for p in (effects.PICTURE_NEGATIVE, settings.get("negative_prompt")) if p)
+        return text, negative, loras
+
+    def _effect_judged(self, asset: dict, settings: dict, part: dict, paths: list[Path]) -> list[list[dict]]:
+        """Each picture's checks: on black and something there, and (the vision model looking) one thing
+        that matches the part's prompt."""
+        inspect = getattr(self.adapters.llm, "inspect_effect", None)
+        results = []
+        for path in paths:
+            vision = None
+            if inspect is not None:
+                try:
+                    vision = inspect(image=Path(path), description=part["picture"], model=self._text_model(settings))
+                except Exception:  # noqa: BLE001 - the checks go on without the vision model
+                    log.warning("the vision check of %s failed", path, exc_info=True)
+            if part["part"] == "projectile" and vision and vision.get("points") == "left":
+                effects.mirror(Path(path))  # levelled already: it flies to the right
+            results.append(effects.picture_checks(Path(path), vision))
+        return results
+
+    @staticmethod
+    def _effect_tidy(part: dict, paths: list[Path], say) -> None:
+        """Pictures not on black get their subject cut out onto black; a projectile is turned level."""
+        for number, path in enumerate(paths, start=1):
+            if effects.clean_picture(Path(path)):
+                say(f"Picture {number}: the background wasn't black, so the {part['part']} was cut out onto black.")
+            if part["part"] == "projectile":
+                turned = effects.level(Path(path))
+                if turned:
+                    say(f"Picture {number}: turned {turned:g} degrees so the projectile lies level.")
+
+    def _effect_prompt(self, asset: dict, directory: Path, progress) -> dict:
+        settings = self.asset_settings(asset)
+        notes = [n["note"] for n in asset.get("notes") or [] if n["stage"] == "prompt"]
+        plan_file = directory / "plan.json"
+        if plan_file.is_file():
+            plan = json.loads(plan_file.read_text(encoding="utf-8"))
+        else:
+            progress("Planning the effect", 0.0)
+            self._use("llm", settings)
+            raw = self.adapters.llm.effect_plan(description=asset["description"], notes=notes,
+                                                model=self._text_model(settings))
+            plan = effects.normalize_plan(raw, asset["description"])
+            plan_file.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+        attempt = (asset.get("attempts") or {}).get("prompt", 1)
+        main = next(p for p in plan["parts"] if p["part"] == plan["main"])
+        prompt, negative, loras = self._effect_picture_prompts(asset, settings, main, plan)
+        self._turn(asset, settings, "image", "draw the pictures")
+        stage_log: list[str] = []
+        paths = self.adapters.image.render_candidates(
+            prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
+            reference_images=[], count=int(settings["candidates"]), seed=seed_of(asset["id"], attempt),
+            out_dir=directory, progress=lambda s, f: progress(s, 0.1 + 0.85 * f), hints=self._hints(asset),
+            log=stage_log.append)
+        tidied = directory / "tidied.txt"
+        if not tidied.is_file():  # once: a resumed stage doesn't turn them again
+            self._effect_tidy(main, paths, stage_log.append)
+            tidied.write_text("\n".join(stage_log), encoding="utf-8")
+        else:
+            stage_log += tidied.read_text(encoding="utf-8").splitlines()
+        progress("Checking the candidates", 0.97)
+        self._turn(asset, settings, "llm", "judge the pictures")
+        checks = [{"candidate": n, "checks": found, "status": qc.worst(found)}
+                  for n, found in enumerate(self._effect_judged(asset, settings, main, paths), start=1)]
+        return {"plan": plan, "prompt": prompt, "negative_prompt": negative, "base_model": settings["base_model"],
+                "loras": loras, "attempt": attempt, "log": stage_log, "pose_check": None, "redrawn": 0,
+                "expansion": {"prompt": main["picture"], "flags": []},
+                "candidates": [self._rel(asset["id"], p) for p in paths], "candidate_checks": checks}
+
+    def _effect_mesh(self, asset: dict, directory: Path, progress) -> dict:
+        settings = self.asset_settings(asset)
+        plan = asset["outputs"]["prompt"]["plan"]
+        attempt = (asset.get("attempts") or {}).get("mesh", 1)
+        chosen = self.stage_dir(asset["id"], "prompt") / f"candidate_{asset['chosen_candidate']}.png"
+        parts = plan["parts"]
+        # 1. A picture of every part: the picked candidate is the main one, the others are drawn like it.
+        pictures: dict[str, Path] = {}
+        for index, part in enumerate(parts):
+            folder = directory / part["part"]
+            folder.mkdir(parents=True, exist_ok=True)
+            picture = folder / "picture.png"
+            if not picture.is_file():
+                if part["part"] == plan["main"]:
+                    shutil.copy2(chosen, picture)
+                else:
+                    self._use("image", settings)
+                    prompt, negative, loras = self._effect_picture_prompts(asset, settings, part, plan)
+                    drawn = self.adapters.image.render_candidates(
+                        prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
+                        reference_images=[], count=3, seed=seed_of(asset["id"], attempt) + 10 * index, out_dir=folder / "draw",
+                        progress=lambda s, f, i=index: progress(f"Drawing the {parts[i]['part']}: {s}",
+                                                                0.3 * (i + f) / len(parts)),
+                        hints={**self._hints(asset), "asset_id": f"{asset['id']}_{part['part']}"})
+                    self._effect_tidy(part, drawn, lambda line: None)
+                    self._use("llm", settings)
+                    judged = self._effect_judged(asset, settings, part, drawn)
+                    best = min(range(len(drawn)), key=lambda i: (qc.ORDER[qc.worst(judged[i])],
+                                                                 sum(qc.ORDER[c["status"]] for c in judged[i])))
+                    shutil.copy2(drawn[best], picture)  # of three, the one the checks like best
+                    (folder / "checks.json").write_text(json.dumps(judged[best]), encoding="utf-8")
+            pictures[part["part"]] = picture
+        # 2. Each picture animated (Wan 2.2) and made a flipbook.
+        if any(not (directory / p["part"] / "flipbook" / "frame_00.png").is_file() for p in parts):
+            self._turn(asset, settings, "video", "animate the parts")
+        made = []
+        for index, part in enumerate(parts):
+            folder = directory / part["part"]
+            book = sorted((folder / "flipbook").glob("frame_*.png"))
+            if not book:
+                self._use("video", settings)
+                frames = self.adapters.image.animate_frames(
+                    image=pictures[part["part"]], prompt=f"{part['motion']}, {effects.MOTION_SUFFIX}",
+                    negative_prompt=effects.MOTION_NEGATIVE, frames=effects.VIDEO_FRAMES, size=effects.VIDEO_SIZE,
+                    seed=seed_of(asset["id"], attempt) + 100 + index, out_dir=folder / "video",
+                    progress=lambda s, f, i=index: progress(f"Animating the {parts[i]['part']}: {s}",
+                                                            0.3 + 0.65 * (i + f) / len(parts)))
+                book = effects.make_flipbook(frames, folder / "flipbook", loop=part["loop"])
+            made.append({**part, "picture": self._rel(asset["id"], pictures[part["part"]]),
+                         "frames": [self._rel(asset["id"], p) for p in book]})
+        main = next(p for p in made if p["part"] == plan["main"])
+        icon = directory / "icon.png"
+        with Image.open(self.asset_dir(asset["id"]) / main["frames"][len(main["frames"]) // 2]) as frame:
+            frame.copy().save(icon)
+        # The other parts' pictures get gate 1's checks here (a part filling its square has hard edges).
+        def kept(part: dict) -> list[dict]:
+            saved = directory / part["part"] / "checks.json"
+            if saved.is_file():
+                return json.loads(saved.read_text(encoding="utf-8"))
+            return effects.picture_checks(self.asset_dir(asset["id"]) / part["picture"])
+
+        drawn_checks = [{**c, "id": f"{p['part']}_{c['id']}", "label": f"{p['part'].title()}: {c['label']}"}
+                        for p in made if p["part"] != plan["main"] for c in kept(p)]
+        return {"plan": plan, "parts": made, "fps": effects.FPS, "frame_size": effects.FRAME_SIZE,
+                "icon": self._rel(asset["id"], icon),
+                "checks": effects.flipbook_checks(made, self.asset_dir(asset["id"])) + drawn_checks}
+
+    def _effect_rig(self, asset: dict, directory: Path, progress) -> dict:
+        mesh = asset["outputs"]["mesh"]
+        plan = mesh["plan"]
+        have = {p["part"] for p in mesh["parts"]}
+        missing = [p for p in effects.NEEDS[plan["kind"]] if p not in have]
+        checks = [qc.check("parts", "Every part", qc.FAIL if missing else qc.PASS,
+                           f"missing: {', '.join(missing)}" if missing else ", ".join(sorted(have)))]
+        return {"sequence": {"kind": plan["kind"], "travel_speed": plan["travel_speed"], "particles": plan["particles"],
+                             "palette": plan["palette"],
+                             "order": [p for p in ("cast", "projectile", "impact", "aura") if p in have]},
+                "clips": [], "checks": checks}
+
+    def _effect_export(self, asset: dict, directory: Path, progress) -> dict:
+        project = self.db.get("projects", asset["project_id"])
+        if project is None:
+            raise RuntimeError("the asset's project no longer exists")
+        mesh = asset["outputs"]["mesh"]
+        engine = project["engine"]
+        name = self._claim_export_name(asset, project)
+        build = directory / engine / name
+        root = self.asset_dir(asset["id"])
+        progress("Packing the flipbooks", 0.3)
+        if engine == "unity":
+            effects.write_unity(out_dir=build, name=name, asset=asset, plan=mesh["plan"], parts=mesh["parts"], root=root)
+        else:
+            effects.write_godot(out_dir=build, res_dir=f"res://generated/effect/{name}", name=name, asset=asset,
+                                plan=mesh["plan"], parts=mesh["parts"], root=root)
+        result: dict = {"engine": engine, "name": name}
+        if mesh.get("icon"):
+            shutil.copy2(root / mesh["icon"], build / f"{name}_icon.png")
+            result["icon"] = f"{name}_icon.png"
+        relative = self._export_parent(engine, "effect") / name
+        progress("Zipping", 0.8)
+        zip_path = exporters.make_zip(build, directory / f"{name}.zip", name)
+        installed = None
+        if project.get("path"):
+            destination = Path(project["path"]).expanduser() / relative
+            progress("Copying into the game project", 0.9)
+            exporters.install(build, destination, asset["id"])
+            installed = str(destination)
+        result.update(folder=self._rel(asset["id"], build), zip=self._rel(asset["id"], zip_path),
+                      installed_to=installed, project_relative=relative.as_posix(),
+                      files=sorted(p.relative_to(build).as_posix() for p in build.rglob("*") if p.is_file()),
+                      exported_at=now())
+        return result
+
     # ---- colour variants ------------------------------------------------------------
 
     def make_variant(self, source_id: str, *, name: str | None, colours: dict) -> dict:
@@ -860,6 +1183,8 @@ class Pipeline:
         the mesh, rig and clips are kept, so it takes seconds."""
         source = self._require(source_id)
         outputs = dict(source.get("outputs") or {})
+        if source["kind"] == "effect":
+            raise Invalid("skill effects have no colour variants yet")
         if not outputs.get("rig"):
             raise Invalid("only assets rigged at gate 3 can have colour variants")
         if source["status"] in ("queued", "running"):

@@ -776,6 +776,19 @@ code,
   aspect-ratio: 1;
   image-rendering: pixelated;
 }
+.swatch {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  border-radius: 2px;
+  vertical-align: -0.05em;
+}
+.stage--sequence canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 900 / 420;
+  image-rendering: auto;
+}
 .stage__overlay {
   position: absolute;
   inset: 0;

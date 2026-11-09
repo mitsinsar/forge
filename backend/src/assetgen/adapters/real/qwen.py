@@ -92,6 +92,35 @@ CREATURE_NEGATIVE = ("weapon, sword, shield, staff, holding an object, props, pa
 BIPED_NEGATIVE = "three-quarter view, side view"
 
 
+MOTION_PROMPT = """You write prompts for a text-to-motion model that animates ONE game character's body
+casting or performing a skill. Describe only body movement, in English, in the model's style:
+"A person ..." then what the limbs and torso do, in order, under 50 words. Say which hand or foot
+(right or left) does what. Begin and end standing in a ready stance. No effects, objects,
+weapons, clothing, emotions, camera or scenery: write "thrusts the right palm forward" for a
+fireball, "draws an imaginary bow" for an arrow. Also guess how long it takes, 1.5 to 5 seconds.
+Answer only JSON: {"prompt": "<the motion prompt>", "duration": <seconds>}."""
+
+
+EFFECT_PROMPT = """You plan a 2D game skill effect (VFX) made of flipbook parts. Each part is drawn as ONE
+picture by an image model, alone on a pure black background, then animated by a video model.
+Pick the effect's kind: "projectile" (flies from caster to target: needs a "projectile" and an
+"impact" part; the projectile is drawn pointing to the right, horizontal), "burst" (happens at a
+spot: needs an "impact") or "aura" (stays on a character: needs an "aura"). A "cast" part (a
+short glow on the caster's hands) is optional for projectile and burst.
+For each part write "picture": what the single frame shows (shape, colours, material, glow; no
+characters, hands, ground or scenery, under 40 words). Keep the thing the effect names: an arrow is
+drawn as an arrow (shaft, head and fletching) wrapped in its magic, a thrown axe as an axe, a
+fireball as a ball of fire. The impact must fit inside its picture with black all around it and "motion": how it moves in place (swirls,
+flickers, drips, expands and fades; under 25 words). "blend": "add" for glowing light, fire,
+magic, lightning; "mix" for smoke, poison clouds, mud, rocks. "scale": its size next to a
+character, 0.25 to 3 (a projectile is about 0.5, an explosion 1 to 2).
+Also give "palette": 2 to 4 hex colours, "particles" for the projectile's trail: {"amount" 4-200,
+"lifetime" seconds, "speed" pixels/s, "spread" degrees, "gravity" pixels/s^2 (positive falls),
+"size" pixels}, and "travel_speed" in pixels/s.
+Answer only JSON: {"kind": "...", "palette": [...], "parts": [{"part": "...", "picture": "...",
+"motion": "...", "blend": "...", "scale": 1.0}], "particles": {...}, "travel_speed": 600}."""
+
+
 def build_system_prompt(*, kind: str, archetypes: dict[str, dict], archetype_override: str | None,
                         slot: str | None, weapon_class: str | None, notes: list[str]) -> str:
     lines = "\n".join(f"- {aid}: {spec.get('description', spec.get('name', aid))} Rest pose: {spec['rest_pose']}"
@@ -282,6 +311,24 @@ class QwenLLM:
             found["problems"] = [str(p) for p in (answer.get("problems") or []) if str(p).strip()][:5]
         return found
 
+    def inspect_effect(self, *, image, description, model=None):
+        """Asks the vision model about a skill effect's picture: ``{"count", "match", "problems"}``, or None."""
+        question = ("This image should show ONE game VFX sprite alone on black: " + description + ". Answer only "
+                    'JSON: {"count": <how many separate objects are shown>, "match": <0-10: how well it shows exactly '
+                    'that: the right thing, one of it, its shape and colours (ignore which way it faces); 10 is '
+                    'exact>, "points": <"left", "right", "up", "down" or "none": the way its front or head points>, '
+                    '"problems": [<short phrases: what is wrong or missing, or nothing; not its direction>]}')
+        messages = [{"role": "user", "content": [{"type": "text", "text": question}, self._image_part(image)]}]
+        try:
+            answer = json.loads(_json_part(self._post_once(messages, None, model)))
+            found = {"count": int(answer.get("count") or 1),
+                     "match": max(0, min(10, int(round(float(answer.get("match")))))),
+                     "points": str(answer.get("points") or "none").lower()}
+        except (LLMError, ValueError, TypeError):
+            return None
+        found["problems"] = [str(p) for p in (answer.get("problems") or []) if str(p).strip()][:5]
+        return found
+
     def vary(self, *, description, kind, count, model=None):
         text = (f"Write {count} different variations of this {kind} description for a game asset generator. "
                 "Same kind of subject, but vary looks, colours, materials and details; one or two short sentences "
@@ -291,6 +338,28 @@ class QwenLLM:
         if len(variants) < count:
             raise LLMError(f"Qwen wrote {len(variants)} variations instead of {count}.")
         return variants[:count]
+
+    def motion_prompt(self, *, description, notes=(), model=None) -> dict:
+        """A skill's description as a prompt for the motion model (HY-Motion): ``{"prompt", "duration"}``."""
+        text = MOTION_PROMPT + f"\n\nSkill: {description.strip()}"
+        if notes:
+            text += "\nChanges asked for: " + "; ".join(n for n in notes if n.strip())
+        answer = json.loads(_json_part(self._post_once([{"role": "user", "content": text}], None, model)))
+        prompt = " ".join(str(answer.get("prompt") or "").split())
+        if not prompt:
+            raise LLMError("The language model wrote no motion prompt.")
+        try:
+            duration = float(answer.get("duration") or 2.5)
+        except (TypeError, ValueError):
+            duration = 2.5
+        return {"prompt": prompt, "duration": round(max(1.0, min(6.0, duration)), 1)}
+
+    def effect_plan(self, *, description, notes=(), model=None) -> dict:
+        """A skill effect's parts as prompts (see ``effects.normalize_plan``, which completes it)."""
+        text = EFFECT_PROMPT + f"\n\nEffect: {description.strip()}"
+        if notes:
+            text += "\nChanges asked for: " + "; ".join(n for n in notes if n.strip())
+        return json.loads(_json_part(self._post_once([{"role": "user", "content": text}], None, model)))
 
     def expand(self, *, description, kind, archetypes, archetype_override, slot, weapon_class, notes, model=None):
         system = build_system_prompt(kind=kind, archetypes=archetypes, archetype_override=archetype_override,

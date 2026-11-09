@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, exampleUrl, localUrl, MAX_EXTRA_LODS, type Kind, type MeshQuality, type Meta, type PerKind, type Profile, type ProfileInput } from "../api/client";
+import { api, exampleUrl, localUrl, MAX_EXTRA_LODS, type MeshKind, type MeshQuality, type Meta, type PerKind, type Profile, type ProfileInput } from "../api/client";
 import { keys, useApiMutation, useLatestJob, useLoras, useMeta, useProfile, useProjects } from "../api/queries";
 import { ExampleSheet, JobProgress } from "../components/Examples";
 import { KIND_LABEL, label, MESH_PRESETS, MESH_RESOLUTIONS, meshPreset, options } from "../labels";
@@ -30,7 +30,7 @@ import {
   Thumb,
 } from "../ui/kit";
 
-const KINDS: Kind[] = ["hero", "monster", "boss", "gear", "weapon"];
+const KINDS: MeshKind[] = ["hero", "monster", "boss", "gear", "weapon"];
 const list = (text: string) => text.split(",").map((t) => t.trim()).filter(Boolean);
 
 function toInput(source: Profile | Meta["profile_defaults"], name: string, projectId: string | null): ProfileInput {

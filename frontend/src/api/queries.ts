@@ -23,6 +23,7 @@ export const keys = {
   asset: (id: string) => ["asset", id] as const,
   jobs: (targetId: string, kind?: string) => ["jobs", targetId, kind ?? ""] as const,
   outfits: (projectId?: string) => ["outfits", projectId ?? ""] as const,
+  motions: ["motions"] as const,
 };
 
 /** The latest side job of this kind for a target, polled while it waits or runs. When it finishes,
@@ -60,6 +61,14 @@ export const useLoras = (baseModel?: BaseModel) =>
     queryKey: keys.loras,
     queryFn: () => api.loras(),
     select: (loras) => (baseModel ? loras.filter((l) => l.base_model === baseModel) : loras),
+  });
+/** Skill animations, polled while one waits or runs (the worker doesn't send live events for them). */
+export const useMotions = () =>
+  useQuery({
+    queryKey: keys.motions,
+    queryFn: api.motions,
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((m) => m.status === "queued" || m.status === "running") ? 1500 : false,
   });
 export const useAssets = (filters: AssetFilters) =>
   useQuery({ queryKey: keys.assetList(filters), queryFn: () => api.assets(filters) });

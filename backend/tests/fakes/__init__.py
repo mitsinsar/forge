@@ -75,6 +75,27 @@ class FakeLLM(FakeBase):
     def judge_mesh(self, *, picture, views, description, kind, model=None):
         return self.mesh_judgements.pop(0) if self.mesh_judgements else None
 
+    def motion_prompt(self, *, description, notes=(), model=None):
+        self.seen_models.append(model)
+        prompt = f"A person performs {description.split(':')[0].strip().lower()}"
+        if notes:
+            prompt += ", " + "; ".join(notes)
+        return {"prompt": prompt, "duration": 2.0}
+
+    effect_judgements: list = []  # answers ``inspect_effect`` gives first (then one clean thing, 9/10)
+
+    def inspect_effect(self, *, image, description, model=None):
+        return self.effect_judgements.pop(0) if self.effect_judgements else {"count": 1, "match": 9, "problems": []}
+
+    def effect_plan(self, *, description, notes=(), model=None):
+        self.seen_models.append(model)
+        arrow = "arrow" in description.lower() or "bolt" in description.lower()
+        return {"kind": "projectile" if arrow else "burst", "palette": ["#66ff33", "#115500"],
+                "parts": [{"part": "projectile", "picture": f"{description}, flying right", "motion": "swirls"},
+                          {"part": "impact", "picture": f"{description}, exploding", "motion": "bursts and fades",
+                           "scale": 1.5}],
+                "particles": {"amount": 24}, "travel_speed": 700}
+
     def vary(self, *, description, kind, count, model=None):
         return [f"{description}, variant {n}" for n in range(1, count + 1)]
 
@@ -139,7 +160,39 @@ class FakeImage(FakeBase):
         progress("Candidates ready", 1.0)
         return paths
 
+    def animate_frames(self, *, image, prompt, negative_prompt, frames, size, seed, out_dir, progress):
+        """The picture, pulsing: ``frames`` PNGs that grow and shrink a little."""
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(image) as source:
+            picture = source.convert("RGB").resize((64, 64))
+        paths = []
+        for n in range(frames):
+            zoom = 1.0 + 0.15 * math.sin(2 * math.pi * n / frames)
+            side = int(64 * zoom)
+            frame = Image.new("RGB", (64, 64))
+            scaled = picture.resize((side, side))
+            frame.paste(scaled, ((64 - side) // 2, (64 - side) // 2))
+            path = out_dir / f"frame_{n:03d}.png"
+            frame.save(path)
+            paths.append(path)
+        progress("Frames ready", 1.0)
+        return paths
+
+    def _render_effect(self, path: Path, index: int, seed: int) -> None:
+        """A glowing ball on black, in a colour of the seed."""
+        r, g, b = to_rgb255(color_of(seed, index))
+        image = Image.new("RGB", (256, 256))
+        draw = ImageDraw.Draw(image)
+        for radius in range(60, 0, -4):
+            k = 1 - radius / 60
+            draw.ellipse((128 - radius, 128 - radius, 128 + radius, 128 + radius),
+                         fill=(int(r * k), int(g * k), int(b * k)))
+        image.save(path)
+
     def _render_one(self, path: Path, index: int, seed: int, prompt: str, base_model: str, hints: dict) -> None:
+        if hints.get("kind") == "effect":
+            return self._render_effect(path, index, seed)
         rng = random.Random(seed + index)
         color = color_of(seed, index, hue=hue_hint(prompt))
         jitter = [round(rng.uniform(0.85, 1.15), 3) for _ in range(3)]
@@ -226,7 +279,34 @@ class FakeRig(FakeBase):
         return {**result, "file": str(path)}
 
 
+class FakeMotion(FakeBase):
+    """Writes a motion JSON of the right shape: the T-pose, the right arm swinging up."""
+
+    prompts: list = []  # every prompt asked for
+
+    def generate(self, *, motions, work_dir, progress):
+        out = []
+        for motion in motions:
+            self.prompts.append(motion["prompt"])
+            frames = int(motion["duration"] * 30)
+            path = Path(motion["out"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            identity = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+            path.write_text(json.dumps({"prompt": motion["prompt"], "fps": 30, "frames": frames,
+                                        "joints": ["Pelvis"], "parents": [-1], "rest": [[0, 0.9, 0]],
+                                        "rotations": [[identity]] * frames, "translation": [[0, 0.9, 0]] * frames}))
+            progress("Motion ready", 1.0)
+            out.append(path)
+        return out
+
+
 class FakeBlender(FakeBase):
+    def motion_to_clip(self, *, motion_json, name, in_place, out_dir, progress):
+        motion = json.loads(Path(motion_json).read_text(encoding="utf-8"))
+        glb = Path(out_dir) / f"{name}.glb"
+        glb.write_bytes(b"fake clip")
+        return {"glb": glb, "duration": round(motion["frames"] / 30, 4), "frames": motion["frames"], "travel_m": 0.0}
+
     def render_views(self, *, mesh_glb, out_dir, progress, size=384):
         from PIL import Image  # noqa: PLC0415
         out_dir = Path(out_dir)
@@ -398,4 +478,4 @@ def _downscale(image: Image.Image, size: int, look: str, palette_size: int) -> I
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
-__all__ = ["FakeLLM", "FakeImage", "FakeMesh", "FakeRig", "FakeBlender", "seed_of"]
+__all__ = ["FakeLLM", "FakeImage", "FakeMesh", "FakeMotion", "FakeRig", "FakeBlender", "seed_of"]

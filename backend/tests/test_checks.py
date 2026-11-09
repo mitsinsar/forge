@@ -214,7 +214,7 @@ def test_tools_can_be_stopped_and_the_setup_report_lists_every_part(client, monk
     assert tools["llm"]["stoppable"] and tools["image"]["stoppable"] and not tools["mesh"]["stoppable"]
 
     parts = client.get("/api/setup").json()
-    assert [p["id"] for p in parts] == ["llm", "image", "mesh", "rig", "blender", "multiview"]
+    assert [p["id"] for p in parts] == ["llm", "image", "mesh", "rig", "blender", "hymotion", "multiview"]
     mesh = next(p for p in parts if p["id"] == "mesh")
     assert mesh["required"] and any("hunyuan3d-2.1.patch" in (s["command"] or "") for s in mesh["steps"])
     assert not next(p for p in parts if p["id"] == "multiview")["required"]

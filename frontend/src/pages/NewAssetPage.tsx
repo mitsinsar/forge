@@ -88,14 +88,16 @@ export function NewAssetPage() {
     [keys.assets],
   );
   const batch = useApiMutation((input: AssetInput) => api.createBatch(input, many, vary), [keys.assets]);
-  const fromImage = start === "image";
+  const fromImage = start === "image" && kind !== "effect";
 
   const projectId = projectChoice || projects.data?.[0]?.id || "";
   const project = projects.data?.find((p) => p.id === projectId);
   const projectProfiles = (profiles.data ?? []).filter((p) => p.project_id === projectId || p.project_id === null);
   const profileId = profileChoice ?? project?.default_profile_id ?? "";
-  const profileTriangles = projectProfiles.find((p) => p.id === profileId)?.budgets.triangles[kind]
-    ?? meta.data?.profile_defaults.budgets.triangles[kind];
+  const effect = kind === "effect";
+  const meshKind = effect ? "hero" : kind;
+  const profileTriangles = projectProfiles.find((p) => p.id === profileId)?.budgets.triangles[meshKind]
+    ?? meta.data?.profile_defaults.budgets.triangles[meshKind];
   const triangleLimit = Number.parseInt(triangles, 10);
   const profileMesh = projectProfiles.find((p) => p.id === profileId)?.mesh ?? meta.data?.profile_defaults.mesh;
   const profilePreset = profileMesh ? meshPreset(profileMesh.steps, profileMesh.resolution) : "custom";
@@ -124,7 +126,7 @@ export function NewAssetPage() {
         height: isCharacter(kind) && Number(height) > 0 ? Number(height) : undefined,
         profile_id: profileId || undefined,
         overrides:
-          triangleLimit > 0 || chosenMesh || multiView
+          !effect && (triangleLimit > 0 || chosenMesh || multiView)
             ? {
                 ...(triangleLimit > 0 ? { budgets: { triangles: { [kind]: triangleLimit } } } : {}),
                 ...(chosenMesh || multiView
@@ -146,6 +148,7 @@ export function NewAssetPage() {
         <PageHeader title="New asset" subtitle="Describe it, or bring your own image of it." back={{ to: "/", label: "Assets" }} />
         <Card>
           <Stack gap={4}>
+            {kind !== "effect" && (
             <Field
               label="Start from"
               group
@@ -167,6 +170,7 @@ export function NewAssetPage() {
                 />
               )}
             </Field>
+            )}
             {fromImage && (
               <Grid cols={2}>
                 <Field label="Image" hint="PNG, JPEG or WebP. One subject, whole and uncropped, on a plain background works best.">
@@ -210,7 +214,9 @@ export function NewAssetPage() {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder={
-                    kind === "weapon"
+                    kind === "effect"
+                      ? "a poison arrow trailing green mist that bursts into a toxic cloud"
+                      : kind === "weapon"
                       ? "a curved bronze sword with a leather-wrapped hilt"
                       : kind === "gear"
                         ? "a dented iron chestplate with a red tabard"
@@ -236,7 +242,7 @@ export function NewAssetPage() {
               <Field label="Name" hint="Optional. Taken from the description when left empty.">
                 {(id) => <Input id={id} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />}
               </Field>
-              {isCharacter(kind) ? (
+              {effect ? null : isCharacter(kind) ? (
                 <Field label="Archetype" hint="Picked from the description unless you choose one.">
                   {(id) => (
                     <Select
@@ -303,6 +309,7 @@ export function NewAssetPage() {
                   />
                 )}
               </Field>
+              {!effect && (<>
               <Field label="Triangle limit" hint="Optional. Leave empty to use the style profile's limit for this kind.">
                 {(id) => (
                   <Input
@@ -330,13 +337,16 @@ export function NewAssetPage() {
                   />
                 )}
               </Field>
+              </>)}
             </Grid>
             <Stack gap={2}>
-              <Checkbox
-                label="Multi-view mesh: draw the back and sides first, so the back isn't guessed (slower)"
-                checked={multiView}
-                onChange={setMultiView}
-              />
+              {!effect && (
+                <Checkbox
+                  label="Multi-view mesh: draw the back and sides first, so the back isn't guessed (slower)"
+                  checked={multiView}
+                  onChange={setMultiView}
+                />
+              )}
               <Checkbox
                 label="Autopilot: the local vision model judges each picture and mesh against the description, and redraws or rebuilds what doesn't match; it stops at gate 3 for you"
                 checked={autopilot}

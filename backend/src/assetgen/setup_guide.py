@@ -188,6 +188,36 @@ def setup_report(settings: Settings, patches: str | None = None) -> list[dict]:
         ],
     })
 
+    # ---- HY-Motion (optional) ----
+    from .adapters.real.hymotion import HYMotion  # noqa: PLC0415
+    ready, detail = HYMotion(settings).ready()
+    parts.append({
+        "id": "hymotion", "name": "HY-Motion 1.0 (optional: skill animations)", "required": False,
+        "role": "Turns a skill's description (\"hurls a fireball with the right hand\") into a body animation for "
+                "biped characters, retargeted like the library clips. About 26 GB of GPU memory while it runs.",
+        "settings": {"hymotion_path": str(settings.hymotion_path), "hymotion_python": str(settings.hymotion_python),
+                     "hymotion_model": settings.hymotion_model},
+        "checks": [_item("HY-Motion", ready, detail)],
+        "steps": [
+            _step("Get HY-Motion (Tencent HY-Motion 1.0 Community License: not for use in the EU, UK or South Korea).",
+                  "git clone https://github.com/Tencent-Hunyuan/HY-Motion-1.0 C:/tools/HY-Motion-1.0\n"
+                  "cd C:/tools/HY-Motion-1.0\ngit lfs pull"),
+            _step("Make its Python environment (PyTorch for your GPU and its requirements; the FBX SDK is not needed).",
+                  "uv venv --python 3.11 .venv\nuv pip install --python .venv/Scripts/python.exe torch torchvision "
+                  "--index-url https://download.pytorch.org/whl/cu128\nuv pip install --python .venv/Scripts/python.exe "
+                  "\"huggingface_hub[cli]\" torchdiffeq==0.2.5 accelerate diffusers==0.26.3 transformers==4.53.3 "
+                  "einops==0.8.1 safetensors bitsandbytes \"numpy<2\" scipy transforms3d==0.4.2 PyYAML omegaconf==2.3.0 "
+                  "click requests openai"),
+            _step("Download the model (4 GB) and its text encoders, Qwen3-8B (16 GB) and CLIP (1.7 GB).",
+                  ".venv/Scripts/hf download tencent/HY-Motion-1.0 --include \"HY-Motion-1.0/*\" --local-dir ckpts/tencent\n"
+                  ".venv/Scripts/hf download openai/clip-vit-large-patch14 --include \"*.json\" \"*.txt\" "
+                  "model.safetensors --local-dir ckpts/clip-vit-large-patch14\n"
+                  ".venv/Scripts/hf download Qwen/Qwen3-8B --local-dir ckpts/Qwen3-8B"),
+            _step("Tell Forge where it is, in backend/assetgen.toml (these are the defaults).",
+                  'hymotion_path = "C:/tools/HY-Motion-1.0"\nhymotion_python = "C:/tools/HY-Motion-1.0/.venv/Scripts/python.exe"'),
+        ],
+    })
+
     # ---- MV-Adapter (optional) ----
     ready, detail = MultiViewImages(settings).ready()
     parts.append({

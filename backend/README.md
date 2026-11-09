@@ -285,6 +285,48 @@ up to 20 assets from one description, the same or varied by the LLM (`vary`), sh
 puts the copy at gate 3. The mesh, skeleton and clips are kept, so it takes seconds and fits the
 same gear (`src/assetgen/variants.py`).
 
+### Skill animations (HY-Motion)
+
+The Skills page (`/api/motions`) turns a skill's description into a body animation any biped can
+play. The language model writes a motion prompt in HY-Motion's style ("A person thrusts the right
+palm forward ...", `QwenLLM.motion_prompt`) and guesses its length; HY-Motion 1.0 makes the motion
+on its SMPL-H skeleton (`external/hy_motion.py`, run with its own Python like UniRig; about 26 GB of
+GPU memory, so the worker frees the others first); `blender_scripts/motion_to_clip.py` builds a
+T-pose armature with the biped's bone names and bakes the motion onto it, so the result is a clip
+GLB like the library's (`data/motions/clips/skill_<name>.glb`) and `rig_animate.retarget` takes it
+the same way. A preview on the test dummy comes last. "Add the clip" puts `skill_<name>` in a style
+profile's extra clips for bipeds: heroes rigged from then on get it (rigged ones when rigged
+again). It runs as a side job (`motion`); "Make again" uses a new seed, with a note the prompt is
+rewritten with. HY-Motion animates humanoid bodies only (no fingers, effects or creatures); install
+it as `INSTALL.md` says (Tencent HY-Motion 1.0 Community License).
+
+### Skill effects (kind `effect`)
+
+An effect (a poison arrow, a firebolt, a healing glow) goes through the same gates as an asset,
+with its own stages (`Pipeline._effect_*`, `src/assetgen/effects.py`):
+
+* prompt: the language model plans the effect (`QwenLLM.effect_plan`): a projectile (a
+  `projectile` that loops while it flies and an `impact`), a burst (an `impact`) or an aura (a
+  looping `aura`), an optional `cast`, a palette, trail particles and a travel speed. Each part
+  gets a picture prompt (alone, on black) and a motion prompt. Gate 1 shows the main part's
+  candidates, checked for a black background and something to see.
+* mesh ("Flipbooks"): every part is drawn in the picked look, then animated by Wan 2.2 TI2V 5B in
+  ComfyUI (`ComfyUIImage.animate_frames`, 33 frames at 512 px, about 12 s). The frames become a
+  16-frame flipbook at 256 px: brightness is the alpha (the colour un-premultiplied), a loop's
+  ends are cross-faded, a one-shot fades out. Gate 2 plays them and checks each part's coverage,
+  motion and loop seam.
+* rig ("Sequence"): the parts put together; gate 3 plays the effect as the game does (cast, flight
+  with the trail, impact).
+* export: Godot gets `res://generated/effect/<name>/`: a sheet per part, `<name>_frames.tres`
+  (an animation per part), `<name>.tscn` (an `AnimatedSprite2D` per part, glowing ones additive,
+  and `GPUParticles2D` for the trail) and `<name>.gd`, whose `play(from, to)` runs the cast, flies
+  the projectile to `to` (signal `hit`) and plays the impact. Unity gets the sheets and
+  `<name>.json` (grid, frames, fps, loop, blend) for a Particle System's Texture Sheet Animation.
+
+Wan's model files are the `wan_unet`, `wan_text_encoder` and `wan_vae` settings (ComfyUI's
+`models/diffusion_models`, `text_encoders` and `vae`). The worker counts Wan as its own model
+(`video`): a batch of effects draws every picture, then animates every part.
+
 ### Multi-view meshes
 
 Image-to-3D only sees the front, so the back of a mesh is guessed. With the mesh setting

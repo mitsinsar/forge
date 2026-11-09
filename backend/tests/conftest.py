@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from assetgen.adapters import Adapters
 from assetgen.app import create_app
 from assetgen.config import load_settings
-from fakes import FakeBlender, FakeImage, FakeLLM, FakeMesh, FakeRig
+from fakes import FakeBlender, FakeImage, FakeLLM, FakeMesh, FakeMotion, FakeRig
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +32,7 @@ def fake_adapters(**real) -> Adapters:
     """The test doubles for every tool; pass a real adapter by name to use it instead
     (for example ``mesh=Hunyuan3DMesh(settings)`` against a fake server)."""
     adapters = {"llm": FakeLLM(), "image": FakeImage(), "mesh": FakeMesh(), "rig": FakeRig(),
-                "blender": FakeBlender()}
+                "blender": FakeBlender(), "motion": FakeMotion()}
     return Adapters(**{**adapters, **real})
 
 

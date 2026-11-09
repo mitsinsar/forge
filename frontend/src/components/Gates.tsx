@@ -31,6 +31,7 @@ import {
   Thumb,
 } from "../ui/kit";
 import { SpritePlayer } from "../viewers/SpritePlayer";
+import { EffectPlanCard } from "./EffectGates";
 import { ModelViewer } from "./Viewer";
 import { CheckBadge, ChecksCard } from "./Checks";
 import { JointGuide } from "./JointGuide";
@@ -104,7 +105,7 @@ function RejectDialog({
   );
 }
 
-function GateBar({
+export function GateBar({
   gate,
   asset,
   approveLabel,
@@ -264,6 +265,7 @@ export function Gate1({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
             </Stack>
           </Card>
         )}
+        {asset.kind === "effect" ? <EffectPlanCard asset={asset} /> : (
         <Card title="Archetype" subtitle="The skeleton and clip set the asset is rigged with.">
           <Stack gap={3}>
             <Row>
@@ -309,6 +311,7 @@ export function Gate1({ asset, readOnly = false }: { asset: Asset; readOnly?: bo
             )}
           </Stack>
         </Card>
+        )}
       </Grid>
     </Stack>
   );

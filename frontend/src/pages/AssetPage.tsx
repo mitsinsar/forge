@@ -4,7 +4,8 @@ import { api, localUrl, type Asset, type Stage } from "../api/client";
 import { keys, useApiMutation, useAsset, useProfiles, useProjects } from "../api/queries";
 import { AssetStatus } from "../components/AssetStatus";
 import { AssetDetails, DoneView, FailedView, Gate1, Gate2, Gate3, StoppedView } from "../components/Gates";
-import { KIND_LABEL, STAGE_LABEL, label } from "../labels";
+import { EffectGate2, EffectGate3 } from "../components/EffectGates";
+import { EFFECT_STAGE_LABEL, KIND_LABEL, STAGE_LABEL, label } from "../labels";
 import {
   Badge,
   Checkbox,
@@ -58,7 +59,8 @@ function steps(asset: Asset, viewing: Stage | null, setViewing: (stage: Stage | 
       : isCurrent && viewing
         ? () => setViewing(null)
         : undefined;
-    return { label: STAGE_LABEL[stage], sub, state, onClick, selected: viewing ? viewing === stage : isCurrent };
+    const names = asset.kind === "effect" ? EFFECT_STAGE_LABEL : STAGE_LABEL;
+    return { label: names[stage], sub, state, onClick, selected: viewing ? viewing === stage : isCurrent };
   });
 }
 
@@ -73,8 +75,8 @@ function PastStep({ asset, stage, godot, onBack }: { asset: Asset; stage: Stage;
         </Row>
       </Notice>
       {stage === "prompt" && <Gate1 asset={asset} readOnly />}
-      {stage === "mesh" && <Gate2 asset={asset} readOnly />}
-      {stage === "rig" && <Gate3 asset={asset} godot={godot} readOnly />}
+      {stage === "mesh" && (asset.kind === "effect" ? <EffectGate2 asset={asset} readOnly /> : <Gate2 asset={asset} readOnly />)}
+      {stage === "rig" && (asset.kind === "effect" ? <EffectGate3 asset={asset} readOnly /> : <Gate3 asset={asset} godot={godot} readOnly />)}
     </Stack>
   );
 }
@@ -84,7 +86,7 @@ function Working({ asset }: { asset: Asset }) {
   const queued = asset.status === "queued";
   return (
     <Card
-      title={queued ? "Queued" : `Working on ${STAGE_LABEL[asset.stage].toLowerCase()}`}
+      title={queued ? "Queued" : `Working on ${(asset.kind === "effect" ? EFFECT_STAGE_LABEL : STAGE_LABEL)[asset.stage].toLowerCase()}`}
       actions={
         <Button size="sm" variant="danger" busy={stop.isPending} disabled={!queued && !asset.autopilot}
                 title={queued ? "Take it off the queue" : "Finish this step, then wait at the gate"}
@@ -143,8 +145,10 @@ export function AssetPage() {
   let body;
   if (shown) body = <PastStep key={`past:${shown}:${viewKey}`} asset={a} stage={shown} godot={godot} onBack={() => setViewing(null)} />;
   else if (a.status === "waiting" && a.gate === 1) body = <Gate1 key={viewKey} asset={a} />;
-  else if (a.status === "waiting" && a.gate === 2) body = <Gate2 key={viewKey} asset={a} />;
-  else if (a.status === "waiting" && a.gate === 3) body = <Gate3 key={viewKey} asset={a} godot={godot} />;
+  else if (a.status === "waiting" && a.gate === 2)
+    body = a.kind === "effect" ? <EffectGate2 key={viewKey} asset={a} /> : <Gate2 key={viewKey} asset={a} />;
+  else if (a.status === "waiting" && a.gate === 3)
+    body = a.kind === "effect" ? <EffectGate3 key={viewKey} asset={a} /> : <Gate3 key={viewKey} asset={a} godot={godot} />;
   else if (a.status === "done") body = <DoneView asset={a} />;
   else if (a.status === "failed") body = <FailedView asset={a} />;
   else if (a.status === "stopped") body = <StoppedView asset={a} />;
@@ -167,7 +171,7 @@ export function AssetPage() {
         actions={
           <Row gap={2}>
             <LinkButton to={`/new?from=${a.id}`} variant="ghost">More like this</LinkButton>
-            {a.outputs.rig && a.status !== "running" && a.status !== "queued" && (
+            {a.outputs.rig && a.kind !== "effect" && a.status !== "running" && a.status !== "queued" && (
               <Button onClick={() => setVarying(true)}>Colour variant</Button>
             )}
             <Button variant="ghost" onClick={() => setDeleting(true)}>

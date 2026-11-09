@@ -23,6 +23,8 @@ TABLES: dict[str, tuple[str, ...]] = {
     "jobs": ("kind", "status", "target_id", "queued_at"),
     # Saved combinations of a hero and the gear and weapon it wears.
     "outfits": ("project_id", "name"),
+    # Generated skill animations (HY-Motion): clips any biped can play, by clip name.
+    "motions": ("name", "status"),
 }
 
 

@@ -18,7 +18,7 @@ from PIL import Image
 
 from .archetypes import get_archetype, load_archetypes
 from .db import Database, new_id, now
-from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, GEAR_SLOTS, KINDS,
+from .defaults import (BASE_MODELS, CAMERA_DIRECTIONS, CAMERA_PRESETS, ENGINES, GEAR_SLOTS, KINDS, MESH_KINDS,
                        SPRITE_LOOKS, STAGES, WEAPON_ATTACKS, WEAPON_CLASSES, deep_merge, profile_defaults)
 from .exporters import safe_name
 from .pipeline import DUMMY, Conflict, Invalid, Pipeline
@@ -28,7 +28,7 @@ from .setup_guide import setup_report
 from .tools import check_tools
 from .schemas import (Redo, AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, AutopilotSet, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
-                      TrainingCandidate)
+                      TrainingCandidate, MotionCreate, MotionRedo, MotionUse)
 
 MAX_REFERENCE_IMAGES = 3
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -70,7 +70,7 @@ def meta(request: Request):
     return {
         "version": request.app.version,
         "profile_defaults": profile_defaults(),
-        "kinds": KINDS, "engines": ENGINES, "base_models": BASE_MODELS, "camera_presets": CAMERA_PRESETS,
+        "kinds": KINDS, "mesh_kinds": MESH_KINDS, "engines": ENGINES, "base_models": BASE_MODELS, "camera_presets": CAMERA_PRESETS,
         "camera_directions": CAMERA_DIRECTIONS, "sprite_looks": SPRITE_LOOKS, "gear_slots": GEAR_SLOTS,
         "weapon_classes": WEAPON_CLASSES, "weapon_attacks": WEAPON_ATTACKS, "stages": STAGES,
         "gates": {"1": "prompt", "2": "mesh", "3": "rig"},
@@ -512,6 +512,8 @@ def _create_asset(request: Request, body: AssetCreate, source: Image.Image | Non
         raise HTTPException(422, "slot is only for gear")
     if body.weapon_class and body.kind != "weapon":
         raise HTTPException(422, "weapon_class is only for weapons")
+    if body.kind == "effect" and (body.archetype or body.height is not None or source is not None):
+        raise HTTPException(422, "skill effects are drawn and animated from the description only")
     if body.height is not None and body.kind in ("gear", "weapon"):
         raise HTTPException(422, "height is only for characters; gear and weapons fit their wearer")
     overrides = body.overrides.model_dump(exclude_none=True) if body.overrides else {}
@@ -814,6 +816,65 @@ def delete_outfit(outfit_id: str, db: Database = Depends(db_of)):
     _found(db.get("outfits", outfit_id), "outfit")
     db.delete("outfits", outfit_id)
     return Response(status_code=204)
+
+
+# ---- skill animations ---------------------------------------------------------
+
+def _motion_out(request: Request, motion: dict) -> dict:
+    preview = motion.get("preview")
+    return {**motion, "url": (str(request.url_for("read_motion_preview", motion_id=motion["id"]))
+                              + f"?v={motion.get('updated_at', '')}") if preview else None}
+
+
+@router.get("/motions", tags=["motions"], summary="List skill animations (generated clips any biped can play)")
+def list_motions(request: Request):
+    return [_motion_out(request, m) for m in pipeline_of(request).db.list("motions")]
+
+
+@router.post("/motions", tags=["motions"], status_code=201,
+             summary="Make a skill animation from a description (HY-Motion; queued job)")
+def create_motion(request: Request, body: MotionCreate):
+    return _motion_out(request, pipeline_of(request).create_motion(**body.model_dump()))
+
+
+@router.get("/motions/{motion_id}", tags=["motions"], summary="Get a skill animation")
+def read_motion(request: Request, motion_id: str):
+    return _motion_out(request, _found(pipeline_of(request).db.get("motions", motion_id), "skill animation"))
+
+
+@router.post("/motions/{motion_id}/redo", tags=["motions"],
+             summary="Make a skill animation again: a new seed, with a note or your own prompt")
+def redo_motion(request: Request, motion_id: str, body: MotionRedo):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("motions", motion_id), "skill animation")
+    return _motion_out(request, _run(lambda: pipeline.redo_motion(motion_id, **body.model_dump())))
+
+
+@router.post("/motions/{motion_id}/use", tags=["motions"],
+             summary="Add a skill animation to a style profile's clips for bipeds")
+def use_motion(request: Request, motion_id: str, body: MotionUse):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("motions", motion_id), "skill animation")
+    _found(pipeline.db.get("profiles", body.profile_id), "profile")
+    return _run(lambda: pipeline.use_motion(motion_id, body.profile_id))
+
+
+@router.delete("/motions/{motion_id}", tags=["motions"], status_code=204, summary="Delete a skill animation")
+def delete_motion(request: Request, motion_id: str):
+    if not pipeline_of(request).delete_motion(motion_id):
+        raise HTTPException(404, "skill animation not found")
+    return Response(status_code=204)
+
+
+@router.get("/motions/{motion_id}/preview.glb", tags=["motions"],
+            summary="The skill animation played by the test dummy")
+def read_motion_preview(request: Request, motion_id: str):
+    pipeline = pipeline_of(request)
+    motion = _found(pipeline.db.get("motions", motion_id), "skill animation")
+    target = Path(pipeline.settings.data_dir) / (motion.get("preview") or "missing")
+    if not motion.get("preview") or not target.is_file():
+        raise HTTPException(404, "no preview yet")
+    return delivery.send(request, target, "model/gltf-binary")
 
 
 # ---- live events ------------------------------------------------------------

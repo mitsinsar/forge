@@ -33,6 +33,7 @@ export const KIND_LABEL: Record<Kind, string> = {
   boss: "Boss",
   gear: "Gear",
   weapon: "Weapon",
+  effect: "Skill effect",
 };
 
 export const STATUS_LABEL: Record<AssetStatus, string> = {
@@ -51,7 +52,15 @@ export const STAGE_LABEL: Record<Stage, string> = {
   export: "Export",
 };
 
-export const isCharacter = (kind: Kind) => kind !== "gear" && kind !== "weapon";
+export const isCharacter = (kind: Kind) => kind !== "gear" && kind !== "weapon" && kind !== "effect";
+
+/** The steps' names for skill effects: drawn, animated into flipbooks, put together. */
+export const EFFECT_STAGE_LABEL: Record<Stage, string> = {
+  prompt: "Preview",
+  mesh: "Flipbooks",
+  rig: "Sequence",
+  export: "Export",
+};
 
 /** Mesh quality presets: diffusion steps and surface resolution of the image-to-mesh run. */
 export const MESH_PRESETS: { value: string; label: string; steps: number; resolution: number; hint: string }[] = [

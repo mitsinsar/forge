@@ -5,7 +5,8 @@ from __future__ import annotations
 import copy
 import hashlib
 
-KINDS =("hero", "monster", "boss", "gear", "weapon")
+KINDS = ("hero", "monster", "boss", "gear", "weapon", "effect")
+MESH_KINDS = KINDS[:5]  # every kind but skill effects (flipbooks) has a mesh, budgets and a rig
 ENGINES = ("unity", "godot")
 BASE_MODELS = ("qwen-image", "sdxl", "flux")
 CAMERA_PRESETS = ("side", "three_quarter", "topdown_4", "topdown_8")

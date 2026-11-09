@@ -40,6 +40,10 @@ class Settings:
     # only; empty turns it off) and how strongly it holds the pose.
     pose_controlnet: str = "openpose_sdxl_xinsir.safetensors"
     pose_strength: float = 0.8
+    # Wan 2.2 TI2V 5B in ComfyUI, which animates skill effects (image to video).
+    wan_unet: str = "wan2.2_ti2v_5B_fp16.safetensors"
+    wan_text_encoder: str = "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    wan_vae: str = "wan2.2_vae.safetensors"
     qwen_url: str = "http://127.0.0.1:11434/v1"
     qwen_model: str = "qwen3"
     hunyuan3d_url: str = "http://127.0.0.1:8081"
@@ -63,6 +67,11 @@ class Settings:
     mvadapter_models: Path = Path("C:/tools/MV-Adapter-models")
     mvadapter_sdxl: str = ""  # empty: ComfyUI's models/checkpoints/sd_xl_base_1.0.safetensors
     mvadapter_timeout: float = 900.0
+    # Skill animations: HY-Motion 1.0 turns a description into body motion (adapters/real/hymotion.py).
+    hymotion_path: Path = Path("C:/tools/HY-Motion-1.0")
+    hymotion_python: Path = Path("C:/tools/HY-Motion-1.0/.venv/Scripts/python.exe")
+    hymotion_model: str = "ckpts/tencent/HY-Motion-1.0"  # in hymotion_path (or -Lite: 24 GB instead of 26)
+    hymotion_timeout: float = 900.0
     # How to restart a tool that crashed: {tool: {command, cwd, port}} (see watchdog.py).
     restart: dict = field(default_factory=dict)
     python_path: Path = Path("python")

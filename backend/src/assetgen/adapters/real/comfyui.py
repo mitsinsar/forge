@@ -214,6 +214,8 @@ class ComfyUIImage:
         self.pose_controlnet = settings.pose_controlnet
         self.pose_strength = float(settings.pose_strength)
         self.client_id = uuid.uuid4().hex
+        # Wan 2.2 TI2V 5B, which animates skill effects (models/diffusion_models, text_encoders, vae).
+        self.wan = {"unet": settings.wan_unet, "text_encoder": settings.wan_text_encoder, "vae": settings.wan_vae}
 
     # ---- HTTP ----------------------------------------------------------------
 
@@ -401,6 +403,61 @@ class ComfyUIImage:
         say(f"{len(names)} style reference image(s) applied through "
             f"{'IP-Adapter' if kind == 'ipadapter' else 'Flux Redux'}.")
 
+    def animate_frames(self, *, image, prompt, negative_prompt, frames, size, seed, out_dir, progress) -> list[Path]:
+        """Animates ``image`` with Wan 2.2 TI2V 5B (image to video, ``wan_*`` settings) and writes each frame
+        as ``out_dir/frame_<n>.png``; frames already there are kept (the step is done)."""
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        done = sorted(out_dir.glob("frame_*.png"))
+        if len(done) >= frames:
+            return done
+        progress("Preparing the Wan 2.2 workflow", 0.0)
+        uploaded = self.upload_image(Path(image))
+        workflow = {
+            "1": {"class_type": "UNETLoader", "inputs": {"unet_name": self.wan["unet"], "weight_dtype": "default"},
+                  "_meta": {"title": "model"}},
+            "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": self.wan["text_encoder"], "type": "wan"}},
+            "3": {"class_type": "VAELoader", "inputs": {"vae_name": self.wan["vae"]}},
+            "4": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 8.0}},
+            "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": negative_prompt}},
+            "7": {"class_type": "LoadImage", "inputs": {"image": uploaded}},
+            "8": {"class_type": "Wan22ImageToVideoLatent", "inputs": {
+                "vae": ["3", 0], "width": int(size), "height": int(size), "length": int(frames), "batch_size": 1,
+                "start_image": ["7", 0]}},
+            "9": {"class_type": "KSampler", "inputs": {
+                "model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["8", 0],
+                "seed": int(seed) % (2 ** 32), "steps": 20, "cfg": 5.0, "sampler_name": "uni_pc",
+                "scheduler": "simple", "denoise": 1.0}},
+            "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["3", 0]}},
+            "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0],
+                                                         "filename_prefix": f"assetgen/frames_{uuid.uuid4().hex[:8]}"},
+                   "_meta": {"title": "save"}},
+        }
+        with self._socket() as socket:
+            prompt_id = self._run_prompt(socket, workflow, lambda s, f: progress(f"Animating: {s}", 0.95 * f))
+        images = self._outputs(prompt_id, "11")
+        if len(images) < frames:
+            raise ComfyUIError(f"Wan 2.2 returned {len(images)} frames instead of {frames}.")
+        paths = []
+        for number, info in enumerate(images[:frames]):
+            query = urllib.parse.urlencode({"filename": info["filename"], "subfolder": info.get("subfolder", ""),
+                                            "type": info.get("type", "output")})
+            path = out_dir / f"frame_{number:03d}.png"
+            path.write_bytes(self._request("GET", f"/view?{query}"))
+            paths.append(path)
+        progress("Frames ready", 1.0)
+        return paths
+
+    def _outputs(self, prompt_id: str, save_node: str) -> list[dict]:
+        for _ in range(HISTORY_TRIES):
+            history = (self._json("GET", f"/history/{prompt_id}") or {}).get(prompt_id) or {}
+            images = ((history.get("outputs") or {}).get(save_node) or {}).get("images") or []
+            if images:
+                return images
+            time.sleep(HISTORY_WAIT)
+        raise ComfyUIError("ComfyUI finished but returned no frames.")
+
     def _socket(self):
         scheme = "wss" if self.url.startswith("https") else "ws"
         address = f"{scheme}://{self.url.split('://', 1)[-1]}/ws?clientId={self.client_id}"
@@ -443,6 +500,12 @@ class ComfyUIImage:
         return ComfyUIError(f"{lead}: {'; '.join(dict.fromkeys(problems))}.")
 
     def _run(self, socket, workflow: dict, report: Callable[[str, float], None]) -> bytes:
+        prompt_id = self._run_prompt(socket, workflow, report)
+        report("downloading", 0.97)
+        return self._download(prompt_id, find_node(workflow, "save"))
+
+    def _run_prompt(self, socket, workflow: dict, report: Callable[[str, float], None]) -> str:
+        """Queues the workflow and waits until ComfyUI has run it; its prompt id."""
         prompt_id = self._queue(workflow)
         report("queued in ComfyUI", 0.0)
         deadline = time.monotonic() + self.timeout
@@ -477,8 +540,7 @@ class ComfyUIImage:
             elif kind == "execution_success" or (kind == "executing" and data.get("node") is None
                                                   and data.get("prompt_id") == prompt_id):
                 break
-        report("downloading", 0.97)
-        return self._download(prompt_id, find_node(workflow, "save"))
+        return prompt_id
 
     def _download(self, prompt_id: str, save_node: str) -> bytes:
         # ComfyUI can report success a moment before it writes the run's history: ask a few times.

@@ -220,7 +220,43 @@ Cleans meshes and makes LODs, skins and animates them, fits gear, renders sprite
    ```
 
 
-## 6. MV-Adapter (optional: multi-view meshes)
+## 6. HY-Motion 1.0 (optional: skill animations)
+
+Turns a skill's description ("hurls a fireball with the right hand") into a body animation for biped characters, retargeted like the library clips. About 26 GB of GPU memory while it runs.
+
+1. Get HY-Motion (Tencent HY-Motion 1.0 Community License: not for use in the EU, UK or South Korea).
+
+   ```
+   git clone https://github.com/Tencent-Hunyuan/HY-Motion-1.0 C:/tools/HY-Motion-1.0
+   cd C:/tools/HY-Motion-1.0
+   git lfs pull
+   ```
+
+2. Make its Python environment (PyTorch for your GPU and its requirements; the FBX SDK is not needed).
+
+   ```
+   uv venv --python 3.11 .venv
+   uv pip install --python .venv/Scripts/python.exe torch torchvision --index-url https://download.pytorch.org/whl/cu128
+   uv pip install --python .venv/Scripts/python.exe "huggingface_hub[cli]" torchdiffeq==0.2.5 accelerate diffusers==0.26.3 transformers==4.53.3 einops==0.8.1 safetensors bitsandbytes "numpy<2" scipy transforms3d==0.4.2 PyYAML omegaconf==2.3.0 click requests openai
+   ```
+
+3. Download the model (4 GB) and its text encoders, Qwen3-8B (16 GB) and CLIP (1.7 GB).
+
+   ```
+   .venv/Scripts/hf download tencent/HY-Motion-1.0 --include "HY-Motion-1.0/*" --local-dir ckpts/tencent
+   .venv/Scripts/hf download openai/clip-vit-large-patch14 --include "*.json" "*.txt" model.safetensors --local-dir ckpts/clip-vit-large-patch14
+   .venv/Scripts/hf download Qwen/Qwen3-8B --local-dir ckpts/Qwen3-8B
+   ```
+
+4. Tell Forge where it is, in backend/assetgen.toml (these are the defaults).
+
+   ```
+   hymotion_path = "C:/tools/HY-Motion-1.0"
+   hymotion_python = "C:/tools/HY-Motion-1.0/.venv/Scripts/python.exe"
+   ```
+
+
+## 7. MV-Adapter (optional: multi-view meshes)
 
 Draws the back and sides of the picked image so Hunyuan3D builds the shape from four views (the mesh setting multi_view). Off by default.
 

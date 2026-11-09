@@ -9,6 +9,7 @@ from .real import real_adapter_class
 
 def build_adapters(settings: Settings) -> Adapters:
     """The real adapter of every tool (the mesh tool chosen by ``mesh_tool``)."""
+    from .real.hymotion import HYMotion  # noqa: PLC0415
     from .real.mvviews import MultiViewImages  # noqa: PLC0415
 
     from .real import MESH_ADAPTERS  # noqa: PLC0415
@@ -16,7 +17,7 @@ def build_adapters(settings: Settings) -> Adapters:
     adapters = {name: real_adapter_class(name, settings.mesh_tool)(settings) for name in ADAPTER_NAMES}
     meshes = {tool: (adapters["mesh"] if tool == settings.mesh_tool else real_adapter_class("mesh", tool)(settings))
               for tool in MESH_ADAPTERS}
-    return Adapters(**adapters, views=MultiViewImages(settings), meshes=meshes)
+    return Adapters(**adapters, views=MultiViewImages(settings), meshes=meshes, motion=HYMotion(settings))
 
 
 __all__ = ["Adapters", "build_adapters"]

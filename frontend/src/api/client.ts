@@ -1,7 +1,7 @@
 // Typed client for the assetgen backend (all routes under /api; see backend/README.md).
 
 export type Engine = "unity" | "godot";
-export type Kind = "hero" | "monster" | "boss" | "gear" | "weapon";
+export type Kind = "hero" | "monster" | "boss" | "gear" | "weapon" | "effect";
 export type BaseModel = "qwen-image" | "sdxl" | "flux";
 export type CameraPreset = "side" | "three_quarter" | "topdown_4" | "topdown_8";
 export type Slot = "head" | "chest" | "legs" | "hands" | "feet" | "cape";
@@ -11,7 +11,9 @@ export type AssetStatus = "queued" | "running" | "waiting" | "done" | "failed" |
 export type Stage = "prompt" | "mesh" | "rig" | "export";
 export type Gate = 1 | 2 | 3;
 
-export type PerKind = Record<Kind, number>;
+/** Every kind with a mesh (skill effects are flipbooks). */
+export type MeshKind = Exclude<Kind, "effect">;
+export type PerKind = Record<MeshKind, number>;
 
 export interface LoraRef {
   id: string;
@@ -118,6 +120,8 @@ export interface Meta {
   version: string;
   profile_defaults: ProfileSettings;
   kinds: Kind[];
+  /** Every kind with a mesh (not skill effects): the ones with triangle and texture budgets. */
+  mesh_kinds: Kind[];
   engines: Engine[];
   base_models: BaseModel[];
   camera_presets: CameraPreset[];
@@ -192,7 +196,7 @@ export interface Examples {
 /** Side work of the worker: an item fitted on a hero, an example sheet. */
 export interface Job {
   id: string;
-  kind: "fit" | "lora_examples" | "profile_examples";
+  kind: "fit" | "lora_examples" | "profile_examples" | "motion";
   target_id: string;
   params: Record<string, unknown>;
   status: "queued" | "running" | "done" | "failed";
@@ -226,6 +230,34 @@ export interface Check {
   label: string;
   status: "pass" | "warn" | "fail";
   detail: string;
+}
+
+/** A generated skill animation (HY-Motion): a clip any biped of a profile can play. */
+export interface Motion {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  prompt: string | null;
+  duration: number | null;
+  in_place: boolean;
+  attempt: number;
+  notes: string[];
+  status: "queued" | "running" | "done" | "failed";
+  step: string;
+  progress: number;
+  error: string | null;
+  clip: { duration: number; frames: number; travel_m?: number } | null;
+  url: string | null;
+  updated_at: string;
+}
+
+export interface MotionInput {
+  title: string;
+  description: string;
+  prompt?: string | null;
+  duration?: number | null;
+  in_place?: boolean;
 }
 
 export interface Lora {
@@ -287,6 +319,35 @@ export interface SpritePreview {
   files: Record<string, Record<string, string[]>>;
 }
 
+/** A skill effect's parts, planned by the language model (see backend effects.py). */
+export interface EffectPart {
+  part: "cast" | "projectile" | "impact" | "aura";
+  picture: string;
+  motion: string;
+  loop: boolean;
+  blend: "add" | "mix";
+  scale: number;
+}
+
+export interface EffectParticles {
+  enabled: boolean;
+  amount: number;
+  lifetime: number;
+  speed: number;
+  spread: number;
+  gravity: number;
+  size: number;
+}
+
+export interface EffectPlan {
+  kind: "projectile" | "burst" | "aura";
+  palette: string[];
+  parts: EffectPart[];
+  main: EffectPart["part"];
+  particles: EffectParticles;
+  travel_speed: number;
+}
+
 export interface AssetOutputs {
   prompt?: {
     /** "upload": the single candidate is the user's own image; no image model ran. */
@@ -304,6 +365,8 @@ export interface AssetOutputs {
     /** Each candidate's checks; failing candidates were redrawn (``redrawn`` of them) before the gate. */
     candidate_checks?: { candidate: number; checks: Check[]; status: Check["status"] }[];
     redrawn?: number;
+    /** Skill effects: the parts the language model planned (the candidates show the main one). */
+    plan?: EffectPlan;
   };
   mesh?: {
     checks?: Check[];
@@ -317,6 +380,10 @@ export interface AssetOutputs {
     quality?: Partial<MeshQuality>;
     /** What the clean-up removed (missing on meshes made before it was recorded). */
     removed?: { floater_pieces?: number; floater_faces?: number; debris_faces?: number } | null;
+    /** Skill effects: each part's picture and flipbook frames (paths in the asset's folder). */
+    parts?: (EffectPart & { frames: string[] })[];
+    plan?: EffectPlan;
+    fps?: number;
   };
   rig?: {
     checks?: Check[];
@@ -345,6 +412,8 @@ export interface AssetOutputs {
     gear?: { slot: string; scale: number; inside_before: number; inside_after: number; masked_faces: number };
     /** Weapons: what the grip detection measured. */
     weapon?: { length: number; handle_end: "low" | "high" | "middle"; manual: boolean };
+    /** Skill effects: how the parts play together. */
+    sequence?: { kind: EffectPlan["kind"]; travel_speed: number; particles: EffectParticles; palette: string[]; order: string[] };
   };
   export?: {
     engine: Engine;
@@ -580,6 +649,12 @@ export const api = {
     request<Job[]>("GET", `/jobs${query(filters)}`),
   fit: (assetId: string, wearerId: string, placement?: { placement?: number[][]; reset_placement?: boolean }) =>
     request<Job>("POST", `/assets/${assetId}/fits`, { wearer_id: wearerId, ...placement }),
+  motions: () => request<Motion[]>("GET", "/motions"),
+  createMotion: (input: MotionInput) => request<Motion>("POST", "/motions", input),
+  redoMotion: (id: string, input: { note?: string; prompt?: string; duration?: number; in_place?: boolean }) =>
+    request<Motion>("POST", `/motions/${id}/redo`, input),
+  useMotion: (id: string, profileId: string) => request<Profile>("POST", `/motions/${id}/use`, { profile_id: profileId }),
+  deleteMotion: (id: string) => request<void>("DELETE", `/motions/${id}`),
   outfits: (projectId?: string) => request<Outfit[]>("GET", `/outfits${query({ project_id: projectId })}`),
   createOutfit: (input: Omit<Outfit, "id">) => request<Outfit>("POST", "/outfits", input),
   updateOutfit: (id: string, input: Partial<Omit<Outfit, "id" | "project_id">>) =>
