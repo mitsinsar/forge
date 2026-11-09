@@ -300,6 +300,14 @@ again). It runs as a side job (`motion`); "Make again" uses a new seed, with a n
 rewritten with. HY-Motion animates humanoid bodies only (no fingers, effects or creatures); install
 it as `INSTALL.md` says (Tencent HY-Motion 1.0 Community License).
 
+The prompt asks for game timing: a ready stance, a wind-up, a strong action (explosively,
+sharply), a short hold and a recovery, on the spot, right or left for every limb. Each animation
+is made in `MOTION_CANDIDATES` (4) versions from that prompt with other seeds, in one HY-Motion
+run. Each version is drawn as a stick-figure sheet (`motion_sheet.py`: six moments from the front
+and the right side, left limbs blue, right red), and the vision model scores it 0-10
+(`QwenLLM.judge_motion`). The best score becomes the clip. The Skills page and the set page show
+the versions; clicking another (`POST /api/motions/{id}/pick`) makes only its clip again.
+
 A rigged hero can play a skill animation without being rigged again:
 `GET /api/assets/{hero}/skills/{clip}.glb` (`blender_scripts/hero_clip.py`) opens the scene its
 rig stage kept (`rig/rigged.blend`), measures the template again the way the rig stage did and
@@ -346,6 +354,10 @@ with its own stages (`Pipeline._effect_*`, `src/assetgen/effects.py`):
   16-frame flipbook at 256 px: brightness is the alpha (the colour un-premultiplied), a loop's
   ends are cross-faded, a one-shot fades out. Gate 2 plays them and checks each part's coverage,
   motion and loop seam.
+  One part can be made again on its own (`POST /api/assets/{id}/parts/{part}/redo`, "Animate
+  again" or "Draw again" at gates 2 and 3 and on the set page): `animate` keeps its picture and
+  runs Wan with a new seed, `draw` also draws a new picture (three, the judge keeps one), and a note is
+  added to that part's prompt. The other parts' files stay; the effect comes back to gate 2.
 * rig ("Sequence"): the parts put together; gate 3 plays the effect as the game does (cast, flight
   with the trail, impact).
 * export: Godot gets `res://generated/effect/<name>/`: a sheet per part, `<name>_frames.tres`

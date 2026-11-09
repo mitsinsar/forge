@@ -82,6 +82,12 @@ class FakeLLM(FakeBase):
             prompt += ", " + "; ".join(notes)
         return {"prompt": prompt, "duration": 2.0}
 
+    motion_judgements: list = []  # the answer ``judge_motions`` gives next (then None: can't look)
+
+    def judge_motions(self, *, sheets, description, prompt, model=None):
+        assert all(Path(s).is_file() for s in sheets)
+        return self.motion_judgements.pop(0) if self.motion_judgements else None
+
     effect_judgements: list = []  # answers ``inspect_effect`` gives first (then one clean thing, 9/10)
 
     def inspect_effect(self, *, image, description, model=None):

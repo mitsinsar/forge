@@ -636,6 +636,7 @@ export function MediaCard({
   selected,
   onClick,
   empty = "No picture yet",
+  aspect,
 }: {
   image?: string | null;
   frames?: string[];
@@ -646,6 +647,8 @@ export function MediaCard({
   selected?: boolean;
   onClick?: () => void;
   empty?: ReactNode;
+  /** The picture's width / height (default square), e.g. 2 for a wide sheet. */
+  aspect?: number;
 }) {
   const [hover, setHover] = useState(false);
   const [frame, setFrame] = useState(0);
@@ -658,7 +661,7 @@ export function MediaCard({
   const shown = playing ? frames![frame % frames!.length] : image ?? frames?.[0];
   const body = (
     <>
-      <span className="media-card__picture">
+      <span className="media-card__picture" style={aspect ? { aspectRatio: aspect } : undefined}>
         {shown ? <img src={shown} alt="" loading="lazy" /> : <span className="media-card__empty">{empty}</span>}
         {badges && <span className="media-card__badges">{badges}</span>}
       </span>

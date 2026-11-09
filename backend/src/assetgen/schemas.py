@@ -198,6 +198,12 @@ class Redo(Strict):
     note: str | None = Field(None, max_length=2000, description="Kept like a rejection note.")
 
 
+class RedoPart(Strict):
+    mode: Literal["animate", "draw"] = Field("animate", description="animate: keep the picture, animate it again; "
+                                                                    "draw: a new picture too.")
+    note: str | None = Field(None, max_length=1000, description="Added to the part's picture or motion prompt.")
+
+
 class Approve(Strict):
     candidate: int | None = Field(None, ge=1, description="Gate 1: the picked candidate (1-based).")
 
@@ -265,6 +271,10 @@ class MotionRedo(Strict):
     prompt: str | None = Field(None, max_length=600, description="Your own motion prompt instead.")
     duration: float | None = Field(None, ge=1.0, le=10.0)
     in_place: bool | None = None
+
+
+class MotionPick(Strict):
+    candidate: int = Field(ge=1, description="The version to use (1-based); only the clip is made again.")
 
 
 class MotionUse(Strict):

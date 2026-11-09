@@ -248,6 +248,9 @@ export interface Motion {
   progress: number;
   error: string | null;
   clip: { duration: number; frames: number; travel_m?: number } | null;
+  /** The versions made from one prompt (other seeds), with the vision judge's score; ``chosen`` is used. */
+  candidates?: { candidate: number; seed: number; url: string; match: number | null; problems: string[] }[] | null;
+  chosen?: number | null;
   url: string | null;
   updated_at: string;
 }
@@ -503,6 +506,10 @@ export interface Asset {
   notes: { gate?: number; stage?: string; note: string; at?: string }[];
   chosen_candidate: number | null;
   attempts: Partial<Record<Stage, number>>;
+  /** Effects: how many times each part was made (redone parts count up). */
+  part_attempts?: Record<string, number>;
+  /** Effects: notes added to a part's picture (draw) or motion (animate) prompt. */
+  part_notes?: Record<string, { draw?: string[]; animate?: string[] }>;
   outputs: AssetOutputs;
   training_candidate: boolean;
   created_at: string;
@@ -687,10 +694,13 @@ export const api = {
     request<Job[]>("GET", `/jobs${query(filters)}`),
   fit: (assetId: string, wearerId: string, placement?: { placement?: number[][]; reset_placement?: boolean }) =>
     request<Job>("POST", `/assets/${assetId}/fits`, { wearer_id: wearerId, ...placement }),
+  redoPart: (id: string, part: string, input: { mode: "animate" | "draw"; note?: string }) =>
+    request<Asset>("POST", `/assets/${id}/parts/${part}/redo`, input),
   motions: () => request<Motion[]>("GET", "/motions"),
   createMotion: (input: MotionInput) => request<Motion>("POST", "/motions", input),
   redoMotion: (id: string, input: { note?: string; prompt?: string; duration?: number; in_place?: boolean }) =>
     request<Motion>("POST", `/motions/${id}/redo`, input),
+  pickMotion: (id: string, candidate: number) => request<Motion>("POST", `/motions/${id}/pick`, { candidate }),
   useMotion: (id: string, profileId: string) => request<Profile>("POST", `/motions/${id}/use`, { profile_id: profileId }),
   deleteMotion: (id: string) => request<void>("DELETE", `/motions/${id}`),
   sets: () => request<CharacterSet[]>("GET", "/character-sets"),

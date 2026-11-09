@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, localUrl, type Asset, type CharacterSet, type Motion, type SetPicksInput } from "../api/client";
 import { keys, useApiMutation, useAssets, useMotions, useSet } from "../api/queries";
 import { StatusBadge } from "../components/AssetStatus";
-import { partsOf } from "../components/EffectGates";
+import { PartRedos, partsOf } from "../components/EffectGates";
+import { MotionVersions } from "../components/MotionVersions";
 import { SkillTry } from "../components/SkillTry";
 import { ModelViewer } from "../components/Viewer";
 import {
@@ -114,6 +115,12 @@ function SkillSlot({ record, index, assets, motions, hero, onPicks }: {
               <Text small muted>Effect (hover to play)</Text>
               <AssetOptions ids={slot.effects} assets={assets} picked={pick.effect} frames
                             onPick={(id) => setSkill({ effect: id })} />
+              {effect && (
+                <Stack gap={2}>
+                  <Text small muted>Make a part of the picked effect again (it goes back to gate 2, then on by autopilot):</Text>
+                  <PartRedos asset={effect} />
+                </Stack>
+              )}
             </Stack>
           )}
           {slot.motions.length > 0 && (
@@ -121,6 +128,7 @@ function SkillSlot({ record, index, assets, motions, hero, onPicks }: {
               <Text small muted>Animation</Text>
               <MotionOptions ids={slot.motions} motions={motions} picked={pick.motion} shown={dummy}
                              onPick={(id) => { setDummy(null); setSkill({ motion: id }); }} onShow={setDummy} />
+              {motion && <MotionVersions motion={motion} />}
             </Stack>
           )}
           <Field label={`Release: ${Math.round(release * 100)}% of the animation`} hint="When the effect leaves the hand.">

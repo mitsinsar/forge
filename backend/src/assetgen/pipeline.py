@@ -35,7 +35,10 @@ from .defaults import (CAMERA_DIRECTIONS, CAMERA_MIRRORED, DEFAULT_GRIPS, PAPER_
                        STAGE_OF_GATE, STAGES, WEAPON_ATTACKS, deep_merge, profile_defaults, seed_of)
 from .events import EventHub
 from . import checks as qc
-from . import effects, exporters, grips, imaging, pose, variants, watchdog
+from . import effects, exporters, grips, imaging, motion_sheet, pose, variants, watchdog
+
+
+MOTION_CANDIDATES = 4  # versions of each skill animation made from one prompt; the judge picks one
 
 log = logging.getLogger("assetgen.pipeline")
 
@@ -497,7 +500,7 @@ class Pipeline:
             "name": self._clip_name(title), "title": title.strip(), "description": description.strip(),
             "prompt": (prompt or "").strip() or None, "duration": duration, "in_place": bool(in_place),
             "attempt": 1, "notes": [], "status": "queued", "step": "Waiting for the worker", "progress": 0.0,
-            "error": None, "clip": None, "preview": None})
+            "error": None, "clip": None, "preview": None, "candidates": None, "chosen": None})
         self.queue_job("motion", motion["id"])
         return motion
 
@@ -511,7 +514,8 @@ class Pipeline:
         if motion["status"] in ("queued", "running"):
             raise Conflict(f"the skill animation is {motion['status']}")
         changes: dict = {"attempt": motion.get("attempt", 1) + 1, "status": "queued", "step": "Waiting for the worker",
-                         "progress": 0.0, "error": None, "clip": None, "preview": None}
+                         "progress": 0.0, "error": None, "clip": None, "preview": None, "candidates": None,
+                         "chosen": None}
         if note and note.strip():
             changes["notes"] = [*(motion.get("notes") or []), note.strip()]
             changes["prompt"] = None  # written again with the note
@@ -555,6 +559,8 @@ class Pipeline:
         return result
 
     def _make_motion(self, motion: dict, report) -> dict:
+        """``MOTION_CANDIDATES`` motions from one prompt (other seeds), each drawn as a stick-figure
+        sheet and scored by the vision judge; the best one (or the one the user picked) becomes the clip."""
         settings = profile_defaults()
         directory = self.motion_dir(motion["id"])
         directory.mkdir(parents=True, exist_ok=True)
@@ -566,24 +572,73 @@ class Pipeline:
                                                       notes=motion.get("notes") or [], model=self._text_model(settings))
             prompt, duration = written["prompt"], duration or written["duration"]
             self.db.update("motions", motion["id"], {"prompt": prompt, "duration": duration})
-        self._use("motion", settings)
-        motion_json = directory / "motion.json"
-        self.adapters.motion.generate(
-            motions=[{"prompt": prompt, "duration": float(duration or 2.5), "out": str(motion_json),
-                      "seed": seed_of(motion["id"], motion.get("attempt", 1)) % 1000}],
-            work_dir=directory, progress=lambda s, f: report(s, 0.05 + 0.6 * f))
+        base = seed_of(motion["id"], motion.get("attempt", 1))
+        wanted = [{"prompt": prompt, "duration": float(duration or 2.5), "out": str(directory / f"motion_{n}.json"),
+                   "seed": (base + 97 * (n - 1)) % 1000} for n in range(1, MOTION_CANDIDATES + 1)]
+        if any(not Path(w["out"]).is_file() for w in wanted):
+            self._use("motion", settings)
+        self.adapters.motion.generate(motions=wanted, work_dir=directory, progress=lambda s, f: report(s, 0.05 + 0.5 * f))
+        candidates = motion.get("candidates") or []
+        if len(candidates) != len(wanted):
+            report("Judging the versions", 0.56)
+            self._use("llm", settings)
+            sheets = [motion_sheet.draw_sheet(Path(w["out"]), directory / f"sheet_{n}.png")
+                      for n, w in enumerate(wanted, start=1)]
+            verdicts = None
+            for _ in range(2):  # the language model may still be loading after HY-Motion
+                try:
+                    verdicts = self.adapters.llm.judge_motions(
+                        sheets=sheets, description=f"{motion['title']}: {motion['description']}", prompt=prompt,
+                        model=self._text_model(settings))
+                    break
+                except Exception:  # noqa: BLE001 - the measured checks still score the versions
+                    log.warning("the motion judge failed on %s", motion["id"], exc_info=True)
+            candidates = []
+            for n, (w, sheet) in enumerate(zip(wanted, sheets), start=1):
+                verdict = (verdicts or [None] * len(wanted))[n - 1]
+                measured = motion_sheet.measure(Path(w["out"]), prompt)
+                judged = verdict["match"] if verdict else None
+                # The judge's score (7 when it can't look) less the measured problems.
+                score = max(0, (7 if judged is None else judged) - sum(c["penalty"] for c in measured))
+                problems = [f"{c['label']}: no ({c['detail']})" for c in measured if not c["ok"]]
+                candidates.append({"candidate": n, "seed": w["seed"],
+                                   "sheet": sheet.relative_to(Path(self.settings.data_dir)).as_posix(),
+                                   "match": score, "judge": judged, "checks": measured,
+                                   "problems": problems + (verdict["problems"] if verdict else [])})
+            self.db.update("motions", motion["id"], {"candidates": candidates})
+        chosen = motion.get("chosen")
+        if not chosen or chosen > len(candidates):  # the judge's pick: the best score, then the first
+            chosen = max(candidates, key=lambda c: (c["match"], -c["candidate"]))["candidate"]
+        motion_json = directory / f"motion_{chosen}.json"
         clip = self.adapters.blender.motion_to_clip(motion_json=motion_json, name=motion["name"],
                                                     in_place=motion.get("in_place", True), out_dir=directory,
                                                     progress=lambda s, f: report(s, 0.65 + 0.1 * f))
         archetype = get_archetype("biped")
         preview = directory / "preview.glb"
+        preview.unlink(missing_ok=True)
         self.adapters.blender.rig_and_animate(
             mesh_glb=None, skeleton={"joints": archetype["joints"], "fit_score": 1.0, "fallback": False},
             archetype=archetype, clips=[motion["name"]], attach={"kind": "body"}, out_path=preview,
             progress=lambda s, f: report(f"Preview: {s}", 0.75 + 0.25 * f))
-        return {"prompt": prompt, "duration": duration,
+        return {"prompt": prompt, "duration": duration, "candidates": candidates, "chosen": chosen,
                 "clip": {k: clip[k] for k in ("duration", "frames", "travel_m") if k in clip},
                 "preview": preview.relative_to(Path(self.settings.data_dir)).as_posix()}
+
+    def pick_motion(self, motion_id: str, candidate: int) -> dict:
+        """Uses another of the skill animation's versions (no new generation: only the clip is made again)."""
+        motion = self.db.get("motions", motion_id)
+        if motion is None:
+            raise KeyError(motion_id)
+        if motion["status"] in ("queued", "running"):
+            raise Conflict(f"the skill animation is {motion['status']}")
+        count = len(motion.get("candidates") or [])
+        if not 1 <= candidate <= count:
+            raise Invalid(f"pick a version from 1 to {count}" if count else "this skill animation has no versions")
+        motion = self.db.update("motions", motion_id, {
+            "chosen": candidate, "status": "queued", "step": f"Waiting for the worker (version {candidate})",
+            "progress": 0.0, "error": None})
+        self.queue_job("motion", motion_id)
+        return motion
 
     def use_motion(self, motion_id: str, profile_id: str) -> dict:
         """Adds the skill animation to a style profile's clips for bipeds (heroes rigged from now on
@@ -1310,7 +1365,20 @@ class Pipeline:
         plan = asset["outputs"]["prompt"]["plan"]
         attempt = (asset.get("attempts") or {}).get("mesh", 1)
         chosen = self.stage_dir(asset["id"], "prompt") / f"candidate_{asset['chosen_candidate']}.png"
-        parts = plan["parts"]
+        # A part made again on its own (redo_effect_part) gets a new seed and its notes.
+        tries = asset.get("part_attempts") or {}
+        wishes = asset.get("part_notes") or {}
+
+        def noted(part: dict) -> dict:
+            asked = wishes.get(part["part"]) or {}
+            picture = ", ".join([part["picture"], *asked.get("draw", [])])
+            motion = ", ".join([part["motion"], *asked.get("animate", [])])
+            return {**part, "picture": picture, "motion": motion}
+
+        def again(part: dict) -> int:
+            return 1000 * (int(tries.get(part["part"], 1)) - 1)
+
+        parts = [noted(p) for p in plan["parts"]]
         # 1. A picture of every part: the picked candidate is the main one, the others are drawn like it.
         pictures: dict[str, Path] = {}
         for index, part in enumerate(parts):
@@ -1318,14 +1386,14 @@ class Pipeline:
             folder.mkdir(parents=True, exist_ok=True)
             picture = folder / "picture.png"
             if not picture.is_file():
-                if part["part"] == plan["main"]:
+                if part["part"] == plan["main"] and not (folder / "redraw").is_file():
                     shutil.copy2(chosen, picture)
                 else:
                     self._use("image", settings)
                     prompt, negative, loras = self._effect_picture_prompts(asset, settings, part, plan)
                     drawn = self.adapters.image.render_candidates(
                         prompt=prompt, negative_prompt=negative, base_model=settings["base_model"], loras=loras,
-                        reference_images=[], count=3, seed=seed_of(asset["id"], attempt) + 10 * index, out_dir=folder / "draw",
+                        reference_images=[], count=3, seed=seed_of(asset["id"], attempt) + 10 * index + again(part), out_dir=folder / "draw",
                         progress=lambda s, f, i=index: progress(f"Drawing the {parts[i]['part']}: {s}",
                                                                 0.3 * (i + f) / len(parts)),
                         hints={**self._hints(asset), "asset_id": f"{asset['id']}_{part['part']}"})
@@ -1349,7 +1417,7 @@ class Pipeline:
                 frames = self.adapters.image.animate_frames(
                     image=pictures[part["part"]], prompt=f"{part['motion']}, {effects.MOTION_SUFFIX}",
                     negative_prompt=effects.MOTION_NEGATIVE, frames=effects.VIDEO_FRAMES, size=effects.VIDEO_SIZE,
-                    seed=seed_of(asset["id"], attempt) + 100 + index, out_dir=folder / "video",
+                    seed=seed_of(asset["id"], attempt) + 100 + index + again(part), out_dir=folder / "video",
                     progress=lambda s, f, i=index: progress(f"Animating the {parts[i]['part']}: {s}",
                                                             0.3 + 0.65 * (i + f) / len(parts)))
                 book = effects.make_flipbook(frames, folder / "flipbook", loop=part["loop"])
@@ -1563,6 +1631,45 @@ class Pipeline:
         self.db.update("assets", asset_id, changes)
         self._clear_from(asset_id, stage)
         return self.enqueue(asset_id, stage)
+
+    def redo_effect_part(self, asset_id: str, part: str, mode: str = "animate", note: str | None = None) -> dict:
+        """Makes one part of an effect again, keeping the others: ``animate`` keeps its picture and
+        animates it again, ``draw`` draws a new picture too. A note is added to that part's picture
+        (draw) or motion (animate) prompt. The effect goes back through gate 2."""
+        asset = self._require(asset_id)
+        if asset["kind"] != "effect":
+            raise Invalid("only effects have parts")
+        if mode not in ("animate", "draw"):
+            raise Invalid("mode is animate or draw")
+        if asset["status"] in ("queued", "running"):
+            raise Conflict(f"the effect is {asset['status']}; stop it first")
+        mesh = (asset.get("outputs") or {}).get("mesh")
+        if not mesh:
+            raise Conflict("the effect's parts aren't made yet (gate 2)")
+        names = [p["part"] for p in mesh["plan"]["parts"]]
+        if part not in names:
+            raise Invalid(f"the effect has no {part!r} part (it has {', '.join(names)})")
+        folder = self.stage_dir(asset_id, "mesh") / part
+        (folder.parent / "manifest.json").unlink(missing_ok=True)  # else the finished stage isn't run again
+        if mode == "draw":
+            shutil.rmtree(folder, ignore_errors=True)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "redraw").write_text("drawn again, not the gate 1 pick", encoding="utf-8")
+        else:
+            for name in ("flipbook", "video"):
+                shutil.rmtree(folder / name, ignore_errors=True)
+        tries = dict(asset.get("part_attempts") or {})
+        tries[part] = int(tries.get(part, 1)) + 1
+        wishes = {k: dict(v) for k, v in (asset.get("part_notes") or {}).items()}
+        if note and note.strip():
+            asked = wishes.setdefault(part, {})
+            asked[mode] = [*asked.get(mode, []), note.strip()]
+        outputs = {k: v for k, v in (asset.get("outputs") or {}).items() if k not in STAGES[STAGES.index("mesh"):]}
+        self.db.update("assets", asset_id, {"part_attempts": tries, "part_notes": wishes, "outputs": outputs})
+        for name in (*STAGES[STAGES.index("mesh") + 1:], "sprites"):
+            shutil.rmtree(self.stage_dir(asset_id, name), ignore_errors=True)
+        verb = "Drawing" if mode == "draw" else "Animating"
+        return self.enqueue(asset_id, "mesh", step=f"Waiting for the worker ({verb.lower()} the {part} again)")
 
     def _autopilot_log(self, asset: dict, gate: int, action: str, reason: str) -> None:
         entries = [*(asset.get("autopilot_log") or []), {"gate": gate, "action": action, "reason": reason, "at": now()}]

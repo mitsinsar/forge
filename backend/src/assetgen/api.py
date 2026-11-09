@@ -26,9 +26,9 @@ from . import delivery, storage, watchdog
 from .models import model_choices
 from .setup_guide import setup_report
 from .tools import check_tools
-from .schemas import (Redo, AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, AutopilotSet, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
+from .schemas import (Redo, RedoPart, AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, AutopilotSet, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
-                      TrainingCandidate, MotionCreate, MotionRedo, MotionUse, CharacterSetCreate, SetPicks)
+                      TrainingCandidate, MotionCreate, MotionPick, MotionRedo, MotionUse, CharacterSetCreate, SetPicks)
 
 MAX_REFERENCE_IMAGES = 3
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -564,6 +564,14 @@ def redo_stage(request: Request, asset_id: str, body: Redo):
     return asset_view(request, _run(lambda: pipeline.redo(asset_id, body.stage, body.note)))
 
 
+@router.post("/assets/{asset_id}/parts/{part}/redo", tags=["assets"],
+             summary="Make one part of an effect again (cast, projectile, impact or aura), keeping the others")
+def redo_effect_part(request: Request, asset_id: str, part: str, body: RedoPart | None = None):
+    pipeline = pipeline_of(request)
+    body = body or RedoPart()
+    return asset_view(request, _run(lambda: pipeline.redo_effect_part(asset_id, part, body.mode, body.note)))
+
+
 @router.post("/assets/{asset_id}/gates/{gate}/approve", tags=["gates"],
              summary="Approve a gate (gate 1 needs the picked candidate) and queue the next stage")
 def approve_gate(request: Request, asset_id: str, gate: int, body: Approve | None = None):
@@ -822,8 +830,12 @@ def delete_outfit(outfit_id: str, db: Database = Depends(db_of)):
 
 def _motion_out(request: Request, motion: dict) -> dict:
     preview = motion.get("preview")
-    return {**motion, "url": (str(request.url_for("read_motion_preview", motion_id=motion["id"]))
-                              + f"?v={motion.get('updated_at', '')}") if preview else None}
+    version = f"?v={motion.get('updated_at', '')}"
+    candidates = [{**c, "url": str(request.url_for("read_motion_sheet", motion_id=motion["id"],
+                                                   candidate=str(c["candidate"]))) + version}
+                  for c in motion.get("candidates") or []]
+    return {**motion, "candidates": candidates,
+            "url": (str(request.url_for("read_motion_preview", motion_id=motion["id"])) + version) if preview else None}
 
 
 @router.get("/motions", tags=["motions"], summary="List skill animations (generated clips any biped can play)")
@@ -848,6 +860,25 @@ def redo_motion(request: Request, motion_id: str, body: MotionRedo):
     pipeline = pipeline_of(request)
     _found(pipeline.db.get("motions", motion_id), "skill animation")
     return _motion_out(request, _run(lambda: pipeline.redo_motion(motion_id, **body.model_dump())))
+
+
+@router.post("/motions/{motion_id}/pick", tags=["motions"],
+             summary="Use another of a skill animation's versions (the judge picked the best one)")
+def pick_motion(request: Request, motion_id: str, body: MotionPick):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("motions", motion_id), "skill animation")
+    return _motion_out(request, _run(lambda: pipeline.pick_motion(motion_id, body.candidate)))
+
+
+@router.get("/motions/{motion_id}/sheets/{candidate}.png", tags=["motions"],
+            summary="A version's stick-figure sheet (front and side, six moments)")
+def read_motion_sheet(request: Request, motion_id: str, candidate: int):
+    pipeline = pipeline_of(request)
+    motion = _found(pipeline.db.get("motions", motion_id), "skill animation")
+    path = pipeline.motion_dir(motion_id) / f"sheet_{candidate}.png"
+    if not any(c["candidate"] == candidate for c in motion.get("candidates") or []) or not path.is_file():
+        raise HTTPException(404, "no such version")
+    return FileResponse(path, media_type="image/png")
 
 
 @router.post("/motions/{motion_id}/use", tags=["motions"],

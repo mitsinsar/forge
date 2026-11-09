@@ -92,12 +92,26 @@ CREATURE_NEGATIVE = ("weapon, sword, shield, staff, holding an object, props, pa
 BIPED_NEGATIVE = "three-quarter view, side view"
 
 
-MOTION_PROMPT = """You write prompts for a text-to-motion model that animates ONE game character's body
-casting or performing a skill. Describe only body movement, in English, in the model's style:
-"A person ..." then what the limbs and torso do, in order, under 50 words. Say which hand or foot
-(right or left) does what. Begin and end standing in a ready stance. No effects, objects,
-weapons, clothing, emotions, camera or scenery: write "thrusts the right palm forward" for a
-fireball, "draws an imaginary bow" for an arrow. Also guess how long it takes, 1.5 to 5 seconds.
+MOTION_PROMPT = """You write prompts for a text-to-motion model (HY-Motion) that animates ONE game
+character's body casting or performing a skill. The model was trained on motion capture, so plain
+prompts come out slow and mild; game skills need clear phases and snappy timing.
+Rules:
+- English, one paragraph, 25 to 55 words, starting "A person".
+- Only the body: what the torso, arms, legs and head do, in order. Say right or left for every
+  hand and foot. No effects, magic, objects, weapons, clothing, emotions, camera or scenery:
+  a fireball is "thrusts the right palm forward", an arrow is "draws an imaginary bow".
+- Four phases: a ready stance; a wind-up (crouches slightly, pulls the arm back, twists the
+  torso, raises the arms); the action, with strong timing words (explosively, sharply, quickly,
+  forcefully); a short hold of the end pose; then recovers to the ready stance.
+- Stay on the spot: no walking or running unless the skill is a dash or a leap.
+- If the character holds a two-handed weapon such as a staff, keep both hands close together.
+Examples:
+"A person stands ready, crouches slightly and pulls the right arm back beside the hip, then
+explosively thrusts the right palm forward while stepping forward with the left foot, holds the
+pose briefly, and recovers to a ready stance."
+"A person raises both arms high above the head, then sharply swings both arms down to the ground
+while bending the knees into a deep crouch, holds for a moment, and stands back up."
+Also guess how long it takes, 1.5 to 4 seconds (most skills: 2 to 3).
 Answer only JSON: {"prompt": "<the motion prompt>", "duration": <seconds>}."""
 
 
@@ -281,6 +295,40 @@ class QwenLLM:
         except (TypeError, ValueError):
             return None
         return {"match": match, "problems": [str(p) for p in (answer.get("problems") or []) if str(p).strip()][:5]}
+
+    def judge_motions(self, *, sheets, description, prompt, model=None):
+        """Compares the versions of a skill animation from their stick-figure sheets (``motion_sheet``):
+        ``[{"match": 0-10, "problems": [...]}]`` in the sheets' order, or None when it can't look."""
+        question = (f"These {len(sheets)} images are {len(sheets)} versions of the same game character's skill "
+                    "animation, each drawn as a stick figure at six moments (time in the corner): the top row from "
+                    "the front (the figure faces you, so its right side is on YOUR left), the bottom row from its "
+                    "right side (it faces right). Its left limbs are blue, its right limbs red. "
+                    f"The skill: {description}. The animation was asked for as: {prompt} "
+                    "Compare the versions and score each as a game animation: does the body do what the skill "
+                    "needs, with the right limbs (red is right), a clear wind-up, a strong readable action and a "
+                    "return to a ready stance? Take off for the wrong arm or leg, a weak or unclear action, walking "
+                    "or drifting away, turning away, falling over, broken-looking limbs. Give different scores "
+                    "where they differ. Answer only JSON: "
+                    '{"versions": [{"version": <1-based>, "match": <0-10>, "problems": [<short phrases>]}]}')
+        content = [{"type": "text", "text": question}]
+        for number, sheet in enumerate(sheets, start=1):
+            content += [{"type": "text", "text": f"Version {number}:"}, self._image_part(sheet, 768)]
+        reply = self._post_once([{"role": "user", "content": content}], None, model)  # LLMError: the caller retries
+        try:
+            answer = json.loads(_json_part(reply))
+        except (LLMError, ValueError):
+            return None
+        verdicts: list = [None] * len(sheets)
+        for item in answer.get("versions") or []:
+            try:
+                number = int(item.get("version"))
+                match = max(0, min(10, int(round(float(item.get("match"))))))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if 1 <= number <= len(sheets):
+                verdicts[number - 1] = {"match": match, "problems": [str(x) for x in (item.get("problems") or [])
+                                                                     if str(x).strip()][:5]}
+        return verdicts if any(verdicts) else None
 
     def inspect(self, *, image, kind, description=None, model=None):
         """Asks the (vision) model about a candidate. Returns None when it can't look at images."""

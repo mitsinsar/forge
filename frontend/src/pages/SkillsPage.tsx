@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, type Motion } from "../api/client";
 import { keys, useApiMutation, useMotions, useProfiles } from "../api/queries";
+import { MotionVersions } from "../components/MotionVersions";
 import { ModelViewer } from "../components/Viewer";
 import {
   Badge,
@@ -131,6 +132,7 @@ function MotionDetail({ motion }: { motion: Motion }) {
             {motion.clip ? ` (${motion.clip.duration.toFixed(1)} s)` : ""}
           </Text>
         )}
+        <MotionVersions motion={motion} />
         <Row align="top">
           <Box minWidth={260}>
             <Field label="Make it again" hint="What to change; the prompt is written again with it.">

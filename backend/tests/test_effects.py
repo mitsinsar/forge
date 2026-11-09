@@ -117,3 +117,28 @@ def test_a_diagonal_projectile_is_turned_level(tmp_path):
     ImageDraw.Draw(ball).ellipse((40, 40, 88, 88), fill=(255, 200, 0))
     ball.save(round_path)
     assert effects.level(round_path) == 0.0
+
+
+def test_one_part_is_made_again_and_the_others_kept(client, tmp_path):
+    project = make_project(client, "godot", tmp_path / "game")
+    created = client.post("/api/assets", json={"project_id": project["id"], "kind": "effect",
+                                               "description": "a poison arrow", "autopilot": True}).json()
+    wait_for(client, created["id"], "waiting", gate=3, timeout=60)
+    mesh = client.app.state.pipeline.stage_dir(created["id"], "mesh")
+    kept = (mesh / "projectile" / "flipbook" / "frame_00.png").stat().st_mtime_ns
+    assert client.post(f"/api/assets/{created['id']}/parts/trail/redo", json={}).status_code == 422
+    redone = client.post(f"/api/assets/{created['id']}/parts/impact/redo",
+                         json={"mode": "draw", "note": "a bigger green cloud"})
+    assert redone.status_code == 200, redone.text
+    assert redone.json()["stage"] == "mesh" and "rig" not in redone.json()["outputs"]
+    ready = wait_for(client, created["id"], "waiting", gate=3, timeout=60)
+    assert (mesh / "projectile" / "flipbook" / "frame_00.png").stat().st_mtime_ns == kept
+    assert (mesh / "impact" / "redraw").is_file() and ready["part_attempts"] == {"impact": 2}
+    impact = next(p for p in ready["outputs"]["mesh"]["parts"] if p["part"] == "impact")
+    assert (mesh / "impact" / "flipbook" / "frame_00.png").is_file()  # really made again
+    assert impact["frames"] and ready["part_notes"] == {"impact": {"draw": ["a bigger green cloud"]}}
+    # Animating the main part again keeps its picture.
+    picture = (mesh / "projectile" / "picture.png").read_bytes()
+    client.post(f"/api/assets/{created['id']}/parts/projectile/redo", json={"mode": "animate"})
+    wait_for(client, created["id"], "waiting", gate=3, timeout=60)
+    assert (mesh / "projectile" / "picture.png").read_bytes() == picture
