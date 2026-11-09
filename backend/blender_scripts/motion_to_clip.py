@@ -89,7 +89,11 @@ def main(args: dict) -> dict:
     unknown = [j for j in joints if j not in BONES]
     if unknown:
         raise ValueError(f"joints without a biped bone: {', '.join(unknown)}")
+    # The motion's rest is around the pelvis (its feet about a metre under the origin); the library
+    # clips' armatures stand on the ground, and rig_animate moves the hips by their travel from it.
     rest = [to_blender(p) for p in motion["rest"]]
+    ground = Vector((0.0, 0.0, min(p.z for p in rest)))
+    rest = [p - ground for p in rest]
     arm = build_armature(joints, parents, rest)
     bones = {i: arm.data.bones[BONES[j]] for i, j in enumerate(joints)}
     rest_matrix = {i: b.matrix_local.copy() for i, b in bones.items()}
@@ -101,16 +105,16 @@ def main(args: dict) -> dict:
     arm.animation_data.action = action
     for pose_bone in arm.pose.bones:
         pose_bone.rotation_mode = "QUATERNION"
-    translation = [to_blender(t) for t in motion["translation"]]
+    translation = [to_blender(t) + ground for t in motion["translation"]]
     start = translation[0].copy()
     frames = int(motion["frames"])
-    for frame in range(frames):
-        if frame % 20 == 0:
-            progress(0.1 + 0.8 * frame / frames, "Posing the motion")
+
+    def pose(frame: int, lift: float) -> dict[int, Matrix]:
+        """Each bone's posed matrix (armature space) at the frame."""
         local = [AXES @ Matrix([row[0:3], row[3:6], row[6:9]]) @ AXES.transposed()
                  for row in motion["rotations"][frame]]
         world: dict[int, Matrix] = {}  # each joint's turn from the T-pose, in Blender's world
-        posed: dict[int, Matrix] = {}  # each bone's posed matrix, armature space
+        posed: dict[int, Matrix] = {}
         for i in order:
             parent = parents[i]
             world[i] = (world[parent] @ local[i]) if parent >= 0 else local[i]
@@ -118,9 +122,21 @@ def main(args: dict) -> dict:
                 head = posed[parent].translation + world[parent] @ (rest[i] - rest[parent])
             else:
                 move = translation[frame] - (Vector((start.x, start.y, 0.0)) if args.get("in_place") else Vector())
-                head = rest[i] + move
-            rotation = world[i] @ rest_matrix[i].to_3x3()
-            posed[i] = Matrix.LocRotScale(head, rotation.to_quaternion(), None)
+                head = rest[i] + move + Vector((0.0, 0.0, lift))
+            posed[i] = Matrix.LocRotScale(head, (world[i] @ rest_matrix[i].to_3x3()).to_quaternion(), None)
+        return posed
+
+    # The lowest planted ankle at the rest's ankle height, so the feet stand on the floor and don't
+    # hover or sink (the motion's own ground is its soles, under joints set differently).
+    feet = [i for i, j in enumerate(joints) if j.endswith("_Ankle")]
+    lowest = min(min(pose(f, 0.0)[i].translation.z for i in feet) for f in range(frames))
+    lift = min(rest[i].z for i in feet) - lowest
+    for frame in range(frames):
+        if frame % 20 == 0:
+            progress(0.1 + 0.8 * frame / frames, "Posing the motion")
+        posed = pose(frame, lift)
+        for i in order:
+            parent = parents[i]
             base = (posed[parent] @ rest_matrix[parent].inverted() @ rest_matrix[i]) if parent >= 0 else rest_matrix[i]
             pose_bone = arm.pose.bones[bones[i].name]
             pose_bone.matrix_basis = base.inverted() @ posed[i]

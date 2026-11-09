@@ -291,7 +291,7 @@ The Skills page (`/api/motions`) turns a skill's description into a body animati
 play. The language model writes a motion prompt in HY-Motion's style ("A person thrusts the right
 palm forward ...", `QwenLLM.motion_prompt`) and guesses its length; HY-Motion 1.0 makes the motion
 on its SMPL-H skeleton (`external/hy_motion.py`, run with its own Python like UniRig; about 26 GB of
-GPU memory, so the worker frees the others first); `blender_scripts/motion_to_clip.py` builds a
+GPU memory, so the worker frees the others first; about 40 s a motion, loading included); `blender_scripts/motion_to_clip.py` builds a
 T-pose armature with the biped's bone names and bakes the motion onto it, so the result is a clip
 GLB like the library's (`data/motions/clips/skill_<name>.glb`) and `rig_animate.retarget` takes it
 the same way. A preview on the test dummy comes last. "Add the clip" puts `skill_<name>` in a style
