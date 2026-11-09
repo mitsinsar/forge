@@ -12,3 +12,14 @@ export function ModelViewer(props: ComponentProps<typeof LazyModelViewer>) {
     </Suspense>
   );
 }
+
+const LazySkillStage = lazy(() => import("../viewers/SkillStage").then((m) => ({ default: m.SkillStage })));
+
+/** A hero playing a skill animation with the skill's effect (3D). */
+export function SkillStage(props: ComponentProps<typeof LazySkillStage>) {
+  return (
+    <Suspense fallback={<StageMessage>Loading viewer…</StageMessage>}>
+      <LazySkillStage {...props} />
+    </Suspense>
+  );
+}

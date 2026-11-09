@@ -271,5 +271,52 @@ class MotionUse(Strict):
     profile_id: str = Field(description="The style profile whose bipeds get this clip.")
 
 
+class SetCharacter(Strict):
+    description: str = Field(min_length=1, max_length=2000, description="The hero: looks, outfit, colours.")
+    name: str | None = Field(None, max_length=60)
+    height: float | None = Field(None, ge=0.3, le=10.0)
+
+
+class SetItem(Strict):
+    kind: Literal["weapon", "gear"] = "weapon"
+    description: str = Field(min_length=1, max_length=2000)
+    name: str | None = Field(None, max_length=60)
+    weapon_class: WeaponClass | None = Field(None, description="Weapons: the class (how it is held).")
+    slot: Slot | None = Field(None, description="Gear: where it is worn.")
+
+
+class SetSkill(Strict):
+    name: str = Field(min_length=1, max_length=60, description="The skill, e.g. \"Firebolt\".")
+    description: str = Field(min_length=1, max_length=600, description="What the skill does.")
+    effect: str | None = Field(None, max_length=600, description="The effect to draw (default: the description); "
+                               "empty string: no effect.")
+    animation: str | None = Field(None, max_length=600, description="What the character does (default: the "
+                                  "description); empty string: no animation.")
+
+
+class CharacterSetCreate(Strict):
+    project_id: str
+    profile_id: str | None = None
+    name: str = Field(min_length=1, max_length=60, description="The character set's name.")
+    variations: int = Field(3, ge=1, le=6, description="How many versions of each thing to make.")
+    vary: bool = Field(True, description="Have the language model write a different description for each version "
+                                         "(off: the same description, different seeds).")
+    character: SetCharacter
+    items: list[SetItem] = Field(default_factory=list, max_length=6, description="Weapons and gear.")
+    skills: list[SetSkill] = Field(default_factory=list, max_length=6)
+
+
+class SetSkillPick(Strict):
+    effect: str | None = None
+    motion: str | None = None
+    release: float | None = Field(None, ge=0, le=1, description="Where in the animation the effect leaves the hand.")
+
+
+class SetPicks(Strict):
+    hero: str | None = None
+    items: list[str | None] | None = Field(None, description="One per item slot, in order.")
+    skills: list[SetSkillPick] | None = Field(None, description="One per skill, in order.")
+
+
 class TrainingCandidate(Strict):
     value: bool

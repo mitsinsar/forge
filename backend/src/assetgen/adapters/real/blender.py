@@ -66,6 +66,27 @@ class BlenderTools:
                            out_dir, progress)
         return {"glb": glb, **result}
 
+    def add_clips(self, *, rig_dir, clips, out_glb, save_blend, keep_all, progress) -> dict:
+        """Retargets generated skill animations (``clips``: their names) onto a rigged hero from the
+        scene its rig stage kept (``hero_clip.py``), without rigging it again. ``save_blend`` keeps
+        them in its ``rigged.blend``; ``keep_all`` writes every clip to the GLB, else idle and these.
+        ``{"glb", "clips": [{"name", "duration", "loop"}]}``."""
+        rig_dir, out_glb = Path(rig_dir), Path(out_glb)
+        for name in ("rigged.blend", "rig_animate.args.json"):
+            if not (rig_dir / name).is_file():
+                raise BlenderError(f"The hero has no {name} from its rig stage: rig it again.")
+        missing = [c for c in clips if not (self.motions_dir / f"{c}.glb").is_file()]
+        if missing:
+            raise BlenderError(f"No skill animation clip for: {', '.join(missing)}. Make it on the Skills page.")
+        out_glb.parent.mkdir(parents=True, exist_ok=True)
+        result = self._run("hero_clip.py", {
+            "blend": str((rig_dir / "rigged.blend").resolve()),
+            "rig_args": str((rig_dir / "rig_animate.args.json").resolve()),
+            "clips": [{"name": c, "file": str((self.motions_dir / f"{c}.glb").resolve()), "loop": False} for c in clips],
+            "out_glb": str(out_glb.resolve()), "save_blend": bool(save_blend), "keep_all": bool(keep_all)},
+            out_glb.parent, progress)
+        return {"glb": out_glb, "clips": result["clips"]}
+
     def render_views(self, *, mesh_glb, out_dir, progress, size: int = 384) -> list[Path]:
         """The finished mesh from the front, the side and the back (``mesh_views.py``), for the judge."""
         out_dir = Path(out_dir)

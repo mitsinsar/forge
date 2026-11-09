@@ -24,6 +24,8 @@ export const keys = {
   jobs: (targetId: string, kind?: string) => ["jobs", targetId, kind ?? ""] as const,
   outfits: (projectId?: string) => ["outfits", projectId ?? ""] as const,
   motions: ["motions"] as const,
+  sets: ["sets"] as const,
+  set: (id: string) => ["set", id] as const,
 };
 
 /** The latest side job of this kind for a target, polled while it waits or runs. When it finishes,
@@ -69,6 +71,14 @@ export const useMotions = () =>
     queryFn: api.motions,
     refetchInterval: (query) =>
       (query.state.data ?? []).some((m) => m.status === "queued" || m.status === "running") ? 1500 : false,
+  });
+export const useSets = () => useQuery({ queryKey: keys.sets, queryFn: api.sets });
+/** A character set, polled while it builds. */
+export const useSet = (id: string) =>
+  useQuery({
+    queryKey: keys.set(id),
+    queryFn: () => api.set(id),
+    refetchInterval: (query) => (query.state.data?.status === "building" ? 2000 : false),
   });
 export const useAssets = (filters: AssetFilters) =>
   useQuery({ queryKey: keys.assetList(filters), queryFn: () => api.assets(filters) });

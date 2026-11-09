@@ -73,6 +73,19 @@ const VIEW_TITLES: Record<View, string> = {
   Top: "Look from above",
 };
 
+/** What a stage hook sees every frame (skill effects drawn with the model). */
+export interface StageFrame {
+  scene: THREE.Scene;
+  model: THREE.Object3D;
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  /** Seconds since the last frame. */
+  delta: number;
+  /** Where the playing clip is, in seconds, and its length (0 when nothing plays). */
+  clipTime: number;
+  clipDuration: number;
+}
+
 interface Props {
   url: string;
   /** Show only the node named `LOD<n>` (mesh GLBs hold LOD0, LOD1 and LOD2). */
@@ -106,6 +119,8 @@ interface Props {
   /** More GLBs shown with the model and playing the same clip: items fitted on it (an outfit). Their
    *  copy of the body (meshes named `mannequin`) is hidden; one without the clip is hidden too. */
   extras?: string[];
+  /** Called every frame once the model has loaded (before rendering). */
+  onFrame?: (frame: StageFrame) => void;
 }
 
 export function ModelViewer({
@@ -126,6 +141,7 @@ export function ModelViewer({
   adjust,
   onAdjust,
   extras,
+  onFrame,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<{
@@ -140,7 +156,13 @@ export function ModelViewer({
     /** Run every frame before rendering (the joint editor keeps its handles a fixed size on screen). */
     frameHook?: () => void;
     extras?: Map<string, { model: THREE.Object3D; mixer: THREE.AnimationMixer; clips: THREE.AnimationClip[] }>;
+    /** The clip playing now. */
+    action?: THREE.AnimationAction | null;
   }>({ model: null, mixer: null, clips: [] });
+  const onFrameRef = useRef(onFrame);
+  useEffect(() => {
+    onFrameRef.current = onFrame;
+  }, [onFrame]);
   const [extrasLoaded, setExtrasLoaded] = useState(0);
   const [flat, setFlat] = useState(false);
   const [pickedName, setPickedName] = useState<string | null>(null);
@@ -225,6 +247,12 @@ export function ModelViewer({
       sceneRef.current.extras?.forEach((extra) => extra.mixer.update(delta));
       controls.update();
       sceneRef.current.frameHook?.();
+      const { model: loadedModel, action } = sceneRef.current;
+      if (loadedModel && onFrameRef.current) {
+        const clipDuration = action?.getClip().duration ?? 0;
+        onFrameRef.current({ scene, model: loadedModel, camera, controls, delta,
+                             clipTime: action ? action.time % Math.max(clipDuration, 1e-6) : 0, clipDuration });
+      }
       renderer.render(scene, camera);
       frame = requestAnimationFrame(tick);
     };
@@ -403,10 +431,11 @@ export function ModelViewer({
       model.traverse((obj) => {
         if (obj instanceof THREE.SkinnedMesh) obj.skeleton.pose();
       });
+      sceneRef.current.action = null;
       return;
     }
     const found = clips.find((c) => c.name === clip) ?? clips[0];
-    if (found) mixer.clipAction(found).reset().setLoop(THREE.LoopRepeat, Infinity).play();
+    sceneRef.current.action = found ? mixer.clipAction(found).reset().setLoop(THREE.LoopRepeat, Infinity).play() : null;
   }, [clip, loaded, editJoints, extrasLoaded, placing]);
 
   // Placing an item: a still copy of it (at the rest pose) gets the arrows; its move is reported in

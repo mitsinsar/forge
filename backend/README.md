@@ -300,6 +300,37 @@ again). It runs as a side job (`motion`); "Make again" uses a new seed, with a n
 rewritten with. HY-Motion animates humanoid bodies only (no fingers, effects or creatures); install
 it as `INSTALL.md` says (Tencent HY-Motion 1.0 Community License).
 
+A rigged hero can play a skill animation without being rigged again:
+`GET /api/assets/{hero}/skills/{clip}.glb` (`blender_scripts/hero_clip.py`) opens the scene its
+rig stage kept (`rig/rigged.blend`), measures the template again the way the rig stage did and
+retargets the clip with the same `retarget`, in a few seconds; kept under `skills/` until the clip
+or the rig changes. The Skill test page plays it with an effect: the cast glows at the right hand,
+the projectile leaves it at the release time (a share of the clip) and flies to a target, where the
+impact plays.
+
+### Character sets
+
+`POST /api/character-sets` takes a hero, its items and its skills and makes `variations`
+versions of each, on autopilot up to gate 3 (a failed check still stops an asset for you):
+
+```json
+{"project_id": "...", "name": "Ember Mage", "variations": 3,
+ "character": {"description": "a young fire mage in red and gold robes"},
+ "items": [{"kind": "weapon", "weapon_class": "staff", "description": "a gnarled staff with an ember"}],
+ "skills": [{"name": "Firebolt", "description": "hurls a bolt of fire",
+             "effect": "a fiery bolt with a trail of embers", "animation": "thrusts the right palm forward"}]}
+```
+
+Heroes are bipeds. The language model writes a different description for each version (`vary`;
+off: the same one with other seeds); skill animations differ by seed. `effect` or `animation` set
+to `""` leaves that part out. Pick one version per slot (`PUT .../picks`, with each skill's
+`release`), try them on the Character sets page, then `POST .../build` (job `set_build`): the
+picked skill animations go into the hero's rig (`hero_clip.py`, saved in `rigged.blend` and
+`animated.glb`, and in its `biped_extra_clips` so a new rig keeps them), the items are rigged again
+on the hero with every clip and exported by autopilot, the hero and the effects are exported, and
+when every export is done the manifest (`generated/sets/<name>.json` in the game project) lists the
+hero, the items and each skill's clip, release time and effect folder.
+
 ### Skill effects (kind `effect`)
 
 An effect (a poison arrow, a firebolt, a healing glow) goes through the same gates as an asset,

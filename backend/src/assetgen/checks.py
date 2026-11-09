@@ -123,6 +123,16 @@ def judged(check_id: str, label: str, score: int, problems: list[str] | None) ->
     return check(check_id, label, status, detail)
 
 
+def over_budget(stats: dict) -> list[dict]:
+    """A warning when Blender couldn't decimate the mesh down to its triangle budget."""
+    count, budget = stats.get("triangles"), stats.get("budget")
+    if not count or not budget or count <= budget:
+        return []
+    return [check("budget", "Within the triangle budget", WARN,
+                  f"{count:,} triangles, over the budget of {budget:,}: the decimator couldn't reduce this shape "
+                  "further. Fine for most games; reject gate 2 for another try, or raise the budget.")]
+
+
 def mesh_checks(stats: dict | None, kind: str = "hero", judge: dict | None = None) -> list[dict]:
     if not stats:
         return [judged("looks", "Looks like the picture", judge["match"], judge.get("problems"))] if judge else []
@@ -140,7 +150,7 @@ def mesh_checks(stats: dict | None, kind: str = "hero", judge: dict | None = Non
               f"{stats.get('pieces', 1)} pieces; {round(loose * 100)} % of the vertices outside the main one"),
         check("holes", "Few holes", WARN if open_share > 0.03 else PASS,
               f"{round(open_share * 100, 1)} % of the edges border a hole"),
-    ] + ([judged("looks", "Looks like the picture", judge["match"], judge.get("problems"))] if judge else [])
+    ] + over_budget(stats) + ([judged("looks", "Looks like the picture", judge["match"], judge.get("problems"))] if judge else [])
 
 
 STANDARD_CLIPS = ("idle", "walk", "run", "attack_1", "attack_2", "hit", "death")

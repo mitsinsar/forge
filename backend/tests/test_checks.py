@@ -339,3 +339,10 @@ def test_the_profiles_language_model_writes_and_judges(client, tmp_path):
     models = client.get("/api/models").json()
     assert {m["id"] for m in models["mesh"]} == {"hunyuan3d-2.1", "hunyuan3d-2-mini"}
     assert "sdxl" in {m["id"] for m in models["image"]}
+
+
+def test_a_mesh_over_its_triangle_budget_warns():
+    stats = {"largest_piece_share": 1.0, "open_edges": 0, "edges": 100, "triangles": 2540, "budget": 800}
+    found = {c["id"]: c["status"] for c in qc.mesh_checks(stats, "weapon")}
+    assert found["budget"] == qc.WARN
+    assert "budget" not in {c["id"] for c in qc.mesh_checks({**stats, "triangles": 790}, "weapon")}

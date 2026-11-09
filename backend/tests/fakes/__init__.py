@@ -359,6 +359,16 @@ class FakeBlender(FakeBase):
         progress("Mesh kept", 1.0)
         return {"glb": glb, "lods": [{"level": 0, "ratio": 1.0, "triangles": count}]}
 
+    def add_clips(self, *, rig_dir, clips, out_glb, save_blend, keep_all, progress):
+        """The hero's animated GLB as it is (the fake clips aren't baked into it)."""
+        import shutil  # noqa: PLC0415
+        source, out_glb = Path(rig_dir) / "animated.glb", Path(out_glb)
+        out_glb.parent.mkdir(parents=True, exist_ok=True)
+        if source.resolve() != out_glb.resolve():
+            shutil.copy2(source, out_glb)
+        self.added = [*getattr(self, "added", []), {"clips": list(clips), "save_blend": save_blend}]
+        return {"glb": out_glb, "clips": [{"name": c, "duration": 2.0, "loop": False} for c in clips]}
+
     def rig_and_animate(self, *, mesh_glb, skeleton, archetype, clips, attach, out_path, progress):
         self.last_attach = attach
         info = (read_glb_json(mesh_glb).get("extras") or {}) if mesh_glb else {}  # None: the test dummy

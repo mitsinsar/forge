@@ -14,6 +14,9 @@ import { LorasPage } from "./pages/LorasPage";
 import { OutfitsPage } from "./pages/OutfitsPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SkillsPage } from "./pages/SkillsPage";
+import { SkillTestPage } from "./pages/SkillTestPage";
+import { SetsPage } from "./pages/SetsPage";
+import { SetPage } from "./pages/SetPage";
 
 const NAV = [
   { to: "/", label: "Assets", end: true },
@@ -21,6 +24,8 @@ const NAV = [
   { to: "/profiles", label: "Style profiles" },
   { to: "/outfits", label: "Outfits" },
   { to: "/skills", label: "Skills" },
+  { to: "/skill-test", label: "Skill test" },
+  { to: "/sets", label: "Character sets" },
   { to: "/loras", label: "LoRA library" },
   { to: "/setup", label: "Setup" },
 ];
@@ -99,6 +104,9 @@ export function App() {
           <Route path="/loras" element={<LorasPage />} />
           <Route path="/outfits" element={<OutfitsPage />} />
           <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/skill-test" element={<SkillTestPage />} />
+          <Route path="/sets" element={<SetsPage />} />
+          <Route path="/sets/:id" element={<SetPage />} />
           <Route path="/setup" element={<SetupPage />} />
           <Route
             path="*"

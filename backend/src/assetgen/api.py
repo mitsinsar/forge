@@ -28,7 +28,7 @@ from .setup_guide import setup_report
 from .tools import check_tools
 from .schemas import (Redo, AssetCreate, BatchCreate, CleanRequest, Kind, Approve, ExamplesRequest, AutopilotSet, Toggle, VariantCreate, FitRequest, LoraRegister, LoraUpdate,
                       OutfitCreate, OutfitUpdate, ProfileCreate, ProfileUpdate, ProjectCreate, ProjectUpdate, Reject,
-                      TrainingCandidate, MotionCreate, MotionRedo, MotionUse)
+                      TrainingCandidate, MotionCreate, MotionRedo, MotionUse, CharacterSetCreate, SetPicks)
 
 MAX_REFERENCE_IMAGES = 3
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -875,6 +875,124 @@ def read_motion_preview(request: Request, motion_id: str):
     if not motion.get("preview") or not target.is_file():
         raise HTTPException(404, "no preview yet")
     return delivery.send(request, target, "model/gltf-binary")
+
+
+@router.get("/assets/{asset_id}/skills/{clip}.glb", tags=["motions"],
+            summary="A rigged hero playing a skill animation (made on request from its rig; a few seconds)")
+def read_hero_skill(request: Request, asset_id: str, clip: str):
+    from .adapters.real.blender_runner import BlenderError  # noqa: PLC0415
+
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("assets", asset_id), "asset")
+    try:
+        path = pipeline.hero_skill_glb(asset_id, clip)
+    except KeyError:
+        raise HTTPException(404, f"no finished skill animation {clip}") from None
+    except Invalid as exc:
+        raise HTTPException(422, str(exc)) from None
+    except BlenderError as exc:
+        raise HTTPException(502, str(exc)) from None
+    return delivery.send(request, path, "model/gltf-binary")
+
+
+# ---- character sets -----------------------------------------------------------
+
+@router.get("/character-sets", tags=["character sets"], summary="List character sets")
+def list_sets(project_id: str | None = None, db: Database = Depends(db_of)):
+    return db.list("sets", project_id=project_id)
+
+
+@router.post("/character-sets", tags=["character sets"], status_code=201,
+             summary="Make a character set: several versions of the hero, its items and its skills to pick from")
+def create_set(request: Request, body: CharacterSetCreate):
+    """Queues ``variations`` versions of the hero (a biped), of each item (weapons and gear) and of
+    each skill's effect and animation, on autopilot up to gate 3. Pick one of each
+    (``PUT .../picks``), try the skills on the hero (``GET /assets/{hero}/skills/{clip}.glb``), then
+    build the set (``POST .../build``)."""
+    pipeline = pipeline_of(request)
+    project = _found(pipeline.db.get("projects", body.project_id), "project")
+    if body.profile_id:
+        _found(pipeline.db.get("profiles", body.profile_id), "profile")
+    for item in body.items:
+        if item.kind == "weapon" and not item.weapon_class:
+            raise HTTPException(422, f"the weapon {item.description[:40]!r} needs a weapon_class")
+        if item.kind == "gear" and not item.slot:
+            raise HTTPException(422, f"the gear {item.description[:40]!r} needs a slot")
+    count = body.variations
+
+    def versions(description: str, kind: str) -> list[str]:
+        if not body.vary or count == 1:
+            return [description] * count
+        try:
+            written = pipeline.adapters.llm.vary(description=description, kind=kind, count=count)
+        except Exception as exc:  # noqa: BLE001 - the user sees why
+            raise HTTPException(502, f"The LLM could not write the variations: {exc}") from exc
+        return (list(written) + [description] * count)[:count]
+
+    # Every description first: a failure creates nothing.
+    character = body.character
+    hero_texts = versions(character.description, "hero")
+    item_texts = [versions(i.description, i.kind) for i in body.items]
+    effect_texts = [versions(s.effect or f"{s.name}: {s.description}", "effect") if s.effect != "" else []
+                    for s in body.skills]
+
+    def make(kind: str, texts: list[str], name: str, **fields) -> list[str]:
+        batch = uuid.uuid4().hex[:12]
+        made = []
+        for number, text in enumerate(texts, start=1):
+            asset = AssetCreate(project_id=project["id"], kind=kind, description=text[:2000], name=f"{name} {number}",
+                                profile_id=body.profile_id, autopilot=True, autopilot_export=False, **fields)
+            made.append(_create_asset(request, asset, batch_id=batch)["id"])
+        return made
+
+    slots: dict = {"hero": make("hero", hero_texts, character.name or body.name, archetype="biped",
+                                height=character.height), "items": [], "skills": []}
+    for item, texts in zip(body.items, item_texts):
+        label = item.name or (item.weapon_class or item.slot or item.kind).replace("_", " ").capitalize()
+        fields = {"weapon_class": item.weapon_class} if item.kind == "weapon" else {"slot": item.slot}
+        slots["items"].append({"kind": item.kind, "label": label,
+                               "options": make(item.kind, texts, f"{body.name} {label}", **fields)})
+    for skill, texts in zip(body.skills, effect_texts):
+        effects = make("effect", texts, skill.name) if texts else []
+        motions = [] if skill.animation == "" else [
+            pipeline.create_motion(title=skill.name, description=skill.animation or skill.description)["id"]
+            for _ in range(count)]
+        slots["skills"].append({"name": skill.name, "description": skill.description, "effects": effects,
+                                "motions": motions})
+    return pipeline.db.insert("sets", {
+        "project_id": project["id"], "name": body.name, "spec": body.model_dump(), "variations": count,
+        "slots": slots, "status": "open", "build": None, "manifest": None, "waiting_for": None,
+        "picks": {"hero": None, "items": [None] * len(slots["items"]),
+                  "skills": [{"effect": None, "motion": None, "release": 0.45} for _ in slots["skills"]]}})
+
+
+@router.get("/character-sets/{set_id}", tags=["character sets"], summary="Get a character set")
+def read_set(set_id: str, db: Database = Depends(db_of)):
+    return _found(db.get("sets", set_id), "character set")
+
+
+@router.put("/character-sets/{set_id}/picks", tags=["character sets"],
+            summary="Pick one version per slot (left out: kept as it was)")
+def pick_set(request: Request, set_id: str, body: SetPicks):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("sets", set_id), "character set")
+    return _run(lambda: pipeline.pick_set(set_id, body.model_dump(exclude_none=True)))
+
+
+@router.post("/character-sets/{set_id}/build", tags=["character sets"], status_code=202,
+             summary="Build the picked set: skills on the hero, items fitted on it, everything exported")
+def build_set(request: Request, set_id: str):
+    pipeline = pipeline_of(request)
+    _found(pipeline.db.get("sets", set_id), "character set")
+    return _run(lambda: pipeline.build_set(set_id))
+
+
+@router.delete("/character-sets/{set_id}", tags=["character sets"], status_code=204,
+               summary="Delete a character set (its assets and skill animations stay)")
+def delete_set(set_id: str, db: Database = Depends(db_of)):
+    _found(db.get("sets", set_id), "character set")
+    db.delete("sets", set_id)
+    return Response(status_code=204)
 
 
 # ---- live events ------------------------------------------------------------

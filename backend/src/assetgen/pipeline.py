@@ -16,7 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
+import threading
 import traceback
 from pathlib import Path
 
@@ -85,6 +87,7 @@ class Pipeline:
         self._task: asyncio.Task | None = None
         self.current: str | None = None
         self.loaded: str | None = None  # the model the worker last used (STAGE_MODEL's names)
+        self._skill_lock = threading.Lock()  # one hero_clip.py at a time (they may share a hero)
 
     # ---- paths and settings -------------------------------------------------
 
@@ -596,6 +599,242 @@ class Pipeline:
             extra.append(motion["name"])
         return self.db.update("profiles", profile_id, {"biped_extra_clips": extra})
 
+    # ---- a hero with a skill animation -----------------------------------------
+
+    def hero_clips(self, hero: dict) -> list[str]:
+        """The clips the hero was rigged with."""
+        return [c["name"] for c in ((hero.get("outputs") or {}).get("rig") or {}).get("clips") or []]
+
+    def hero_skill_glb(self, hero_id: str, clip: str) -> Path:
+        """The hero playing a generated skill animation (and idle), made from the scene its rig
+        stage kept, so a skill can be tried on it without rigging it again. Kept under
+        ``skills/`` until the clip or the rig changes."""
+        hero = self._require(hero_id)
+        if hero["kind"] != "hero" or hero.get("archetype") != "biped" or not (hero.get("outputs") or {}).get("rig"):
+            raise Invalid("skills are tried on rigged biped heroes")
+        motion = next((m for m in self.db.list("motions", name=clip) if m["status"] == "done"), None)
+        if motion is None:
+            raise KeyError(clip)
+        rig_dir = self.stage_dir(hero_id, "rig")
+        source = Path(self.settings.data_dir) / "motions" / "clips" / f"{clip}.glb"
+        out = self.asset_dir(hero_id) / "skills" / f"{clip}.glb"
+        with self._skill_lock:
+            newest = max((p.stat().st_mtime for p in (source, rig_dir / "rigged.blend") if p.is_file()), default=0)
+            if not out.is_file() or out.stat().st_mtime < newest:
+                self.adapters.blender.add_clips(rig_dir=rig_dir, clips=[clip], out_glb=out, save_blend=False,
+                                                keep_all=False, progress=lambda s, f: None)
+        return out
+
+    # ---- character sets -------------------------------------------------------
+
+    def set_members(self, record: dict) -> dict:
+        """Every asset and motion the set made, by slot."""
+        slots = record["slots"]
+        return {"assets": [*slots["hero"], *(i for item in slots["items"] for i in item["options"]),
+                           *(i for skill in slots["skills"] for i in skill["effects"])],
+                "motions": [i for skill in slots["skills"] for i in skill["motions"]]}
+
+    def pick_set(self, set_id: str, picks: dict) -> dict:
+        """Chooses one option per slot (``None``: not chosen yet); the release time of each skill
+        is where in its animation the effect leaves the hand (0-1)."""
+        record = self.db.get("sets", set_id)
+        if record is None:
+            raise KeyError(set_id)
+        if record["status"] == "building":
+            raise Conflict("the set is being built")
+        slots = record["slots"]
+        current = record.get("picks") or {}
+
+        def chosen(value, options, what):
+            if value is not None and value not in options:
+                raise Invalid(f"{value} is not one of the {what} options")
+            return value
+
+        out = {"hero": chosen(picks.get("hero", current.get("hero")), slots["hero"], "hero")}
+        items = picks.get("items") if picks.get("items") is not None else current.get("items") or []
+        if len(items) not in (0, len(slots["items"])):
+            raise Invalid(f"items needs one pick per item slot ({len(slots['items'])})")
+        out["items"] = [chosen(items[n] if items else None, slot["options"], slot["label"])
+                        for n, slot in enumerate(slots["items"])]
+        skills = picks.get("skills") if picks.get("skills") is not None else current.get("skills") or []
+        if len(skills) not in (0, len(slots["skills"])):
+            raise Invalid(f"skills needs one pick per skill ({len(slots['skills'])})")
+        out["skills"] = []
+        before = current.get("skills") or [{} for _ in slots["skills"]]
+        for n, slot in enumerate(slots["skills"]):
+            pick = {**(before[n] if n < len(before) else {}), **(skills[n] if skills else {})}
+            release = float(pick.get("release", 0.45) if pick.get("release") is not None else 0.45)
+            out["skills"].append({"effect": chosen(pick.get("effect"), slot["effects"], f"{slot['name']} effect"),
+                                  "motion": chosen(pick.get("motion"), slot["motions"], f"{slot['name']} animation"),
+                                  "release": max(0.0, min(1.0, release))})
+        return self.db.update("sets", set_id, {"picks": out, "status": "open" if record["status"] != "built"
+                                               else "changed"})
+
+    def build_set(self, set_id: str) -> dict:
+        """Puts the picked set together (``set_build`` job): the skill animations go on the hero,
+        the items are fitted on it with them, and everything is exported with a manifest."""
+        record = self.db.get("sets", set_id)
+        if record is None:
+            raise KeyError(set_id)
+        picks = record.get("picks") or {}
+        slots = record["slots"]
+        if not picks.get("hero"):
+            raise Invalid("pick the hero first")
+        missing = [s["label"] for s, p in zip(slots["items"], picks.get("items") or [None] * len(slots["items"]))
+                   if not p]
+        missing += [s["name"] for s, p in zip(slots["skills"], picks.get("skills") or [{}] * len(slots["skills"]))
+                    if (s["effects"] and not p.get("effect")) or (s["motions"] and not p.get("motion"))]
+        if missing:
+            raise Invalid(f"pick every slot first: {', '.join(missing)}")
+        hero = self._require(picks["hero"])
+        if not (hero.get("outputs") or {}).get("rig") or hero["status"] not in ("waiting", "done"):
+            raise Conflict(f"the hero {hero['name']} isn't rigged yet")
+        for item_id in picks["items"]:
+            item = self._require(item_id)
+            if not (item.get("outputs") or {}).get("mesh") or item["status"] in ("queued", "running"):
+                raise Conflict(f"{item['name']} isn't ready yet")
+        for pick in picks["skills"]:
+            if pick.get("motion") and (self.db.get("motions", pick["motion"]) or {}).get("status") != "done":
+                raise Conflict("a picked skill animation isn't made yet")
+            if pick.get("effect"):
+                effect = self._require(pick["effect"])
+                if not (effect.get("outputs") or {}).get("rig") or effect["status"] in ("queued", "running"):
+                    raise Conflict(f"the effect {effect['name']} isn't ready yet")
+        self.db.update("sets", set_id, {"status": "building", "build": {"step": "Queued", "error": None}})
+        return self.queue_job("set_build", set_id)
+
+    def _job_set_build(self, job: dict, progress) -> dict:
+        record = self.db.get("sets", job["target_id"])
+        try:
+            return self._build_set(record, progress)
+        except Exception as exc:
+            self.db.update("sets", record["id"], {"status": "failed", "build": {"step": "Failed", "error": f"{exc}"}})
+            raise
+
+    def _set_step(self, record: dict, step: str) -> None:
+        self.db.update("sets", record["id"], {"build": {"step": step, "error": None}})
+        self.hub.publish({"type": "set", "id": record["id"], "at": now()})
+
+    def _with_clips(self, asset: dict, clips: list[str]) -> dict:
+        """The asset's own setting override, so a rig again keeps the skill animations."""
+        settings = self.asset_settings(asset)
+        extra = list(dict.fromkeys([*settings["biped_extra_clips"], *clips]))
+        return {**(asset.get("overrides") or {}), "biped_extra_clips": extra}
+
+    def _build_set(self, record: dict, progress) -> dict:
+        picks = record["picks"]
+        hero = self._require(picks["hero"])
+        clips = []
+        for pick in picks["skills"]:
+            if pick.get("motion"):
+                clips.append(self.db.get("motions", pick["motion"])["name"])
+        # 1. The skill animations on the hero, kept in its rig (items fitted on it play them too).
+        new = [c for c in clips if c not in self.hero_clips(hero)]
+        if new:
+            self._set_step(record, "Adding the skill animations to the hero")
+            progress("Adding the skill animations to the hero", 0.05)
+            rig = dict(hero["outputs"]["rig"])
+            rig_dir = self.stage_dir(hero["id"], "rig")
+            with self._skill_lock:
+                result = self.adapters.blender.add_clips(
+                    rig_dir=rig_dir, clips=new, out_glb=self.asset_dir(hero["id"]) / rig["glb"], save_blend=True,
+                    keep_all=True, progress=lambda s, f: progress(s, 0.05 + 0.3 * f))
+            known = {c["name"]: c for c in rig["clips"]}
+            known.update({c["name"]: c for c in result["clips"]})
+            rig["clips"] = list(known.values())
+            outputs = {**hero["outputs"], "rig": rig}
+            (rig_dir / "manifest.json").write_text(json.dumps(rig, indent=2), encoding="utf-8")
+            self._drop_fits_on(hero["id"])
+            hero = self.db.update("assets", hero["id"], {"outputs": outputs,
+                                                         "overrides": self._with_clips(hero, clips)})
+        # 2. The items fitted on the hero again, with every clip, then exported by autopilot.
+        progress("Fitting the items on the hero", 0.4)
+        self._set_step(record, "Fitting the items on the hero")
+        for item_id in picks["items"]:
+            item = self._require(item_id)
+            outputs = {k: v for k, v in (item.get("outputs") or {}).items() if k not in ("rig", "export")}
+            self.db.update("assets", item_id, {"wearer_id": hero["id"], "overrides": self._with_clips(item, clips),
+                                               "outputs": outputs, "autopilot": True, "autopilot_export": True,
+                                               "approvals": {k: v for k, v in (item.get("approvals") or {}).items()
+                                                             if k != "3"}})
+            self._clear_from(item_id, "rig")
+            self.enqueue(item_id, "rig")
+        # 3. The hero and the effects exported (the effects only when not exported yet).
+        progress("Exporting", 0.8)
+        self._set_step(record, "Exporting the hero, the items and the effects")
+        exports = [hero["id"], *(p["effect"] for p in picks["skills"] if p.get("effect"))]
+        for asset_id in exports:
+            asset = self._require(asset_id)
+            if asset["status"] == "waiting" and asset.get("gate") == 3:
+                self.approve(asset_id, 3)
+            elif asset_id == hero["id"] or not (asset.get("outputs") or {}).get("export"):
+                self.reexport(asset_id)
+        self.db.update("sets", record["id"], {"waiting_for": [hero["id"], *picks["items"],
+                                                              *(p["effect"] for p in picks["skills"] if p.get("effect"))]})
+        self._set_step(record, "Waiting for the exports")
+        self.check_sets()
+        return {"clips": clips}
+
+    def check_sets(self) -> None:
+        """Writes the manifest of every set whose exports have all finished (called after exports)."""
+        for record in self.db.list("sets", status="building"):
+            waiting = record.get("waiting_for")
+            if not waiting:
+                continue
+            assets = [self.db.get("assets", i) for i in waiting]
+            failed = [a for a in assets if a is None or a["status"] == "failed"]
+            if failed:
+                names = ", ".join(a["name"] if a else "a deleted asset" for a in failed)
+                self.db.update("sets", record["id"], {"status": "failed",
+                                                      "build": {"step": "Failed", "error": f"{names} failed"}})
+                continue
+            if all(a["status"] == "done" and (a.get("outputs") or {}).get("export") for a in assets):
+                self._write_set_manifest(record)
+                continue
+            stuck = [a["name"] for a in assets if a["status"] == "waiting"]
+            step = (f"Waiting for you: {', '.join(stuck)} stopped at a gate (its checks didn't all pass)" if stuck
+                    else "Waiting for the exports")
+            if (record.get("build") or {}).get("step") != step:
+                self._set_step(record, step)
+
+    def _write_set_manifest(self, record: dict) -> None:
+        picks, slots = record["picks"], record["slots"]
+
+        def exported(asset_id: str) -> dict:
+            asset = self._require(asset_id)
+            export = asset["outputs"]["export"]
+            return {"asset_id": asset_id, "name": export["name"], "kind": asset["kind"],
+                    "folder": export.get("project_relative"), "installed_to": export.get("installed_to")}
+
+        manifest = {"name": record["name"], "hero": exported(picks["hero"]), "items": [], "skills": []}
+        for slot, item_id in zip(slots["items"], picks["items"]):
+            asset = self._require(item_id)
+            manifest["items"].append({**exported(item_id), "slot": asset.get("slot"),
+                                      "weapon_class": asset.get("weapon_class")})
+        for slot, pick in zip(slots["skills"], picks["skills"]):
+            motion = self.db.get("motions", pick["motion"]) if pick.get("motion") else None
+            manifest["skills"].append({
+                "name": slot["name"], "description": slot.get("description"),
+                "animation": motion["name"] if motion else None,
+                "duration": (motion.get("clip") or {}).get("duration") if motion else None,
+                "release": pick.get("release", 0.45),
+                "effect": exported(pick["effect"]) if pick.get("effect") else None})
+        directory = Path(self.settings.data_dir) / "sets" / record["id"]
+        directory.mkdir(parents=True, exist_ok=True)
+        slug = re.sub(r"[^a-z0-9]+", "_", record["name"].lower()).strip("_") or "character_set"
+        text = json.dumps(manifest, indent=2)
+        (directory / f"{slug}.json").write_text(text, encoding="utf-8")
+        project = self.db.get("projects", record["project_id"]) or {}
+        installed = None
+        if project.get("path"):
+            target = Path(project["path"]).expanduser() / "generated" / "sets" / f"{slug}.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+            installed = str(target)
+        self.db.update("sets", record["id"], {"status": "built", "manifest": manifest, "installed_to": installed,
+                                              "build": {"step": "Built", "error": None}, "built_at": now()})
+        self.hub.publish({"type": "set", "id": record["id"], "at": now()})
+
     def place_item(self, item_id: str, wearer_id: str, change: list[list[float]] | None) -> dict:
         """Adds ``change`` (a 4x4 move in Blender world space at the rest pose) to the item's kept
         placement on this wearer, or forgets it (``None``). The next fit on that wearer applies it."""
@@ -735,6 +974,7 @@ class Pipeline:
                 return
             self.update(asset_id, status="failed", step=f"{stage} failed", error=f"{exc}",
                         error_detail=traceback.format_exc(limit=5))
+            self.check_sets()
             return
         finally:
             self.current = None
@@ -748,11 +988,13 @@ class Pipeline:
             self.update(asset_id, outputs=all_outputs, status="waiting", gate=gate,
                         step=f"Waiting at gate {gate}", progress=1.0)
             self.autopilot(asset_id)
+            self.check_sets()
         else:
             changes = {"outputs": all_outputs, "status": "done", "gate": None, "step": "Done", "progress": 1.0}
             if not asset.get("training_candidate_set"):
                 changes["training_candidate"] = True  # approved assets are LoRA training candidates
             self.update(asset_id, **changes)
+            self.check_sets()
 
     # ---- stages (run in the worker thread) ----------------------------------
 

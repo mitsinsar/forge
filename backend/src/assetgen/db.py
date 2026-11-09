@@ -25,6 +25,7 @@ TABLES: dict[str, tuple[str, ...]] = {
     "outfits": ("project_id", "name"),
     # Generated skill animations (HY-Motion): clips any biped can play, by clip name.
     "motions": ("name", "status"),
+    "sets": ("project_id", "name", "status"),
 }
 
 

@@ -9,7 +9,7 @@ import { ChecksCard } from "./Checks";
 import { GateBar } from "./Gates";
 
 /** The parts of an effect with their frame URLs. */
-function partsOf(asset: Asset) {
+export function partsOf(asset: Asset) {
   return (asset.outputs.mesh?.parts ?? []).map((p) => ({ ...p, frames: p.frames.map((f) => assetFileUrl(asset.id, f)) }));
 }
 

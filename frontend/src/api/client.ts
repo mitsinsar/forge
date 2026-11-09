@@ -260,6 +260,44 @@ export interface MotionInput {
   in_place?: boolean;
 }
 
+/** A character set: versions of a hero, its items and its skills, one of each picked, built together. */
+export interface SetSkillPick {
+  effect: string | null;
+  motion: string | null;
+  release: number;
+}
+
+export interface CharacterSet {
+  id: string;
+  project_id: string;
+  name: string;
+  variations: number;
+  spec: Record<string, unknown>;
+  slots: {
+    hero: string[];
+    items: { kind: "weapon" | "gear"; label: string; options: string[] }[];
+    skills: { name: string; description: string; effects: string[]; motions: string[] }[];
+  };
+  picks: { hero: string | null; items: (string | null)[]; skills: SetSkillPick[] };
+  status: "open" | "changed" | "building" | "built" | "failed";
+  build: { step: string; error: string | null } | null;
+  manifest: Record<string, unknown> | null;
+  installed_to?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SetPicksInput {
+  hero?: string | null;
+  items?: (string | null)[];
+  skills?: { effect?: string | null; motion?: string | null; release?: number }[];
+}
+
+/** The rigged hero playing a generated skill animation (made from its rig on request). */
+export function heroSkillUrl(heroId: string, clip: string): string {
+  return `/api/assets/${heroId}/skills/${encodeURIComponent(clip)}.glb`;
+}
+
 export interface Lora {
   id: string;
   name: string;
@@ -655,6 +693,12 @@ export const api = {
     request<Motion>("POST", `/motions/${id}/redo`, input),
   useMotion: (id: string, profileId: string) => request<Profile>("POST", `/motions/${id}/use`, { profile_id: profileId }),
   deleteMotion: (id: string) => request<void>("DELETE", `/motions/${id}`),
+  sets: () => request<CharacterSet[]>("GET", "/character-sets"),
+  set: (id: string) => request<CharacterSet>("GET", `/character-sets/${id}`),
+  createSet: (spec: unknown) => request<CharacterSet>("POST", "/character-sets", spec),
+  pickSet: (id: string, picks: SetPicksInput) => request<CharacterSet>("PUT", `/character-sets/${id}/picks`, picks),
+  buildSet: (id: string) => request<Job>("POST", `/character-sets/${id}/build`),
+  deleteSet: (id: string) => request<void>("DELETE", `/character-sets/${id}`),
   outfits: (projectId?: string) => request<Outfit[]>("GET", `/outfits${query({ project_id: projectId })}`),
   createOutfit: (input: Omit<Outfit, "id">) => request<Outfit>("POST", "/outfits", input),
   updateOutfit: (id: string, input: Partial<Omit<Outfit, "id" | "project_id">>) =>
