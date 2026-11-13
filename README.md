@@ -27,12 +27,7 @@ nothing leaves your machine.
 You stay in charge: Forge stops at **three gates** for you to approve or reject, checks each step
 with a local vision model, and can run whole batches on **autopilot**.
 
-```
- describe ─► LLM writes the prompt ─► ComfyUI draws 4 ─► ① pick one
-          ─► Hunyuan3D builds the mesh ─► Blender cleans it + LODs ─► ② approve
-          ─► UniRig rigs it ─► Blender plays the clips / renders sprites ─► ③ approve
-          ─► export to Unity or Godot
-```
+![forge pipeline](docs/forge-pipeline.svg)
 
 ## See it work
 
