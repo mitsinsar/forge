@@ -1,0 +1,60 @@
+name: Bug report
+description: Something doesn't work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For security problems, don't use this form: see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where
+      options:
+        - Gate 1 (prompt / pictures)
+        - Gate 2 (mesh)
+        - Gate 3 (rig / animation / sprites)
+        - Export (Unity)
+        - Export (Godot)
+        - Skill effects
+        - Skill animations
+        - Character sets / outfits
+        - Setup page / tools
+        - Web app
+        - API
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error and log
+      description: The error shown on the asset page, and the end of the stage log in `backend/data/assets/<id>/<stage>/`. Remove personal paths if you like.
+      render: text
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and VRAM
+      placeholder: RTX 4090, 24 GB
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Windows 11 / Ubuntu 24.04
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup page
+      description: Which tools are green or red, and any versions you know (Blender, ComfyUI, models).
+  - type: input
+    id: commit
+    attributes:
+      label: Forge commit
+      description: Output of `git rev-parse --short HEAD`
